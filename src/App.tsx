@@ -1,8 +1,8 @@
 /**
  * Composant racine d'AcoustiQ
- * Gestion du chargement de fichiers, des événements, de la concordance et des onglets
+ * Multi-projet, paramètres, raccourcis clavier, sidebar rétractable, états de chargement
  */
-import { useState, useMemo, useRef, useCallback } from 'react'
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
 import {
   FileAudio,
   BarChart2,
@@ -16,12 +16,28 @@ import {
   FileText,
   Save,
   FolderOpen,
+  Settings as SettingsIcon,
+  HelpCircle,
+  ChevronLeft,
+  ChevronRight,
+  Plus,
+  Loader2,
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
-import type { MeasurementFile, SourceEvent, ConcordanceState, ZoomRange, AudioFile } from './types'
+import type {
+  MeasurementFile,
+  SourceEvent,
+  ConcordanceState,
+  ZoomRange,
+  AudioFile,
+  AppSettings,
+  RecentProject,
+} from './types'
 import { parse831C } from './modules/parser831C'
 import { parse821SE, detect821SE } from './modules/parser821SE'
 import { saveProject, loadProject } from './modules/projectManager'
+import { loadSettings, saveSettings } from './modules/settings'
+import { t, setLanguage } from './modules/i18n'
 import TimeSeriesChart from './components/TimeSeriesChart'
 import IndicesPanel from './components/IndicesPanel'
 import EventsPanel from './components/EventsPanel'
@@ -30,51 +46,56 @@ import Spectrogram from './components/Spectrogram'
 import LwCalculator from './components/LwCalculator'
 import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
+import Settings from './components/Settings'
+import ShortcutsModal from './components/ShortcutsModal'
 
-/**
- * Parse un fichier XLSX en essayant les parsers dans l'ordre :
- * 831C → 821SE → générique (821SE avec détection de colonnes)
- */
+// ---------------------------------------------------------------------------
+// Utilitaires
+// ---------------------------------------------------------------------------
 function parseFile(buffer: ArrayBuffer, fileName: string): MeasurementFile {
   const workbook = XLSX.read(buffer, { type: 'array', cellDates: false })
-
-  if (detect821SE(workbook)) {
-    return parse821SE(buffer, fileName)
-  }
-
-  try {
-    return parse831C(buffer, fileName)
-  } catch {
-    return parse821SE(buffer, fileName)
-  }
+  if (detect821SE(workbook)) return parse821SE(buffer, fileName)
+  try { return parse831C(buffer, fileName) } catch { return parse821SE(buffer, fileName) }
 }
 
-/** Tente d'extraire une date YYYY-MM-DD depuis un nom de fichier */
 function extractDateFromName(name: string): string | null {
   const match = name.match(/(\d{4}[-_]\d{2}[-_]\d{2})/)
-  if (match) return match[1].replace(/_/g, '-')
-  return null
+  return match ? match[1].replace(/_/g, '-') : null
 }
 
-// Points de mesure disponibles
 const MEASUREMENT_POINTS = ['BV-94', 'BV-98', 'BV-105', 'BV-106', 'BV-37', 'BV-107']
 
-/** Lit un File en ArrayBuffer via FileReader */
 function readAsArrayBuffer(file: File): Promise<ArrayBuffer> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader()
     reader.onload = (e) => resolve(e.target!.result as ArrayBuffer)
-    reader.onerror = () => reject(new Error(`Impossible de lire le fichier : ${file.name}`))
+    reader.onerror = () => reject(new Error(`Impossible de lire : ${file.name}`))
     reader.readAsArrayBuffer(file)
   })
+}
+
+// LocalStorage pour projets récents
+const RECENT_KEY = 'acoustiq_recent_projects'
+const SIDEBAR_KEY = 'acoustiq_sidebar_collapsed'
+const MAX_RECENT = 5
+
+function loadRecent(): RecentProject[] {
+  try {
+    return JSON.parse(localStorage.getItem(RECENT_KEY) ?? '[]')
+  } catch { return [] }
+}
+function saveRecent(projects: RecentProject[]) {
+  localStorage.setItem(RECENT_KEY, JSON.stringify(projects.slice(0, MAX_RECENT)))
 }
 
 type Tab = 'chart' | 'spectrogram' | 'lw' | 'concordance' | 'report'
 
 // ---------------------------------------------------------------------------
-// Barre latérale
+// Barre latérale rétractable
 // ---------------------------------------------------------------------------
 interface SidebarProps {
+  collapsed: boolean
+  onToggle: () => void
   files: MeasurementFile[]
   pointMap: Record<string, string>
   events: SourceEvent[]
@@ -82,6 +103,8 @@ interface SidebarProps {
   errors: string[]
   audioFile: AudioFile | null
   chartTimeMin: number | null
+  loading: boolean
+  loadProgress: number
   onFilesAdded: (files: MeasurementFile[]) => void
   onPointChange: (fileId: string, point: string) => void
   onFileRemove: (fileId: string) => void
@@ -96,58 +119,39 @@ interface SidebarProps {
 }
 
 function Sidebar({
-  files,
-  pointMap,
-  events,
-  availableDates,
-  errors,
-  audioFile,
-  chartTimeMin,
-  onFilesAdded,
-  onPointChange,
-  onFileRemove,
-  onEventAdd,
-  onEventRemove,
-  onClearError,
-  onSaveProject,
-  onLoadProject,
-  onAudioLoaded,
-  onAudioRemove,
-  onAudioSeek,
+  collapsed, onToggle,
+  files, pointMap, events, availableDates, errors,
+  audioFile, chartTimeMin, loading, loadProgress,
+  onFilesAdded, onPointChange, onFileRemove,
+  onEventAdd, onEventRemove, onClearError,
+  onSaveProject, onLoadProject,
+  onAudioLoaded, onAudioRemove, onAudioSeek,
 }: SidebarProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const projectInputRef = useRef<HTMLInputElement>(null)
   const audioInputRef = useRef<HTMLInputElement>(null)
-  const [loading, setLoading] = useState(false)
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files ?? [])
     if (selected.length === 0) return
-    setLoading(true)
     const parsed: MeasurementFile[] = []
     for (const file of selected) {
       try {
         const buf = await readAsArrayBuffer(file)
         parsed.push(parseFile(buf, file.name))
-      } catch (err) {
-        console.error(err)
-      }
+      } catch (err) { console.error(err) }
     }
     if (parsed.length > 0) onFilesAdded(parsed)
-    setLoading(false)
     e.target.value = ''
   }
 
-  // Chargement de projet JSON
   async function handleProjectLoad(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
-    const text = await file.text()
-    onLoadProject(text)
+    onLoadProject(await file.text())
     e.target.value = ''
   }
 
-  // Chargement de fichier audio WAV
   async function handleAudioLoad(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
@@ -155,20 +159,57 @@ function Sidebar({
     const ctx = new AudioContext()
     const decoded = await ctx.decodeAudioData(buf)
     await ctx.close()
-
-    // Tenter d'extraire la date du nom de fichier
-    const date = extractDateFromName(file.name) ?? ''
-
-    const audio: AudioFile = {
+    onAudioLoaded({
       id: crypto.randomUUID(),
       name: file.name,
-      date,
+      date: extractDateFromName(file.name) ?? '',
       buffer: decoded,
       duration: decoded.duration,
       startOffsetMin: 0,
-    }
-    onAudioLoaded(audio)
+    })
     e.target.value = ''
+  }
+
+  // Mode rétracté : icônes seules
+  if (collapsed) {
+    return (
+      <aside className="w-12 min-h-screen bg-gray-900 text-gray-100 flex flex-col border-r border-gray-700 shrink-0 items-center">
+        <div className="py-4">
+          <Activity className="text-emerald-400" size={20} />
+        </div>
+        <button
+          onClick={() => inputRef.current?.click()}
+          className="p-2 rounded text-gray-400 hover:text-emerald-400 hover:bg-gray-800 transition-colors"
+          title={t('sidebar.import')}
+        >
+          <Upload size={16} />
+        </button>
+        <input ref={inputRef} type="file" accept=".xlsx" multiple className="hidden" onChange={handleFileChange} />
+        <button
+          onClick={onSaveProject}
+          className="p-2 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors mt-1"
+          title={t('sidebar.save')}
+        >
+          <Save size={14} />
+        </button>
+        <input ref={projectInputRef} type="file" accept=".json" className="hidden" onChange={handleProjectLoad} />
+        <button
+          onClick={() => projectInputRef.current?.click()}
+          className="p-2 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
+          title={t('sidebar.open')}
+        >
+          <FolderOpen size={14} />
+        </button>
+        {files.length > 0 && (
+          <span className="text-xs text-gray-500 mt-2">{files.length}</span>
+        )}
+        <div className="mt-auto pb-3">
+          <button onClick={onToggle} className="p-1 text-gray-600 hover:text-gray-300 transition-colors">
+            <ChevronRight size={14} />
+          </button>
+        </div>
+      </aside>
+    )
   }
 
   return (
@@ -177,21 +218,17 @@ function Sidebar({
       <div className="px-4 py-5 border-b border-gray-700 shrink-0">
         <div className="flex items-center gap-2">
           <Activity className="text-emerald-400" size={20} />
-          <span className="font-bold text-lg tracking-tight">AcoustiQ</span>
+          <span className="font-bold text-lg tracking-tight">{t('sidebar.title')}</span>
+          <button onClick={onToggle} className="ml-auto p-0.5 text-gray-600 hover:text-gray-300 transition-colors">
+            <ChevronLeft size={14} />
+          </button>
         </div>
-        <p className="text-xs text-gray-400 mt-1">Analyse acoustique environnementale</p>
+        <p className="text-xs text-gray-400 mt-1">{t('sidebar.subtitle')}</p>
       </div>
 
-      {/* Bouton d'import */}
+      {/* Import + projet */}
       <div className="px-3 py-3 border-b border-gray-700 shrink-0">
-        <input
-          ref={inputRef}
-          type="file"
-          accept=".xlsx"
-          multiple
-          className="hidden"
-          onChange={handleFileChange}
-        />
+        <input ref={inputRef} type="file" accept=".xlsx" multiple className="hidden" onChange={handleFileChange} />
         <button
           onClick={() => inputRef.current?.click()}
           disabled={loading}
@@ -199,45 +236,47 @@ function Sidebar({
                      bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50
                      text-sm font-medium transition-colors"
         >
-          <Upload size={14} />
-          {loading ? 'Chargement…' : 'Importer des fichiers'}
+          {loading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+          {loading ? t('sidebar.loading') : t('sidebar.import')}
         </button>
-        <p className="text-xs text-gray-500 text-center mt-1">XLSX 831C / 821SE</p>
 
-        {/* Boutons projet */}
+        {/* Barre de progression */}
+        {loading && loadProgress > 0 && (
+          <div className="mt-1.5 w-full bg-gray-800 rounded-full h-1">
+            <div
+              className="bg-emerald-500 h-1 rounded-full transition-all duration-300"
+              style={{ width: `${loadProgress}%` }}
+            />
+          </div>
+        )}
+
+        <p className="text-xs text-gray-500 text-center mt-1">{t('sidebar.importHint')}</p>
+
         <div className="flex gap-1.5 mt-2">
-          <input
-            ref={projectInputRef}
-            type="file"
-            accept=".json"
-            className="hidden"
-            onChange={handleProjectLoad}
-          />
+          <input ref={projectInputRef} type="file" accept=".json" className="hidden" onChange={handleProjectLoad} />
           <button
             onClick={onSaveProject}
             disabled={files.length === 0}
             className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
                        bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-30
                        text-xs font-medium border border-gray-600 transition-colors"
-            title="Sauvegarder le projet"
           >
             <Save size={11} />
-            Sauvegarder
+            {t('sidebar.save')}
           </button>
           <button
             onClick={() => projectInputRef.current?.click()}
             className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
                        bg-gray-800 text-gray-300 hover:bg-gray-700
                        text-xs font-medium border border-gray-600 transition-colors"
-            title="Ouvrir un projet"
           >
             <FolderOpen size={11} />
-            Ouvrir
+            {t('sidebar.open')}
           </button>
         </div>
       </div>
 
-      {/* Zone scrollable : erreurs + fichiers + audio + événements */}
+      {/* Zone scrollable */}
       <div className="flex-1 overflow-y-auto flex flex-col">
         {/* Erreurs */}
         {errors.length > 0 && (
@@ -258,37 +297,33 @@ function Sidebar({
           </div>
         )}
 
-        {/* Liste des fichiers */}
+        {/* Fichiers */}
         <div className="px-3 py-4 border-b border-gray-700">
           <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
-            Fichiers de mesure
+            {t('sidebar.files')}
           </p>
-
           {files.length === 0 ? (
             <div className="text-center text-gray-500 text-sm mt-4 px-2">
               <FileAudio size={28} className="mx-auto mb-2 opacity-40" />
-              <p className="text-xs text-gray-600">Cliquez sur "Importer" ci-dessus</p>
+              <p className="text-xs text-gray-600">{t('sidebar.filesEmpty')}</p>
             </div>
           ) : (
             <ul className="space-y-2">
               {files.map((f) => (
                 <li key={f.id} className="rounded-md px-3 py-2 bg-gray-800 border border-gray-700">
                   <div className="flex items-start gap-1">
-                    <p className="text-sm font-medium truncate flex-1" title={f.name}>
-                      {f.name}
-                    </p>
+                    <p className="text-sm font-medium truncate flex-1" title={f.name}>{f.name}</p>
                     <button
                       onClick={() => onFileRemove(f.id)}
                       className="text-gray-600 hover:text-red-400 shrink-0 mt-0.5 transition-colors"
-                      title="Retirer"
+                      title={t('sidebar.remove')}
                     >
                       <X size={12} />
                     </button>
                   </div>
                   <p className="text-xs text-gray-400 mt-0.5">{f.model} · {f.serial}</p>
                   <p className="text-xs text-gray-500">{f.date} · {f.startTime}–{f.stopTime}</p>
-                  <p className="text-xs text-gray-600">{f.rowCount} points</p>
-                  {/* Sélecteur de point */}
+                  <p className="text-xs text-gray-600">{f.rowCount} {t('chart.points')}</p>
                   <div className="mt-2">
                     <select
                       value={pointMap[f.id] ?? ''}
@@ -296,7 +331,7 @@ function Sidebar({
                       className="w-full text-xs bg-gray-700 text-gray-100 border border-gray-600
                                  rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                     >
-                      <option value="">— Assigner un point —</option>
+                      <option value="">{t('sidebar.assignPoint')}</option>
                       {MEASUREMENT_POINTS.map((pt) => (
                         <option key={pt} value={pt}>{pt}</option>
                       ))}
@@ -308,7 +343,7 @@ function Sidebar({
           )}
         </div>
 
-        {/* Audio WAV */}
+        {/* Audio */}
         {audioFile ? (
           <AudioPlayer
             audio={audioFile}
@@ -318,13 +353,7 @@ function Sidebar({
           />
         ) : (
           <div className="px-3 py-3 border-b border-gray-700">
-            <input
-              ref={audioInputRef}
-              type="file"
-              accept=".wav"
-              className="hidden"
-              onChange={handleAudioLoad}
-            />
+            <input ref={audioInputRef} type="file" accept=".wav" className="hidden" onChange={handleAudioLoad} />
             <button
               onClick={() => audioInputRef.current?.click()}
               className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded
@@ -332,12 +361,12 @@ function Sidebar({
                          text-xs border border-dashed border-gray-600 transition-colors"
             >
               <FileAudio size={12} />
-              Charger un fichier .wav
+              {t('sidebar.loadWav')}
             </button>
           </div>
         )}
 
-        {/* Panneau événements */}
+        {/* Événements */}
         <EventsPanel
           events={events}
           availableDates={availableDates}
@@ -346,9 +375,8 @@ function Sidebar({
         />
       </div>
 
-      {/* Pied de page */}
       <div className="px-4 py-3 border-t border-gray-700 text-xs text-gray-500 shrink-0">
-        v0.1.0
+        v0.2.0
       </div>
     </aside>
   )
@@ -367,78 +395,126 @@ interface MainPanelProps {
   activeTab: Tab
   assignedPoints: string[]
   zoomRange: ZoomRange | null
+  projectName: string
+  recentProjects: RecentProject[]
+  settings: AppSettings
   onDateChange: (date: string) => void
   onTabChange: (tab: Tab) => void
   onCellChange: (eventId: string, point: string, state: ConcordanceState) => void
   onZoomChange: (range: ZoomRange | null) => void
+  onProjectNameChange: (name: string) => void
+  onNewProject: () => void
+  onSwitchProject: (project: RecentProject) => void
+  onOpenSettings: () => void
+  onOpenShortcuts: () => void
 }
 
 function MainPanel({
-  files,
-  pointMap,
-  events,
-  concordance,
-  selectedDate,
-  availableDates,
-  activeTab,
-  assignedPoints,
-  zoomRange,
-  onDateChange,
-  onTabChange,
-  onCellChange,
-  onZoomChange,
+  files, pointMap, events, concordance,
+  selectedDate, availableDates, activeTab, assignedPoints, zoomRange,
+  projectName, recentProjects, settings,
+  onDateChange, onTabChange, onCellChange, onZoomChange,
+  onProjectNameChange, onNewProject, onSwitchProject,
+  onOpenSettings, onOpenShortcuts,
 }: MainPanelProps) {
   const chartFiles = files.filter((f) => !!pointMap[f.id])
   const hasChart = chartFiles.length > 0
+  const [showRecent, setShowRecent] = useState(false)
 
   return (
     <main className="flex-1 bg-gray-950 text-gray-100 flex flex-col min-w-0 overflow-hidden">
-      {/* Barre de navigation : titre + onglets */}
+      {/* Barre de navigation */}
       <header className="px-6 py-3 border-b border-gray-800 flex items-center gap-4 shrink-0">
         <div className="flex items-center gap-2">
           <BarChart2 size={18} className="text-emerald-400" />
-          <h1 className="text-sm font-semibold text-gray-200">AcoustiQ</h1>
+          {/* Nom du projet éditable */}
+          <input
+            type="text"
+            value={projectName}
+            onChange={(e) => onProjectNameChange(e.target.value)}
+            className="text-sm font-semibold text-gray-200 bg-transparent border-none
+                       focus:outline-none focus:ring-0 w-40 truncate
+                       hover:text-emerald-400 transition-colors"
+            title={projectName}
+          />
+          {/* Sélecteur de projet */}
+          <div className="relative">
+            <button
+              onClick={() => setShowRecent(!showRecent)}
+              className="p-1 text-gray-600 hover:text-gray-300 transition-colors"
+              title={t('project.recent')}
+            >
+              <ChevronLeft size={12} className="rotate-[-90deg]" />
+            </button>
+            {showRecent && (
+              <div className="absolute top-full left-0 mt-1 w-56 bg-gray-900 border border-gray-700
+                             rounded-md shadow-xl z-40 py-1">
+                <button
+                  onClick={() => { onNewProject(); setShowRecent(false) }}
+                  className="w-full flex items-center gap-2 px-3 py-1.5 text-xs text-emerald-400
+                             hover:bg-gray-800 transition-colors"
+                >
+                  <Plus size={11} />
+                  {t('project.new')}
+                </button>
+                {recentProjects.length > 0 && (
+                  <div className="border-t border-gray-700 mt-1 pt-1">
+                    <p className="px-3 py-1 text-xs text-gray-600 font-medium">
+                      {t('project.recent')}
+                    </p>
+                    {recentProjects.map((rp) => (
+                      <button
+                        key={rp.id}
+                        onClick={() => { onSwitchProject(rp); setShowRecent(false) }}
+                        className="w-full flex flex-col items-start px-3 py-1.5 text-xs
+                                   hover:bg-gray-800 transition-colors"
+                      >
+                        <span className="text-gray-300 truncate w-full text-left">{rp.name}</span>
+                        <span className="text-gray-600">{new Date(rp.savedAt).toLocaleString()}</span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Onglets */}
         <nav className="flex gap-1 ml-4">
-          <TabButton
-            active={activeTab === 'chart'}
-            onClick={() => onTabChange('chart')}
-            icon={<BarChart2 size={13} />}
-            label="Visualisation"
-          />
-          <TabButton
-            active={activeTab === 'spectrogram'}
-            onClick={() => onTabChange('spectrogram')}
-            icon={<Layers size={13} />}
-            label="Spectrogramme"
-          />
-          <TabButton
-            active={activeTab === 'lw'}
-            onClick={() => onTabChange('lw')}
-            icon={<Calculator size={13} />}
-            label="Calcul Lw"
-          />
-          <TabButton
-            active={activeTab === 'concordance'}
-            onClick={() => onTabChange('concordance')}
-            icon={<TableProperties size={13} />}
-            label="Concordance"
-          />
-          <TabButton
-            active={activeTab === 'report'}
-            onClick={() => onTabChange('report')}
-            icon={<FileText size={13} />}
-            label="Rapport"
-          />
+          {([
+            ['chart', <BarChart2 size={13} key="c" />, t('tab.visualization')],
+            ['spectrogram', <Layers size={13} key="s" />, t('tab.spectrogram')],
+            ['lw', <Calculator size={13} key="l" />, t('tab.lw')],
+            ['concordance', <TableProperties size={13} key="t" />, t('tab.concordance')],
+            ['report', <FileText size={13} key="r" />, t('tab.report')],
+          ] as [Tab, React.ReactNode, string][]).map(([id, icon, label]) => (
+            <TabButton key={id} active={activeTab === id} onClick={() => onTabChange(id)} icon={icon} label={label} />
+          ))}
         </nav>
 
-        {hasChart && activeTab === 'chart' && (
-          <span className="ml-auto text-xs text-gray-500">
-            {chartFiles.length} fichier{chartFiles.length > 1 ? 's' : ''} affiché{chartFiles.length > 1 ? 's' : ''}
-          </span>
-        )}
+        {/* Actions header */}
+        <div className="flex items-center gap-1 ml-auto">
+          {hasChart && activeTab === 'chart' && (
+            <span className="text-xs text-gray-500 mr-2">
+              {chartFiles.length} {t('chart.filesShown')}
+            </span>
+          )}
+          <button
+            onClick={onOpenShortcuts}
+            className="p-1.5 text-gray-600 hover:text-gray-300 hover:bg-gray-800 rounded transition-colors"
+            title={t('shortcuts.title')}
+          >
+            <HelpCircle size={14} />
+          </button>
+          <button
+            onClick={onOpenSettings}
+            className="p-1.5 text-gray-600 hover:text-gray-300 hover:bg-gray-800 rounded transition-colors"
+            title={t('settings.title')}
+          >
+            <SettingsIcon size={14} />
+          </button>
+        </div>
       </header>
 
       {/* Contenu selon l'onglet */}
@@ -446,7 +522,6 @@ function MainPanel({
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
           {hasChart ? (
             <>
-              {/* Graphique — prend tout l'espace disponible */}
               <div className="flex-1 min-h-0">
                 <TimeSeriesChart
                   files={chartFiles}
@@ -457,22 +532,18 @@ function MainPanel({
                   events={events}
                   zoomRange={zoomRange}
                   onZoomChange={onZoomChange}
+                  settings={settings}
                 />
               </div>
-              {/* Indices — hauteur fixe en bas */}
-              <IndicesPanel
-                files={chartFiles}
-                pointMap={pointMap}
-                selectedDate={selectedDate}
-              />
+              <IndicesPanel files={chartFiles} pointMap={pointMap} selectedDate={selectedDate} />
             </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-600 gap-3">
               <BarChart2 size={48} className="opacity-20" />
-              <p className="text-sm">Chargez un fichier et assignez-lui un point de mesure</p>
+              <p className="text-sm">{t('general.loadFile')}</p>
               {files.length > 0 && (
                 <p className="text-xs text-gray-700">
-                  {files.length} fichier{files.length > 1 ? 's' : ''} chargé{files.length > 1 ? 's' : ''} — en attente d'assignation
+                  {files.length} fichier{files.length > 1 ? 's' : ''} — {t('general.waitingAssign')}
                 </p>
               )}
             </div>
@@ -483,42 +554,28 @@ function MainPanel({
       {activeTab === 'spectrogram' && (
         <div className="flex-1 min-h-0 overflow-hidden">
           <Spectrogram
-            files={chartFiles}
-            pointMap={pointMap}
-            selectedDate={selectedDate}
-            availableDates={availableDates}
-            onDateChange={onDateChange}
-            events={events}
-            zoomRange={zoomRange}
+            files={chartFiles} pointMap={pointMap} selectedDate={selectedDate}
+            availableDates={availableDates} onDateChange={onDateChange}
+            events={events} zoomRange={zoomRange}
           />
         </div>
       )}
 
       {activeTab === 'lw' && (
-        <div className="flex-1 min-h-0 overflow-hidden">
-          <LwCalculator />
-        </div>
+        <div className="flex-1 min-h-0 overflow-hidden"><LwCalculator /></div>
       )}
 
       {activeTab === 'concordance' && (
         <div className="flex-1 min-h-0 overflow-hidden">
-          <ConcordanceTable
-            events={events}
-            pointNames={assignedPoints}
-            concordance={concordance}
-            onCellChange={onCellChange}
-          />
+          <ConcordanceTable events={events} pointNames={assignedPoints} concordance={concordance} onCellChange={onCellChange} />
         </div>
       )}
 
       {activeTab === 'report' && (
         <div className="flex-1 min-h-0 overflow-hidden">
           <ReportGenerator
-            files={files}
-            pointMap={pointMap}
-            events={events}
-            concordance={concordance}
-            selectedDate={selectedDate}
+            files={files} pointMap={pointMap} events={events}
+            concordance={concordance} selectedDate={selectedDate}
             assignedPoints={assignedPoints}
           />
         </div>
@@ -527,16 +584,8 @@ function MainPanel({
   )
 }
 
-function TabButton({
-  active,
-  onClick,
-  icon,
-  label,
-}: {
-  active: boolean
-  onClick: () => void
-  icon: React.ReactNode
-  label: string
+function TabButton({ active, onClick, icon, label }: {
+  active: boolean; onClick: () => void; icon: React.ReactNode; label: string
 }) {
   return (
     <button
@@ -568,36 +617,63 @@ export default function App() {
   const [audioFile, setAudioFile] = useState<AudioFile | null>(null)
   const [chartTimeMin, setChartTimeMin] = useState<number | null>(null)
 
-  // Dates disponibles (fichiers avec point assigné)
+  // Multi-projet
+  const [projectName, setProjectName] = useState(t('project.untitled'))
+  const [projectId, setProjectId] = useState<string>(() => crypto.randomUUID())
+  const [recentProjects, setRecentProjects] = useState<RecentProject[]>(loadRecent)
+
+  // Paramètres
+  const [settings, setSettings] = useState<AppSettings>(loadSettings)
+  const [showSettings, setShowSettings] = useState(false)
+  const [showShortcuts, setShowShortcuts] = useState(false)
+
+  // Sidebar rétractable
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
+    return localStorage.getItem(SIDEBAR_KEY) === 'true'
+  })
+
+  // Chargement
+  const [loading, setLoading] = useState(false)
+  const [loadProgress, setLoadProgress] = useState(0)
+
+  // Ref pour ouvrir un projet depuis les raccourcis
+  const projectInputRef = useRef<HTMLInputElement>(null)
+
+  // Appliquer la langue au changement de paramètres
+  useEffect(() => {
+    setLanguage(settings.language)
+    saveSettings(settings)
+  }, [settings])
+
+  // Persister l'état rétracté
+  useEffect(() => {
+    localStorage.setItem(SIDEBAR_KEY, String(sidebarCollapsed))
+  }, [sidebarCollapsed])
+
+  // Dates disponibles
   const availableDates = useMemo(() => {
     const dates = new Set<string>()
-    for (const f of files) {
-      if (pointMap[f.id]) dates.add(f.date)
-    }
+    for (const f of files) { if (pointMap[f.id]) dates.add(f.date) }
     return [...dates].sort()
   }, [files, pointMap])
 
-  // Date effective : si la sélection courante n'est plus valide, on prend la première
-  const effectiveDate = availableDates.includes(selectedDate)
-    ? selectedDate
-    : (availableDates[0] ?? '')
+  const effectiveDate = availableDates.includes(selectedDate) ? selectedDate : (availableDates[0] ?? '')
 
-  // Points assignés (toutes journées confondues)
   const assignedPoints = useMemo(() => {
     const pts = new Set<string>()
-    for (const f of files) {
-      if (pointMap[f.id]) pts.add(pointMap[f.id])
-    }
+    for (const f of files) { if (pointMap[f.id]) pts.add(pointMap[f.id]) }
     return [...pts].sort()
   }, [files, pointMap])
 
   // ---- Handlers fichiers ----
-  function handleFilesAdded(newFiles: MeasurementFile[]) {
+  const handleFilesAdded = useCallback((newFiles: MeasurementFile[]) => {
     setFiles((prev) => {
       const existing = new Set(prev.map((f) => `${f.name}|${f.date}`))
       return [...prev, ...newFiles.filter((f) => !existing.has(`${f.name}|${f.date}`))]
     })
-  }
+    setLoading(false)
+    setLoadProgress(0)
+  }, [])
 
   function handlePointChange(fileId: string, point: string) {
     setPointMap((prev) => ({ ...prev, [fileId]: point }))
@@ -605,72 +681,228 @@ export default function App() {
 
   function handleFileRemove(fileId: string) {
     setFiles((prev) => prev.filter((f) => f.id !== fileId))
-    setPointMap((prev) => {
-      const next = { ...prev }
-      delete next[fileId]
-      return next
-    })
+    setPointMap((prev) => { const n = { ...prev }; delete n[fileId]; return n })
   }
 
-  function handleClearError(index: number) {
-    setErrors((prev) => prev.filter((_, i) => i !== index))
+  function handleClearError(i: number) {
+    setErrors((prev) => prev.filter((_, idx) => idx !== i))
   }
 
   // ---- Handlers événements ----
-  function handleEventAdd(ev: SourceEvent) {
-    setEvents((prev) => [...prev, ev])
-  }
-
-  function handleEventRemove(id: string) {
-    setEvents((prev) => prev.filter((ev) => ev.id !== id))
-  }
+  function handleEventAdd(ev: SourceEvent) { setEvents((prev) => [...prev, ev]) }
+  function handleEventRemove(id: string) { setEvents((prev) => prev.filter((ev) => ev.id !== id)) }
 
   // ---- Handlers concordance ----
   function handleCellChange(eventId: string, point: string, state: ConcordanceState) {
     setConcordance((prev) => ({ ...prev, [`${eventId}|${point}`]: state }))
   }
 
+  // ---- Sérialisation état courant ----
+  const serializeCurrentState = useCallback(() => {
+    return JSON.stringify({
+      files: files.map((f) => ({ id: f.id, name: f.name, model: f.model, serial: f.serial, date: f.date, startTime: f.startTime, stopTime: f.stopTime, rowCount: f.rowCount })),
+      pointMap, events, concordance,
+    })
+  }, [files, pointMap, events, concordance])
+
   // ---- Handlers projet ----
   const handleSaveProject = useCallback(() => {
     saveProject(files, pointMap, events, concordance)
-  }, [files, pointMap, events, concordance])
+    // Sauvegarder dans les projets récents
+    const state = serializeCurrentState()
+    const entry: RecentProject = { id: projectId, name: projectName, savedAt: new Date().toISOString(), state }
+    setRecentProjects((prev) => {
+      const filtered = prev.filter((p) => p.id !== projectId)
+      const updated = [entry, ...filtered].slice(0, MAX_RECENT)
+      saveRecent(updated)
+      return updated
+    })
+  }, [files, pointMap, events, concordance, projectId, projectName, serializeCurrentState])
 
   const handleLoadProject = useCallback((json: string) => {
     try {
       const { project, missingFiles } = loadProject(json, files)
-
-      // Restaurer les assignations de points (en mappant par nom+date vers les IDs actuels)
       const fileIdByKey = new Map(files.map((f) => [`${f.name}|${f.date}`, f.id]))
       const newPointMap: Record<string, string> = {}
       for (const pf of project.files) {
         const currentId = fileIdByKey.get(`${pf.name}|${pf.date}`)
-        if (currentId && project.pointAssignments[pf.id]) {
-          newPointMap[currentId] = project.pointAssignments[pf.id]
-        }
+        if (currentId && project.pointAssignments[pf.id]) newPointMap[currentId] = project.pointAssignments[pf.id]
       }
       setPointMap(newPointMap)
       setEvents(project.events)
       setConcordance(project.concordance)
-
       if (missingFiles.length > 0) {
-        setErrors((prev) => [
-          ...prev,
-          `Projet chargé — fichiers manquants : ${missingFiles.join(', ')}`,
-        ])
+        setErrors((prev) => [...prev, `${t('project.missingFiles')} : ${missingFiles.join(', ')}`])
       }
     } catch (err) {
-      setErrors((prev) => [...prev, `Erreur de chargement du projet : ${String(err)}`])
+      setErrors((prev) => [...prev, `${t('project.loadError')} : ${String(err)}`])
     }
   }, [files])
 
-  // ---- Handlers audio ----
-  const handleAudioSeek = useCallback((timeMin: number) => {
-    setChartTimeMin(timeMin)
+  // Nouveau projet
+  const handleNewProject = useCallback(() => {
+    // Sauvegarder l'état courant automatiquement
+    if (files.length > 0) {
+      const state = serializeCurrentState()
+      const entry: RecentProject = { id: projectId, name: projectName, savedAt: new Date().toISOString(), state }
+      setRecentProjects((prev) => {
+        const filtered = prev.filter((p) => p.id !== projectId)
+        const updated = [entry, ...filtered].slice(0, MAX_RECENT)
+        saveRecent(updated)
+        return updated
+      })
+    }
+    // Reset
+    setFiles([]); setPointMap({}); setErrors([]); setEvents([])
+    setConcordance({}); setSelectedDate(''); setZoomRange(null); setAudioFile(null)
+    setProjectId(crypto.randomUUID()); setProjectName(t('project.untitled'))
+  }, [files, projectId, projectName, serializeCurrentState])
+
+  // Restaurer un projet récent
+  const handleSwitchProject = useCallback((rp: RecentProject) => {
+    // Sauvegarder l'état courant
+    if (files.length > 0) {
+      const state = serializeCurrentState()
+      const entry: RecentProject = { id: projectId, name: projectName, savedAt: new Date().toISOString(), state }
+      setRecentProjects((prev) => {
+        const filtered = prev.filter((p) => p.id !== projectId)
+        const updated = [entry, ...filtered].slice(0, MAX_RECENT)
+        saveRecent(updated)
+        return updated
+      })
+    }
+    // Restaurer le projet sélectionné
+    try {
+      const parsed = JSON.parse(rp.state)
+      setProjectId(rp.id)
+      setProjectName(rp.name)
+      setEvents(parsed.events ?? [])
+      setConcordance(parsed.concordance ?? {})
+      // Les fichiers doivent être rechargés manuellement
+      setFiles([]); setPointMap({}); setZoomRange(null); setAudioFile(null)
+      if (parsed.files?.length > 0) {
+        setErrors([`${t('project.missingFiles')} : ${parsed.files.map((f: { name: string }) => f.name).join(', ')}`])
+      }
+    } catch {
+      setErrors((prev) => [...prev, t('project.loadError')])
+    }
+  }, [files, projectId, projectName, serializeCurrentState])
+
+  // ---- Paramètres ----
+  const handleSettingsChange = useCallback((newSettings: AppSettings) => {
+    setSettings(newSettings)
   }, [])
+
+  // ---- Audio ----
+  const handleAudioSeek = useCallback((timeMin: number) => { setChartTimeMin(timeMin) }, [])
+
+  // ---- Import avec progression ----
+  const handleFilesAddedWithProgress = useCallback((newFiles: MeasurementFile[]) => {
+    setLoading(true)
+    setLoadProgress(0)
+    // Simuler la progression pour les fichiers déjà parsés
+    const total = newFiles.length
+    let loaded = 0
+    const batch: MeasurementFile[] = []
+    for (const f of newFiles) {
+      batch.push(f)
+      loaded++
+      setLoadProgress(Math.round((loaded / total) * 100))
+    }
+    handleFilesAdded(batch)
+  }, [handleFilesAdded])
+
+  // ---- Raccourcis clavier ----
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      // Ne pas intercepter si on est dans un champ de saisie
+      const tag = (e.target as HTMLElement).tagName
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+
+      // Ctrl+S : sauvegarder
+      if ((e.ctrlKey || e.metaKey) && e.key === 's') {
+        e.preventDefault()
+        handleSaveProject()
+        return
+      }
+
+      // Ctrl+O : ouvrir projet
+      if ((e.ctrlKey || e.metaKey) && e.key === 'o') {
+        e.preventDefault()
+        projectInputRef.current?.click()
+        return
+      }
+
+      // Échap : fermer panneaux
+      if (e.key === 'Escape') {
+        setShowSettings(false)
+        setShowShortcuts(false)
+        return
+      }
+
+      // Espace : play/pause audio (géré par AudioPlayer lui-même via state)
+      // Mais on peut émettre un événement custom
+      if (e.key === ' ') {
+        e.preventDefault()
+        document.dispatchEvent(new CustomEvent('acoustiq:toggle-audio'))
+        return
+      }
+
+      // Flèches : pan graphique
+      if (e.key === 'ArrowLeft' || e.key === 'ArrowRight') {
+        e.preventDefault()
+        setZoomRange((prev) => {
+          if (!prev) return prev
+          const span = prev.endMin - prev.startMin
+          const step = Math.max(5, span * 0.1)
+          const delta = e.key === 'ArrowLeft' ? -step : step
+          return {
+            startMin: Math.round(prev.startMin + delta),
+            endMin: Math.round(prev.endMin + delta),
+          }
+        })
+        return
+      }
+
+      // +/- : zoom
+      if (e.key === '+' || e.key === '=') {
+        e.preventDefault()
+        document.dispatchEvent(new CustomEvent('acoustiq:zoom-in'))
+        return
+      }
+      if (e.key === '-') {
+        e.preventDefault()
+        document.dispatchEvent(new CustomEvent('acoustiq:zoom-out'))
+        return
+      }
+    }
+
+    document.addEventListener('keydown', handleKeyDown)
+    return () => document.removeEventListener('keydown', handleKeyDown)
+  }, [handleSaveProject])
+
+  // Input caché pour Ctrl+O
+  function handleProjectFileInput(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    file.text().then(handleLoadProject)
+    e.target.value = ''
+  }
 
   return (
     <div className="flex min-h-screen font-sans">
+      {/* Input caché pour Ctrl+O */}
+      <input
+        ref={projectInputRef}
+        type="file"
+        accept=".json"
+        className="hidden"
+        onChange={handleProjectFileInput}
+      />
+
       <Sidebar
+        collapsed={sidebarCollapsed}
+        onToggle={() => setSidebarCollapsed((v) => !v)}
         files={files}
         pointMap={pointMap}
         events={events}
@@ -678,7 +910,9 @@ export default function App() {
         errors={errors}
         audioFile={audioFile}
         chartTimeMin={chartTimeMin}
-        onFilesAdded={handleFilesAdded}
+        loading={loading}
+        loadProgress={loadProgress}
+        onFilesAdded={handleFilesAddedWithProgress}
         onPointChange={handlePointChange}
         onFileRemove={handleFileRemove}
         onEventAdd={handleEventAdd}
@@ -700,11 +934,31 @@ export default function App() {
         activeTab={activeTab}
         assignedPoints={assignedPoints}
         zoomRange={zoomRange}
+        projectName={projectName}
+        recentProjects={recentProjects}
+        settings={settings}
         onDateChange={setSelectedDate}
         onTabChange={setActiveTab}
         onCellChange={handleCellChange}
         onZoomChange={setZoomRange}
+        onProjectNameChange={setProjectName}
+        onNewProject={handleNewProject}
+        onSwitchProject={handleSwitchProject}
+        onOpenSettings={() => setShowSettings(true)}
+        onOpenShortcuts={() => setShowShortcuts(true)}
       />
+
+      {/* Modales */}
+      {showSettings && (
+        <Settings
+          settings={settings}
+          onChange={handleSettingsChange}
+          onClose={() => setShowSettings(false)}
+        />
+      )}
+      {showShortcuts && (
+        <ShortcutsModal onClose={() => setShowShortcuts(false)} />
+      )}
     </div>
   )
 }

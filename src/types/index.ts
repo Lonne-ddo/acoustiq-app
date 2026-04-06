@@ -35,6 +35,30 @@ export interface ZoomRange {
   endMin: number
 }
 
+/** Paramètres de l'application persistés en localStorage */
+export interface AppSettings {
+  /** Couleurs personnalisées par point de mesure */
+  pointColors: Record<string, string>
+  /** Plage Y par défaut du graphique (dBA) */
+  yAxisMin: number
+  yAxisMax: number
+  /** Intervalle d'agrégation par défaut (minutes) */
+  aggregationInterval: number
+  /** Nom de l'entreprise (affiché dans les rapports) */
+  companyName: string
+  /** Langue de l'interface : fr ou en */
+  language: 'fr' | 'en'
+}
+
+/** Entrée d'un projet récent dans localStorage */
+export interface RecentProject {
+  id: string
+  name: string
+  savedAt: string
+  /** État sérialisé du projet (sans données brutes) */
+  state: string
+}
+
 /** Fichier audio associé à une journée de mesure */
 export interface AudioFile {
   id: string

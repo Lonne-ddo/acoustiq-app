@@ -142,6 +142,16 @@ export default function AudioPlayer({ audio, chartTimeMin, onSeek, onRemove }: P
     setPlaying(false)
   }, [audio.duration])
 
+  // Écouter le raccourci Espace depuis App
+  useEffect(() => {
+    const handler = () => {
+      if (playing) handlePause()
+      else handlePlay()
+    }
+    document.addEventListener('acoustiq:toggle-audio', handler)
+    return () => document.removeEventListener('acoustiq:toggle-audio', handler)
+  }, [playing, handlePause, handlePlay])
+
   const handleStop = useCallback(() => {
     sourceRef.current?.stop()
     setPlaying(false)

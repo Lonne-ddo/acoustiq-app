@@ -4,7 +4,7 @@
  * Zoom molette, pan clic+glisser, double-clic = reset
  * Les événements de sources s'affichent comme lignes verticales tiretées
  */
-import { useMemo, useRef, useCallback, useState } from 'react'
+import { useMemo, useRef, useCallback, useState, useEffect } from 'react'
 import {
   LineChart,
   Line,
@@ -18,8 +18,7 @@ import {
 } from 'recharts'
 import html2canvas from 'html2canvas'
 import { Download, ZoomIn, ZoomOut, Maximize2 } from 'lucide-react'
-import type { MeasurementFile, SourceEvent } from '../types'
-import type { ZoomRange } from '../types'
+import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings } from '../types'
 import { laeqAvg } from '../utils/acoustics'
 
 // Palette de couleurs par point de mesure
@@ -33,8 +32,8 @@ const POINT_COLORS: Record<string, string> = {
 }
 const FALLBACK_COLORS = ['#ec4899', '#84cc16', '#f97316', '#a78bfa']
 
-function getPointColor(point: string, index: number): string {
-  return POINT_COLORS[point] ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length]
+function getPointColor(point: string, index: number, custom?: Record<string, string>): string {
+  return custom?.[point] ?? POINT_COLORS[point] ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length]
 }
 
 /** Convertit des minutes depuis minuit en chaîne HH:MM */
@@ -67,9 +66,10 @@ interface Props {
   availableDates: string[]
   onDateChange: (date: string) => void
   events: SourceEvent[]
-  /** Plage de zoom partagée avec le spectrogramme */
   zoomRange: ZoomRange | null
   onZoomChange: (range: ZoomRange | null) => void
+  /** Paramètres de l'application (couleurs, axe Y, agrégation) */
+  settings?: AppSettings
 }
 
 // Zoom minimum en minutes
@@ -84,7 +84,13 @@ export default function TimeSeriesChart({
   events,
   zoomRange,
   onZoomChange,
+  settings,
 }: Props) {
+  // Couleurs personnalisées depuis les paramètres
+  const pointColors = settings?.pointColors ?? POINT_COLORS
+  const yMin = settings?.yAxisMin ?? 30
+  const yMax = settings?.yAxisMax ?? 90
+  const aggInterval = settings?.aggregationInterval ?? 5
   const chartRef = useRef<HTMLDivElement>(null)
   const chartAreaRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState(false)
@@ -116,14 +122,14 @@ export default function TimeSeriesChart({
 
   const pointNames = [...filesByPoint.keys()].sort()
 
-  // Construction des données du graphique (buckets de 5 minutes)
+  // Construction des données du graphique (buckets configurables)
   const chartData = useMemo((): ChartEntry[] => {
     const buckets = new Map<number, Map<string, number[]>>()
 
     for (const [pt, ptFiles] of filesByPoint) {
       for (const f of ptFiles) {
         for (const dp of f.data) {
-          const bucket = Math.floor(dp.t / 5) * 5
+          const bucket = Math.floor(dp.t / aggInterval) * aggInterval
           if (!buckets.has(bucket)) buckets.set(bucket, new Map())
           const ptBucket = buckets.get(bucket)!
           if (!ptBucket.has(pt)) ptBucket.set(pt, [])
@@ -141,7 +147,7 @@ export default function TimeSeriesChart({
         }
         return entry
       })
-  }, [filesByPoint])
+  }, [filesByPoint, aggInterval])
 
   // Plage temporelle globale des données
   const fullRange = useMemo((): ZoomRange => {
@@ -298,6 +304,18 @@ export default function TimeSeriesChart({
     onZoomChange(null)
   }, [onZoomChange])
 
+  // Écouter les événements de zoom clavier depuis App
+  useEffect(() => {
+    const onZoomIn = () => handleZoomIn()
+    const onZoomOut = () => handleZoomOut()
+    document.addEventListener('acoustiq:zoom-in', onZoomIn)
+    document.addEventListener('acoustiq:zoom-out', onZoomOut)
+    return () => {
+      document.removeEventListener('acoustiq:zoom-in', onZoomIn)
+      document.removeEventListener('acoustiq:zoom-out', onZoomOut)
+    }
+  }, [handleZoomIn, handleZoomOut])
+
   const isZoomed = zoomRange !== null
 
   if (pointNames.length === 0) {
@@ -370,7 +388,7 @@ export default function TimeSeriesChart({
         </div>
 
         <span className="text-xs text-gray-600 mr-2">
-          Agrégation 5 min · {visibleData.length} points
+          Agrégation {aggInterval} min · {visibleData.length} points
           {activeEvents.length > 0 && ` · ${activeEvents.length} événement(s)`}
         </span>
         <button
@@ -410,7 +428,7 @@ export default function TimeSeriesChart({
               />
 
               <YAxis
-                domain={[30, 90]}
+                domain={[yMin, yMax]}
                 tickCount={7}
                 unit=" dB"
                 tick={{ fontSize: 11, fill: '#9ca3af' }}
@@ -445,7 +463,7 @@ export default function TimeSeriesChart({
                   type="monotone"
                   dataKey={pt}
                   name={pt}
-                  stroke={getPointColor(pt, i)}
+                  stroke={getPointColor(pt, i, pointColors)}
                   strokeWidth={2}
                   dot={false}
                   activeDot={{ r: 4 }}

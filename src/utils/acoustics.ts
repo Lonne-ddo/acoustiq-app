@@ -71,3 +71,14 @@ export function computeLAFmin(values: number[]): number {
   if (values.length === 0) return 0
   return Math.min(...values)
 }
+
+/**
+ * Calcule la contribution de la source à partir du niveau total et du bruit résiduel
+ * Lsource = 10*log10(10^(Ltotal/10) - 10^(Lresiduel/10))
+ * Retourne null si le calcul est impossible (résiduel >= total)
+ */
+export function sourceContribution(lTotal: number, lResidual: number): number | null {
+  const diff = Math.pow(10, lTotal / 10) - Math.pow(10, lResidual / 10)
+  if (diff <= 0) return null
+  return 10 * Math.log10(diff)
+}

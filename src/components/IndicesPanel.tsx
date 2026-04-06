@@ -4,7 +4,7 @@
  */
 import { useState, useMemo } from 'react'
 import * as XLSX from 'xlsx'
-import { Download } from 'lucide-react'
+import { Download, TrendingDown, ChevronRight } from 'lucide-react'
 import HelpTooltip from './HelpTooltip'
 import type { MeasurementFile } from '../types'
 import {
@@ -274,6 +274,135 @@ export default function IndicesPanel({ files, pointMap, selectedDate }: Props) {
           </tbody>
         </table>
       </div>
+
+      {/* Analyse bruit de fond (L90 horaire) */}
+      <AmbientNoiseSection files={files} pointMap={pointMap} selectedDate={selectedDate} pointNames={pointNames} />
+    </div>
+  )
+}
+
+/** Tableau L90 horaire avec identification de l'heure la plus calme */
+function AmbientNoiseSection({ files, pointMap, selectedDate, pointNames }: {
+  files: MeasurementFile[]
+  pointMap: Record<string, string>
+  selectedDate: string
+  pointNames: string[]
+}) {
+  const [showSection, setShowSection] = useState(false)
+
+  // L90 par heure et par point
+  const hourlyL90 = useMemo(() => {
+    const hours = Array.from({ length: 24 }, (_, i) => i)
+    return hours.map((h) => {
+      const entry: Record<string, number | null> = { hour: h }
+      for (const pt of pointNames) {
+        const values = files
+          .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
+          .flatMap((f) => f.data)
+          .filter((dp) => Math.floor(dp.t / 60) === h)
+          .map((dp) => dp.laeq)
+        if (values.length >= 3) {
+          const sorted = [...values].sort((a, b) => a - b)
+          const idx = Math.round(0.9 * (sorted.length - 1))
+          entry[pt] = Math.round(sorted[idx] * 10) / 10
+        } else {
+          entry[pt] = null
+        }
+      }
+      return entry
+    })
+  }, [files, pointMap, selectedDate, pointNames])
+
+  // Heure la plus calme par point
+  const quietestHour = useMemo(() => {
+    const result: Record<string, { hour: number; value: number } | null> = {}
+    for (const pt of pointNames) {
+      let minVal = Infinity
+      let minHour = -1
+      for (const row of hourlyL90) {
+        const v = row[pt] as number | null
+        if (v !== null && v < minVal) {
+          minVal = v
+          minHour = row.hour as number
+        }
+      }
+      result[pt] = minHour >= 0 ? { hour: minHour, value: minVal } : null
+    }
+    return result
+  }, [hourlyL90, pointNames])
+
+  if (pointNames.length === 0) return null
+
+  return (
+    <div className="border-t border-gray-800">
+      <button
+        onClick={() => setShowSection(!showSection)}
+        className="flex items-center gap-2 px-4 py-2 w-full text-left hover:bg-gray-800/50 transition-colors"
+      >
+        <TrendingDown size={12} className="text-blue-400" />
+        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+          Analyse bruit de fond
+        </span>
+        <ChevronRight size={12} className={`text-gray-600 transition-transform ${showSection ? 'rotate-90' : ''}`} />
+      </button>
+
+      {showSection && (
+        <div className="px-4 pb-3 animate-[fadeIn_0.15s_ease-out]">
+          {/* Heure la plus calme */}
+          <div className="flex flex-wrap gap-4 mb-2">
+            {pointNames.map((pt, i) => {
+              const q = quietestHour[pt]
+              return q ? (
+                <div key={pt} className="text-xs">
+                  <span style={{ color: ptColor(pt, i) }} className="font-medium">{pt}</span>
+                  <span className="text-gray-500"> : heure la plus calme = </span>
+                  <span className="text-gray-200 font-medium">{String(q.hour).padStart(2, '0')}h</span>
+                  <span className="text-gray-500"> ({q.value} dB)</span>
+                </div>
+              ) : null
+            })}
+          </div>
+
+          {/* Tableau L90 horaire */}
+          <div className="overflow-x-auto max-h-40 overflow-y-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-gray-900">
+                <tr className="border-b border-gray-800">
+                  <th className="text-left px-2 py-1 text-gray-500 font-medium">Heure</th>
+                  {pointNames.map((pt, i) => (
+                    <th key={pt} className="px-2 py-1 text-center font-medium" style={{ color: ptColor(pt, i) }}>
+                      L90
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {hourlyL90.map((row) => {
+                  const h = row.hour as number
+                  return (
+                    <tr key={h} className="border-b border-gray-800/30">
+                      <td className="px-2 py-0.5 text-gray-500 font-mono">
+                        {String(h).padStart(2, '0')}:00
+                      </td>
+                      {pointNames.map((pt) => {
+                        const v = row[pt] as number | null
+                        const isQuietest = quietestHour[pt]?.hour === h
+                        return (
+                          <td key={pt} className={`px-2 py-0.5 text-center tabular-nums ${
+                            isQuietest ? 'text-blue-300 font-semibold' : 'text-gray-400'
+                          }`}>
+                            {v !== null ? v.toFixed(1) : '—'}
+                          </td>
+                        )
+                      })}
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

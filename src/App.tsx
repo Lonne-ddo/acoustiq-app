@@ -14,6 +14,7 @@ import {
   Layers,
   Calculator,
   FileText,
+  Shield,
   Save,
   FolderOpen,
   Settings as SettingsIcon,
@@ -46,6 +47,8 @@ import Spectrogram from './components/Spectrogram'
 import LwCalculator from './components/LwCalculator'
 import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
+import ComparisonPanel from './components/ComparisonPanel'
+import ReafieCheck from './components/ReafieCheck'
 import Settings from './components/Settings'
 import ShortcutsModal from './components/ShortcutsModal'
 import Onboarding, { shouldShowOnboarding, resetOnboarding } from './components/Onboarding'
@@ -120,7 +123,7 @@ function saveRecent(projects: RecentProject[]) {
   localStorage.setItem(RECENT_KEY, JSON.stringify(projects.slice(0, MAX_RECENT)))
 }
 
-type Tab = 'chart' | 'spectrogram' | 'lw' | 'concordance' | 'report'
+type Tab = 'chart' | 'spectrogram' | 'lw' | 'concordance' | 'report' | 'reafie'
 
 const FILE_LIST_LIMIT = 10
 
@@ -605,6 +608,9 @@ function MainPanel({
   const chartFiles = files.filter((f) => !!pointMap[f.id])
   const hasChart = chartFiles.length > 0
   const [showRecent, setShowRecent] = useState(false)
+  const [comparisonMode, setComparisonMode] = useState(false)
+  const [onRange, setOnRange] = useState({ start: '08:00', end: '12:00' })
+  const [offRange, setOffRange] = useState({ start: '00:00', end: '06:00' })
 
   return (
     <main className="flex-1 bg-gray-950 text-gray-100 flex flex-col min-w-0 overflow-hidden">
@@ -673,6 +679,7 @@ function MainPanel({
             ['lw', <Calculator size={13} key="l" />, t('tab.lw')],
             ['concordance', <TableProperties size={13} key="t" />, t('tab.concordance')],
             ['report', <FileText size={13} key="r" />, t('tab.report')],
+            ['reafie', <Shield size={13} key="re" />, 'REAFIE'],
           ] as [Tab, React.ReactNode, string][]).map(([id, icon, label]) => (
             <TabButton key={id} active={activeTab === id} onClick={() => onTabChange(id)} icon={icon} label={label} aria-label={label} />
           ))}
@@ -728,6 +735,47 @@ function MainPanel({
                 />
               </div>
               <IndicesPanel files={chartFiles} pointMap={pointMap} selectedDate={selectedDate} />
+
+              {/* Mode comparaison ON/OFF */}
+              <div className="border-t border-gray-800 bg-gray-900 shrink-0">
+                <div className="flex items-center gap-3 px-4 py-1.5">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={comparisonMode}
+                      onChange={(e) => setComparisonMode(e.target.checked)}
+                      className="w-3.5 h-3.5 rounded bg-gray-800 border-gray-600
+                                 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
+                    />
+                    <span className="text-xs font-medium text-gray-400">Mode comparaison ON/OFF</span>
+                  </label>
+                  {comparisonMode && (
+                    <div className="flex items-center gap-2 ml-2 text-xs">
+                      <span className="text-emerald-400 font-medium">ON :</span>
+                      <input type="time" value={onRange.start} onChange={(e) => setOnRange((r) => ({ ...r, start: e.target.value }))}
+                        className="bg-gray-800 text-gray-100 border border-gray-600 rounded px-1 py-0.5 text-xs" />
+                      <span className="text-gray-600">–</span>
+                      <input type="time" value={onRange.end} onChange={(e) => setOnRange((r) => ({ ...r, end: e.target.value }))}
+                        className="bg-gray-800 text-gray-100 border border-gray-600 rounded px-1 py-0.5 text-xs" />
+                      <span className="text-red-400 font-medium ml-2">OFF :</span>
+                      <input type="time" value={offRange.start} onChange={(e) => setOffRange((r) => ({ ...r, start: e.target.value }))}
+                        className="bg-gray-800 text-gray-100 border border-gray-600 rounded px-1 py-0.5 text-xs" />
+                      <span className="text-gray-600">–</span>
+                      <input type="time" value={offRange.end} onChange={(e) => setOffRange((r) => ({ ...r, end: e.target.value }))}
+                        className="bg-gray-800 text-gray-100 border border-gray-600 rounded px-1 py-0.5 text-xs" />
+                    </div>
+                  )}
+                </div>
+              </div>
+              {comparisonMode && (
+                <ComparisonPanel
+                  files={chartFiles}
+                  pointMap={pointMap}
+                  selectedDate={selectedDate}
+                  onRange={onRange}
+                  offRange={offRange}
+                />
+              )}
             </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-600 gap-3">
@@ -770,6 +818,12 @@ function MainPanel({
             concordance={concordance} selectedDate={selectedDate}
             assignedPoints={assignedPoints}
           />
+        </div>
+      )}
+
+      {activeTab === 'reafie' && (
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+          <ReafieCheck files={chartFiles} pointMap={pointMap} selectedDate={selectedDate} />
         </div>
       )}
     </main>

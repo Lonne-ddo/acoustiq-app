@@ -18,7 +18,9 @@ export function laeqAvg(values: number[]): number {
  */
 function computePercentile(values: number[], percentile: number): number {
   if (values.length === 0) return 0
-  const sorted = [...values].sort((a, b) => b - a) // tri décroissant
+  // Tri croissant : L90 = niveau dépassé 90% du temps (bruit de fond, valeur basse)
+  // L10 = niveau dépassé 10% du temps (pointes, valeur haute)
+  const sorted = [...values].sort((a, b) => a - b)
   const index = Math.round((percentile / 100) * (sorted.length - 1))
   return sorted[index]
 }

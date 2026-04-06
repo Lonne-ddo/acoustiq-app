@@ -44,13 +44,24 @@ function minutesToHHMM(minutes: number): string {
 }
 
 /**
- * Arrondit une heure HH:MM au bucket de 5 minutes inférieur
+ * Arrondit une heure HH:MM au bucket d'agrégation inférieur
  * pour aligner les événements avec les données du graphique
  */
-function snapToFiveMin(time: string): string {
+function snapToBucket(time: string, interval: number): string {
   const [h = '0', m = '0'] = time.split(':')
   const totalMin = parseInt(h, 10) * 60 + parseInt(m, 10)
-  return minutesToHHMM(Math.floor(totalMin / 5) * 5)
+  return minutesToHHMM(Math.floor(totalMin / interval) * interval)
+}
+
+/**
+ * Calcule l'intervalle de tick optimal pour l'axe X en fonction de la plage visible
+ */
+function computeTickInterval(dataLength: number): number | 'preserveStartEnd' {
+  if (dataLength <= 12) return 0            // Tous les points
+  if (dataLength <= 30) return 1            // 1 sur 2
+  if (dataLength <= 60) return 4            // ~1 sur 5
+  if (dataLength <= 120) return 11          // ~1 sur 12
+  return 'preserveStartEnd'
 }
 
 interface ChartEntry {
@@ -94,18 +105,26 @@ export default function TimeSeriesChart({
   const chartRef = useRef<HTMLDivElement>(null)
   const chartAreaRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState(false)
+  const [exporting, setExporting] = useState(false)
   const dragStartX = useRef(0)
   const dragStartRange = useRef<ZoomRange | null>(null)
 
-  // Export PNG via html2canvas
+  // Export PNG via html2canvas — capture la zone complète du graphique
   const handleExportPNG = useCallback(async () => {
-    if (!chartRef.current) return
-    const canvas = await html2canvas(chartRef.current, { backgroundColor: '#030712' })
-    const link = document.createElement('a')
-    const points = [...new Set(files.map((f) => pointMap[f.id]).filter(Boolean))].sort().join('_')
-    link.download = `acoustiq_${points || 'chart'}_${selectedDate}.png`
-    link.href = canvas.toDataURL('image/png')
-    link.click()
+    // Capturer chartAreaRef (inclut le graphique + légende) au lieu de chartRef seul
+    const target = chartAreaRef.current ?? chartRef.current
+    if (!target) return
+    setExporting(true)
+    try {
+      const canvas = await html2canvas(target, { backgroundColor: '#030712', scale: 2 })
+      const link = document.createElement('a')
+      const points = [...new Set(files.map((f) => pointMap[f.id]).filter(Boolean))].sort().join('_')
+      link.download = `acoustiq_${points || 'chart'}_${selectedDate}.png`
+      link.href = canvas.toDataURL('image/png')
+      link.click()
+    } finally {
+      setExporting(false)
+    }
   }, [files, pointMap, selectedDate])
 
   // Fichiers actifs pour la journée sélectionnée, regroupés par point
@@ -162,22 +181,47 @@ export default function TimeSeriesChart({
   const effectiveRange = zoomRange ?? fullRange
 
   // Données filtrées par la plage de zoom, sous-échantillonnées à max 2000 points
+  // Utilise la décimation min/max pour conserver les pics et creux
   const visibleData = useMemo(() => {
     const filtered = chartData.filter((d) => d.t >= effectiveRange.startMin && d.t <= effectiveRange.endMin)
     const MAX_DISPLAY = 2000
     if (filtered.length <= MAX_DISPLAY) return filtered
-    // Sous-échantillonnage uniforme pour l'affichage
-    const step = filtered.length / MAX_DISPLAY
+
+    // Décimation min/max : pour chaque bin, garder le point min et max
+    const binCount = Math.floor(MAX_DISPLAY / 2)
+    const binSize = filtered.length / binCount
     const sampled: ChartEntry[] = []
-    for (let i = 0; i < MAX_DISPLAY; i++) {
-      sampled.push(filtered[Math.floor(i * step)])
+
+    for (let b = 0; b < binCount; b++) {
+      const start = Math.floor(b * binSize)
+      const end = Math.min(Math.floor((b + 1) * binSize), filtered.length)
+      if (start >= end) continue
+
+      let minIdx = start, maxIdx = start
+      // Comparer sur la première clé de point disponible
+      const firstPt = pointNames[0]
+      if (firstPt) {
+        let minVal = Infinity, maxVal = -Infinity
+        for (let i = start; i < end; i++) {
+          const v = filtered[i][firstPt]
+          const n = typeof v === 'number' ? v : 0
+          if (n < minVal) { minVal = n; minIdx = i }
+          if (n > maxVal) { maxVal = n; maxIdx = i }
+        }
+      }
+
+      // Ajouter dans l'ordre chronologique
+      if (minIdx <= maxIdx) {
+        sampled.push(filtered[minIdx])
+        if (minIdx !== maxIdx) sampled.push(filtered[maxIdx])
+      } else {
+        sampled.push(filtered[maxIdx])
+        if (minIdx !== maxIdx) sampled.push(filtered[minIdx])
+      }
     }
-    // Toujours inclure le dernier point
-    if (sampled[sampled.length - 1] !== filtered[filtered.length - 1]) {
-      sampled.push(filtered[filtered.length - 1])
-    }
+
     return sampled
-  }, [chartData, effectiveRange])
+  }, [chartData, effectiveRange, pointNames])
 
   // Événements filtrés pour la journée affichée
   const activeEvents = useMemo(
@@ -406,13 +450,14 @@ export default function TimeSeriesChart({
         </span>
         <button
           onClick={handleExportPNG}
+          disabled={exporting}
           className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
                      bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
-                     border border-gray-600 transition-colors"
+                     border border-gray-600 transition-colors disabled:opacity-50"
           title="Exporter en PNG"
         >
           <Download size={12} />
-          Exporter PNG
+          {exporting ? 'Export…' : 'Exporter PNG'}
         </button>
       </div>
 
@@ -437,7 +482,7 @@ export default function TimeSeriesChart({
                 tick={{ fontSize: 11, fill: '#9ca3af' }}
                 tickLine={false}
                 axisLine={{ stroke: '#374151' }}
-                interval="preserveStartEnd"
+                interval={computeTickInterval(visibleData.length)}
               />
 
               <YAxis
@@ -488,7 +533,7 @@ export default function TimeSeriesChart({
               {activeEvents.map((ev) => (
                 <ReferenceLine
                   key={ev.id}
-                  x={snapToFiveMin(ev.time)}
+                  x={snapToBucket(ev.time, aggInterval)}
                   stroke={ev.color}
                   strokeDasharray="4 3"
                   strokeWidth={1.5}

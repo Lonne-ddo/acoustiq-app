@@ -95,7 +95,7 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
 
     // Colonne index 2 : Date/heure → conversion en minutes depuis minuit
     const timeVal = row[2]
-    const t = timeToMinutes(timeVal)
+    const t = timeToMinutes(timeVal) % 1440 // Ramener au cycle 24h
 
     // Colonne index 4 : LAeq
     const laeqVal = row[4]
@@ -115,6 +115,10 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
       laeq,
       ...(spectra.length > 0 ? { spectra } : {}),
     })
+  }
+
+  if (data.length === 0) {
+    throw new Error(`Aucune donnée LAeq valide trouvée dans "${fileName}" (831C)`)
   }
 
   return {

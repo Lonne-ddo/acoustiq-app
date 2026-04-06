@@ -122,7 +122,7 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     if (recordType !== null && recordType !== '' && recordType !== undefined) continue
 
     const timeVal = row[timeCol]
-    const tVal = timeToMinutes(timeVal)
+    const tVal = timeToMinutes(timeVal) % 1440 // Ramener au cycle 24h
 
     const laeqVal = row[laeqCol]
     const laeq = typeof laeqVal === 'number' ? laeqVal : parseFloat(String(laeqVal))
@@ -150,6 +150,10 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
         percent: Math.round((i / total) * 100),
       } satisfies ParseProgress)
     }
+  }
+
+  if (data.length === 0) {
+    throw new Error(`Aucune donnée LAeq valide trouvée dans "${fileName}"`)
   }
 
   return {

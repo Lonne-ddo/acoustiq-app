@@ -172,7 +172,7 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
     }
 
     const timeVal = row[timeCol]
-    const t = timeToMinutes(timeVal)
+    const t = timeToMinutes(timeVal) % 1440 // Ramener au cycle 24h
 
     const laeqVal = row[laeqCol]
     const laeq = typeof laeqVal === 'number' ? laeqVal : parseFloat(String(laeqVal))
@@ -191,6 +191,10 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
       laeq,
       ...(spectra.length > 0 ? { spectra } : {}),
     })
+  }
+
+  if (data.length === 0) {
+    throw new Error(`Aucune donnée LAeq valide trouvée dans "${fileName}" (821SE)`)
   }
 
   return {

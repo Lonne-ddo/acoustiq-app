@@ -61,8 +61,26 @@ interface RejectedFile {
 // ---------------------------------------------------------------------------
 function parseFile(buffer: ArrayBuffer, fileName: string): MeasurementFile {
   const workbook = XLSX.read(buffer, { type: 'array', cellDates: false })
-  if (detect821SE(workbook)) return parse821SE(buffer, fileName)
-  try { return parse831C(buffer, fileName) } catch { return parse821SE(buffer, fileName) }
+
+  // Détection automatique du modèle 821SE
+  if (detect821SE(workbook)) {
+    return parse821SE(buffer, fileName)
+  }
+
+  // Essayer 831C en priorité, puis fallback 821SE avec le détail des erreurs
+  let err831C: string | null = null
+  try {
+    return parse831C(buffer, fileName)
+  } catch (e) {
+    err831C = e instanceof Error ? e.message : String(e)
+  }
+
+  try {
+    return parse821SE(buffer, fileName)
+  } catch (e) {
+    const err821SE = e instanceof Error ? e.message : String(e)
+    throw new Error(`Échec de lecture de "${fileName}" :\n  831C : ${err831C}\n  821SE : ${err821SE}`)
+  }
 }
 
 function extractDateFromName(name: string): string | null {

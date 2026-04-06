@@ -2,8 +2,8 @@
  * Générateur de rapport structuré pour copier-coller dans Word
  * Sections éditables : en-tête, méthodologie, résultats, événements, concordance
  */
-import { useState, useMemo } from 'react'
-import { Copy, Download, FileText } from 'lucide-react'
+import { useState, useMemo, useEffect } from 'react'
+import { Copy, Download, FileText, Check } from 'lucide-react'
 import type { MeasurementFile, SourceEvent, ConcordanceState } from '../types'
 import {
   laeqAvg,
@@ -23,7 +23,6 @@ interface Props {
   assignedPoints: string[]
 }
 
-/** Formate un nombre avec 1 décimale */
 function fmt(n: number): string {
   return n.toFixed(1)
 }
@@ -36,8 +35,8 @@ export default function ReportGenerator({
   selectedDate,
   assignedPoints,
 }: Props) {
-  // Champs éditables
   const [projectName, setProjectName] = useState('Étude d\'impact acoustique')
+  const [copied, setCopied] = useState(false)
 
   // Calcul des indices pour chaque point
   const indicesByPoint = useMemo(() => {
@@ -71,16 +70,15 @@ export default function ReportGenerator({
     [events, selectedDate],
   )
 
-  // Génération du texte complet du rapport
+  // Sections éditables
   const [headerText, setHeaderText] = useState('')
   const [methodText, setMethodText] = useState('')
   const [resultsText, setResultsText] = useState('')
   const [eventsText, setEventsText] = useState('')
   const [concordanceText, setConcordanceText] = useState('')
 
-  // Génération initiale des sections
-  useMemo(() => {
-    // En-tête
+  // Regénérer les sections quand les données changent (useEffect, pas useMemo)
+  useEffect(() => {
     const points = assignedPoints.join(', ') || 'Aucun point assigné'
     setHeaderText(
       `${projectName}\n` +
@@ -89,7 +87,6 @@ export default function ReportGenerator({
       `Nombre de fichiers : ${files.filter((f) => !!pointMap[f.id]).length}`
     )
 
-    // Méthodologie
     setMethodText(
       `Les mesures acoustiques ont été réalisées à l'aide de sonomètres intégrateurs de classe 1 ` +
       `(modèles Larson Davis 831C / 821SE SoundExpert) conformément aux normes NF S 31-010 et ` +
@@ -100,7 +97,6 @@ export default function ReportGenerator({
       `à 20 kHz) ont été enregistrés simultanément pour permettre l'analyse fréquentielle.`
     )
 
-    // Résultats
     const header = 'Point'.padEnd(12) + 'LAeq'.padStart(8) + 'L10'.padStart(8) +
       'L50'.padStart(8) + 'L90'.padStart(8) + 'LAFmax'.padStart(8) + 'LAFmin'.padStart(8)
     const separator = '-'.repeat(header.length)
@@ -121,7 +117,6 @@ export default function ReportGenerator({
       `Tous les niveaux sont exprimés en dB(A) ref. 20 µPa.`
     )
 
-    // Événements
     if (dayEvents.length > 0) {
       const evList = dayEvents.map((ev) => `  - ${ev.time} : ${ev.label}`).join('\n')
       setEventsText(
@@ -131,7 +126,6 @@ export default function ReportGenerator({
       setEventsText('Aucun événement source identifié pour cette journée.')
     }
 
-    // Concordance
     if (dayEvents.length > 0 && assignedPoints.length > 0) {
       const lines: string[] = []
       for (const ev of dayEvents) {
@@ -149,10 +143,8 @@ export default function ReportGenerator({
     } else {
       setConcordanceText('Aucune donnée de concordance disponible.')
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [projectName, selectedDate, assignedPoints, files, pointMap, indicesByPoint, dayEvents, concordance])
 
-  // Texte complet
   function getFullReport(): string {
     return [
       '═'.repeat(60),
@@ -181,12 +173,25 @@ export default function ReportGenerator({
     ].join('\n')
   }
 
-  // Copier dans le presse-papier
+  // Copier avec feedback visuel et gestion d'erreur
   async function handleCopy() {
-    await navigator.clipboard.writeText(getFullReport())
+    try {
+      await navigator.clipboard.writeText(getFullReport())
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    } catch {
+      // Fallback pour les navigateurs sans Clipboard API
+      const textarea = document.createElement('textarea')
+      textarea.value = getFullReport()
+      document.body.appendChild(textarea)
+      textarea.select()
+      document.execCommand('copy')
+      document.body.removeChild(textarea)
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    }
   }
 
-  // Télécharger en .txt
   function handleDownloadTxt() {
     const blob = new Blob([getFullReport()], { type: 'text/plain;charset=utf-8' })
     const url = URL.createObjectURL(blob)
@@ -206,7 +211,6 @@ export default function ReportGenerator({
           Générateur de rapport
         </span>
 
-        {/* Nom du projet */}
         <div className="flex items-center gap-2 ml-4">
           <label className="text-xs text-gray-500">Projet :</label>
           <input
@@ -221,12 +225,14 @@ export default function ReportGenerator({
         <div className="flex items-center gap-2 ml-auto">
           <button
             onClick={handleCopy}
-            className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium
-                       bg-emerald-700 text-white hover:bg-emerald-600
-                       transition-colors"
+            className={`flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+              copied
+                ? 'bg-emerald-800 text-emerald-200'
+                : 'bg-emerald-700 text-white hover:bg-emerald-600'
+            }`}
           >
-            <Copy size={12} />
-            Copier le rapport
+            {copied ? <Check size={12} /> : <Copy size={12} />}
+            {copied ? 'Copié !' : 'Copier le rapport'}
           </button>
           <button
             onClick={handleDownloadTxt}
@@ -242,36 +248,20 @@ export default function ReportGenerator({
 
       {/* Sections éditables */}
       <div className="flex-1 overflow-y-auto px-6 py-4 space-y-4">
-        {/* En-tête */}
         <Section title="En-tête" value={headerText} onChange={setHeaderText} rows={4} />
-
-        {/* Méthodologie */}
         <Section title="1. Méthodologie" value={methodText} onChange={setMethodText} rows={6} />
-
-        {/* Résultats */}
         <Section title="2. Résultats" value={resultsText} onChange={setResultsText} rows={Math.max(6, assignedPoints.length + 6)} />
-
-        {/* Événements */}
         <Section title="3. Événements sources" value={eventsText} onChange={setEventsText} rows={Math.max(3, dayEvents.length + 3)} />
-
-        {/* Concordance */}
         <Section title="4. Concordance" value={concordanceText} onChange={setConcordanceText} rows={Math.max(3, dayEvents.length * 3 + 2)} />
       </div>
     </div>
   )
 }
 
-/** Section éditable du rapport */
 function Section({
-  title,
-  value,
-  onChange,
-  rows,
+  title, value, onChange, rows,
 }: {
-  title: string
-  value: string
-  onChange: (v: string) => void
-  rows: number
+  title: string; value: string; onChange: (v: string) => void; rows: number
 }) {
   return (
     <div>

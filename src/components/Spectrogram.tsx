@@ -151,7 +151,13 @@ function ColorScaleLegend({ minDb, maxDb }: { minDb: number; maxDb: number }) {
 // ---- XAxis -----------------------------------------------------------------
 function XAxis({ tMin, tMax }: { tMin: number; tMax: number }) {
   const range = tMax - tMin || 1
-  const interval = range > 720 ? 120 : 60
+  // Intervalle adaptatif selon la plage visible
+  let interval: number
+  if (range <= 15) interval = 5
+  else if (range <= 60) interval = 10
+  else if (range <= 180) interval = 30
+  else if (range <= 720) interval = 60
+  else interval = 120
   const ticks: number[] = []
   for (let t = Math.ceil(tMin / interval) * interval; t <= tMax; t += interval) {
     ticks.push(t)
@@ -247,7 +253,8 @@ function SingleSpectrogram({
       for (let bi = 0; bi < n; bi++) {
         // bi=0 = basse fréquence → bas du canvas → dernière ligne de l'ImageData
         const row = nBands - 1 - bi
-        const norm = (sp[bi] - minDb) / (maxDb - minDb)
+        const dbRange = maxDb - minDb || 1 // Éviter division par zéro
+        const norm = (sp[bi] - minDb) / dbRange
         const [r, g, b] = viridis(norm)
         const idx = (row * sorted.length + ti) * 4
         img.data[idx] = r; img.data[idx + 1] = g

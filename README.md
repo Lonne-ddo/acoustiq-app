@@ -1,60 +1,84 @@
 # AcoustiQ
 
-Outil d'analyse acoustique environnementale pour ingénieurs du son.
+Outil d'analyse acoustique environnementale pour les sonomètres SoundAdvisor 831C et SoundExpert 821SE.
 
-## Description
+**100 % client-side** — aucun backend, aucune donnée envoyée vers un serveur.
 
-AcoustiQ permet de lire les fichiers de mesure issus de sonomètres de terrain (SoundAdvisor 831C, SoundExpert 821SE), de visualiser les courbes de niveaux sonores, de calculer des indices acoustiques réglementaires (LAeq, L10, L50, L90) et d'identifier des événements de sources de bruit.
+## Fonctionnalités
+
+| Module | Description |
+|--------|-------------|
+| **Parsers** | Lecture XLSX 831C et 821SE avec auto-detection, Web Worker pour les gros fichiers |
+| **Visualisation** | Courbes LAeq multi-points, zoom/pan, légende interactive |
+| **Spectrogramme** | Heatmap 1/3 octave (canvas, palette viridis), synchronisé avec le zoom |
+| **Indices** | LAeq, L10, L50, L90, LAFmax, LAFmin avec plage horaire personnalisable |
+| **Comparaison ON/OFF** | Isolation de la contribution source avec calcul de Lsource et confiance |
+| **REAFIE** | Conformité réglementaire par zone (résidentiel/commercial/industriel) |
+| **Bruit de fond** | L90 horaire, identification de l'heure la plus calme |
+| **Lw** | Puissance acoustique (Q=1 toiture, Q=2 sol, ISO 3744) |
+| **Concordance** | Matrice événements x points, 3 états, export CSV |
+| **Rapport** | Générateur de rapport structuré, copier/coller, export .txt et PDF |
+| **Audio** | Lecture WAV, forme d'onde, curseur synchronisé |
+| **Projet** | Sauvegarde/chargement JSON, projets récents |
 
 ## Stack technique
 
-- **Vite + React + TypeScript** — build rapide, typage strict
-- **Tailwind CSS v4** — styles utilitaires
-- **SheetJS (xlsx)** — lecture des fichiers XLSX des sonomètres
-- **lucide-react** — icônes
-- **100 % client-side** — aucun backend, aucune base de données
+- **Vite** + **React 19** + **TypeScript 6** + **Tailwind CSS 4**
+- **Recharts** — graphiques
+- **SheetJS** (xlsx) — lecture des fichiers XLSX
+- **html2canvas** — export PNG
+- **lucide-react** — icones
+- **Web Audio API** — lecture .wav
 
-## Déploiement
-
-Cible : **Cloudflare Pages** (export statique)
-
-```bash
-npm run build
-# Déployer le dossier dist/ sur Cloudflare Pages
-```
-
-## Structure du projet
-
-```
-src/
-  components/     # Composants UI réutilisables
-  modules/        # Modules fonctionnels (parsers, calculs, événements)
-  types/          # Interfaces TypeScript
-  utils/          # Utilitaires de calcul acoustique
-  App.tsx
-  main.tsx
-```
-
-## Développement local
+## Lancer en local
 
 ```bash
 npm install
 npm run dev
 ```
 
-## Formats de fichiers supportés
+L'application est disponible sur `http://localhost:5173`.
 
-| Appareil           | Format  | Feuille Summary | Feuille Time History |
-|--------------------|---------|-----------------|----------------------|
-| SoundAdvisor 831C  | .xlsx   | Oui             | Oui (colonnes 2, 4, 41+) |
-| SoundExpert 821SE  | .xlsx   | À venir         | À venir              |
+## Build de production
 
-## Indices acoustiques calculés
+```bash
+npm run build
+```
+
+Le dossier `dist/` contient le build statique optimise.
+
+## Deployer sur Cloudflare Pages
+
+1. Connecter le repo GitHub a Cloudflare Pages
+2. Build command : `npm run build`
+3. Build output directory : `dist`
+4. L'application est deployee automatiquement a chaque push sur `main`
+
+Ou manuellement :
+
+```bash
+npx wrangler pages deploy dist --project-name=acoustiq-app
+```
+
+## Formats de fichiers supportes
+
+| Appareil | Format | Feuilles |
+|----------|--------|----------|
+| SoundAdvisor 831C | .xlsx | Summary + Time History (colonnes 2, 4, 41-67) |
+| SoundExpert 821SE | .xlsx | Summary + Time History (detection heuristique) |
+
+## Indices acoustiques
 
 | Indice | Description |
 |--------|-------------|
-| LAeq   | Niveau équivalent continu (moyenne énergétique) |
-| L10    | Niveau dépassé 10 % du temps (bruit de pointe) |
-| L50    | Niveau médian |
-| L90    | Niveau dépassé 90 % du temps (bruit résiduel) |
-| Lw     | Puissance acoustique (champ libre sphérique) |
+| LAeq | Niveau equivalent continu (moyenne energetique) |
+| L10 | Niveau depasse 10% du temps (pointes) |
+| L50 | Niveau median |
+| L90 | Niveau depasse 90% du temps (bruit residuel) |
+| LAFmax | Niveau max instantane |
+| LAFmin | Niveau min instantane |
+| Lw | Puissance acoustique |
+
+## Licence
+
+Projet prive.

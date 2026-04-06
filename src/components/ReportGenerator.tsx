@@ -3,7 +3,7 @@
  * Sections éditables : en-tête, méthodologie, résultats, événements, concordance
  */
 import { useState, useMemo, useEffect } from 'react'
-import { Copy, Download, FileText, Check } from 'lucide-react'
+import { Copy, Download, FileText, Check, Printer } from 'lucide-react'
 import type { MeasurementFile, SourceEvent, ConcordanceState } from '../types'
 import {
   laeqAvg,
@@ -233,6 +233,15 @@ export default function ReportGenerator({
           >
             {copied ? <Check size={12} /> : <Copy size={12} />}
             {copied ? 'Copié !' : 'Copier le rapport'}
+          </button>
+          <button
+            onClick={() => window.print()}
+            className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium
+                       bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
+                       border border-gray-600 transition-colors no-print"
+          >
+            <Printer size={12} />
+            Imprimer / PDF
           </button>
           <button
             onClick={handleDownloadTxt}

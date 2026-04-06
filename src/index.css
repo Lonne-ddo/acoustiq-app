@@ -26,3 +26,57 @@ body {
   from { opacity: 0; transform: translateX(16px); }
   to { opacity: 1; transform: translateX(0); }
 }
+
+/* Styles d'impression pour l'export PDF */
+@media print {
+  body {
+    background: white !important;
+    color: black !important;
+    font-size: 11pt;
+  }
+
+  /* Masquer la sidebar, le header et les contrôles */
+  aside,
+  header,
+  nav,
+  .no-print,
+  button,
+  select,
+  input[type="checkbox"] {
+    display: none !important;
+  }
+
+  /* Forcer le fond blanc et texte noir */
+  main, div, section, table {
+    background: white !important;
+    color: black !important;
+    border-color: #ccc !important;
+  }
+
+  /* Texte et tableaux lisibles */
+  td, th, span, p, label, textarea {
+    color: black !important;
+  }
+
+  /* Textareas affichées comme texte */
+  textarea {
+    border: none !important;
+    background: none !important;
+    resize: none !important;
+    overflow: visible !important;
+    height: auto !important;
+    white-space: pre-wrap;
+    font-family: 'Times New Roman', serif;
+    font-size: 11pt;
+  }
+
+  /* Mise en page */
+  .print-content {
+    padding: 2cm;
+  }
+
+  /* Éviter les coupures dans les tableaux */
+  tr {
+    page-break-inside: avoid;
+  }
+}

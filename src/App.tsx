@@ -52,6 +52,10 @@ import ReafieCheck from './components/ReafieCheck'
 import Settings from './components/Settings'
 import ShortcutsModal from './components/ShortcutsModal'
 import Onboarding, { shouldShowOnboarding, resetOnboarding } from './components/Onboarding'
+import Changelog from './components/Changelog'
+
+const APP_VERSION = '1.0.0'
+const BUILD_DATE = '2026-04-06'
 import { ToastProvider } from './components/Toast'
 
 // Couleurs par point pour la bordure des cartes
@@ -562,8 +566,9 @@ function Sidebar({
         />
       </div>
 
-      <div className="px-4 py-3 border-t border-gray-700 text-xs text-gray-500 shrink-0">
-        v0.2.0
+      <div className="px-4 py-3 border-t border-gray-700 text-xs text-gray-600 shrink-0 space-y-0.5">
+        <p className="text-gray-500">AcoustiQ v{APP_VERSION}</p>
+        <p>Mise à jour : {BUILD_DATE}</p>
       </div>
     </aside>
   )
@@ -595,6 +600,7 @@ interface MainPanelProps {
   onOpenSettings: () => void
   onOpenShortcuts: () => void
   onOpenOnboarding: () => void
+  onOpenChangelog: () => void
 }
 
 function MainPanel({
@@ -603,7 +609,7 @@ function MainPanel({
   projectName, recentProjects, settings,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
-  onOpenSettings, onOpenShortcuts, onOpenOnboarding,
+  onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
 }: MainPanelProps) {
   const chartFiles = files.filter((f) => !!pointMap[f.id])
   const hasChart = chartFiles.length > 0
@@ -692,6 +698,13 @@ function MainPanel({
               {chartFiles.length} {t('chart.filesShown')}
             </span>
           )}
+          <button
+            onClick={onOpenChangelog}
+            className="px-2 py-1 text-xs text-gray-600 hover:text-gray-300 hover:bg-gray-800 rounded transition-colors"
+            title="Changelog"
+          >
+            v{APP_VERSION}
+          </button>
           <button
             onClick={onOpenOnboarding}
             className="p-1.5 text-gray-600 hover:text-emerald-400 hover:bg-gray-800 rounded transition-colors"
@@ -875,6 +888,7 @@ export default function App() {
   const [settings, setSettings] = useState<AppSettings>(loadSettings)
   const [showSettings, setShowSettings] = useState(false)
   const [showShortcuts, setShowShortcuts] = useState(false)
+  const [showChangelog, setShowChangelog] = useState(false)
 
   // Sidebar rétractable
   const [sidebarCollapsed, setSidebarCollapsed] = useState(() => {
@@ -1154,6 +1168,7 @@ export default function App() {
         setShowSettings(false)
         setShowShortcuts(false)
         setShowOnboarding(false)
+        setShowChangelog(false)
         return
       }
 
@@ -1266,6 +1281,7 @@ export default function App() {
         onOpenSettings={() => setShowSettings(true)}
         onOpenShortcuts={() => setShowShortcuts(true)}
         onOpenOnboarding={() => { resetOnboarding(); setShowOnboarding(true) }}
+        onOpenChangelog={() => setShowChangelog(true)}
       />
 
       {/* Modales */}
@@ -1284,6 +1300,9 @@ export default function App() {
           language={settings.language}
           onClose={() => setShowOnboarding(false)}
         />
+      )}
+      {showChangelog && (
+        <Changelog onClose={() => setShowChangelog(false)} />
       )}
     </div>
     </ToastProvider>

@@ -3,7 +3,7 @@
  * Une courbe par point de mesure, agrégation à 5 minutes
  * Les événements de sources s'affichent comme lignes verticales tiretées
  */
-import { useMemo } from 'react'
+import { useMemo, useRef, useCallback } from 'react'
 import {
   LineChart,
   Line,
@@ -15,6 +15,8 @@ import {
   ReferenceLine,
   ResponsiveContainer,
 } from 'recharts'
+import html2canvas from 'html2canvas'
+import { Download } from 'lucide-react'
 import type { MeasurementFile, SourceEvent } from '../types'
 import { laeqAvg } from '../utils/acoustics'
 
@@ -76,6 +78,18 @@ export default function TimeSeriesChart({
   onDateChange,
   events,
 }: Props) {
+  const chartRef = useRef<HTMLDivElement>(null)
+
+  // Export PNG via html2canvas
+  const handleExportPNG = useCallback(async () => {
+    if (!chartRef.current) return
+    const canvas = await html2canvas(chartRef.current, { backgroundColor: '#030712' })
+    const link = document.createElement('a')
+    const points = [...new Set(files.map((f) => pointMap[f.id]).filter(Boolean))].sort().join('_')
+    link.download = `acoustiq_${points || 'chart'}_${selectedDate}.png`
+    link.href = canvas.toDataURL('image/png')
+    link.click()
+  }, [files, pointMap, selectedDate])
   // Fichiers actifs pour la journée sélectionnée, regroupés par point
   const filesByPoint = useMemo(() => {
     const map = new Map<string, MeasurementFile[]>()
@@ -152,14 +166,24 @@ export default function TimeSeriesChart({
         ) : (
           <span className="text-xs text-gray-500">{selectedDate}</span>
         )}
-        <span className="text-xs text-gray-600 ml-auto">
+        <span className="text-xs text-gray-600 ml-auto mr-2">
           Agrégation 5 min · {chartData.length} points
           {activeEvents.length > 0 && ` · ${activeEvents.length} événement(s)`}
         </span>
+        <button
+          onClick={handleExportPNG}
+          className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
+                     bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
+                     border border-gray-600 transition-colors"
+          title="Exporter en PNG"
+        >
+          <Download size={12} />
+          Exporter PNG
+        </button>
       </div>
 
       {/* Graphique */}
-      <div className="flex-1 min-h-0 px-4 py-3">
+      <div ref={chartRef} className="flex-1 min-h-0 px-4 py-3">
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={chartData} margin={{ top: 8, right: 24, left: 0, bottom: 8 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />

@@ -3,6 +3,8 @@
  * LAeq, L10, L50, L90, LAFmax, LAFmin — un tableau par point de mesure
  */
 import { useState, useMemo } from 'react'
+import * as XLSX from 'xlsx'
+import { Download } from 'lucide-react'
 import type { MeasurementFile } from '../types'
 import {
   laeqAvg,
@@ -108,6 +110,52 @@ export default function IndicesPanel({ files, pointMap, selectedDate }: Props) {
     )
   }, [files, pointMap, selectedDate, mode, startTime, endTime, pointNames])
 
+  // Export Excel des indices et données brutes
+  function handleExportExcel() {
+    const wb = XLSX.utils.book_new()
+
+    // Feuille 1 : Indices
+    const indicesRows = ROWS.map((row) => {
+      const obj: Record<string, string | number> = { Indice: row.label }
+      for (const pt of pointNames) {
+        const vals = indicesByPoint[pt]
+        obj[pt] = vals ? Math.round(vals[row.key as IndexKey] * 10) / 10 : 0
+      }
+      return obj
+    })
+    const wsIndices = XLSX.utils.json_to_sheet(indicesRows)
+    XLSX.utils.book_append_sheet(wb, wsIndices, 'Indices')
+
+    // Feuille 2 : Données brutes
+    // Rassembler toutes les minutes uniques et les valeurs par point
+    const rawByTime = new Map<number, Record<string, number>>()
+    for (const pt of pointNames) {
+      const ptFiles = files.filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
+      for (const f of ptFiles) {
+        for (const dp of f.data) {
+          if (!rawByTime.has(dp.t)) rawByTime.set(dp.t, {})
+          rawByTime.get(dp.t)![pt] = dp.laeq
+        }
+      }
+    }
+    const sortedTimes = [...rawByTime.keys()].sort((a, b) => a - b)
+    const rawRows = sortedTimes.map((t) => {
+      const h = Math.floor(t / 60) % 24
+      const m = Math.round(t % 60)
+      const obj: Record<string, string | number> = {
+        Heure: `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`,
+      }
+      for (const pt of pointNames) {
+        obj[`LAeq ${pt}`] = rawByTime.get(t)?.[pt] ?? ''
+      }
+      return obj
+    })
+    const wsRaw = XLSX.utils.json_to_sheet(rawRows)
+    XLSX.utils.book_append_sheet(wb, wsRaw, 'Données brutes')
+
+    XLSX.writeFile(wb, `acoustiq_indices_${selectedDate}.xlsx`)
+  }
+
   if (pointNames.length === 0) return null
 
   return (
@@ -118,7 +166,18 @@ export default function IndicesPanel({ files, pointMap, selectedDate }: Props) {
           Indices acoustiques
         </span>
 
-        <div className="flex items-center gap-1 ml-auto">
+        <button
+          onClick={handleExportExcel}
+          className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
+                     bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
+                     border border-gray-600 transition-colors ml-auto"
+          title="Exporter les indices en Excel"
+        >
+          <Download size={12} />
+          Exporter Excel
+        </button>
+
+        <div className="flex items-center gap-1">
           {/* Boutons de mode */}
           <button
             onClick={() => setMode('full')}

@@ -14,8 +14,31 @@ import {
   Layers,
   Calculator,
 } from 'lucide-react'
+import * as XLSX from 'xlsx'
 import type { MeasurementFile, SourceEvent, ConcordanceState } from './types'
 import { parse831C } from './modules/parser831C'
+import { parse821SE, detect821SE } from './modules/parser821SE'
+
+/**
+ * Parse un fichier XLSX en essayant les parsers dans l'ordre :
+ * 831C → 821SE → générique (821SE avec détection de colonnes)
+ */
+function parseFile(buffer: ArrayBuffer, fileName: string): MeasurementFile {
+  const workbook = XLSX.read(buffer, { type: 'array', cellDates: false })
+
+  // Détection automatique du modèle
+  if (detect821SE(workbook)) {
+    return parse821SE(buffer, fileName)
+  }
+
+  // Essayer le parser 831C en priorité
+  try {
+    return parse831C(buffer, fileName)
+  } catch {
+    // Fallback vers le parser 821SE (détection heuristique des colonnes)
+    return parse821SE(buffer, fileName)
+  }
+}
 import TimeSeriesChart from './components/TimeSeriesChart'
 import IndicesPanel from './components/IndicesPanel'
 import EventsPanel from './components/EventsPanel'
@@ -79,7 +102,7 @@ function Sidebar({
     for (const file of selected) {
       try {
         const buf = await readAsArrayBuffer(file)
-        parsed.push(parse831C(buf, file.name))
+        parsed.push(parseFile(buf, file.name))
       } catch (err) {
         // Les erreurs remontent via le state parent
         console.error(err)

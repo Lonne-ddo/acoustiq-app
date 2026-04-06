@@ -161,9 +161,22 @@ export default function TimeSeriesChart({
   // Plage effective (zoom ou pleine)
   const effectiveRange = zoomRange ?? fullRange
 
-  // Données filtrées par la plage de zoom
+  // Données filtrées par la plage de zoom, sous-échantillonnées à max 2000 points
   const visibleData = useMemo(() => {
-    return chartData.filter((d) => d.t >= effectiveRange.startMin && d.t <= effectiveRange.endMin)
+    const filtered = chartData.filter((d) => d.t >= effectiveRange.startMin && d.t <= effectiveRange.endMin)
+    const MAX_DISPLAY = 2000
+    if (filtered.length <= MAX_DISPLAY) return filtered
+    // Sous-échantillonnage uniforme pour l'affichage
+    const step = filtered.length / MAX_DISPLAY
+    const sampled: ChartEntry[] = []
+    for (let i = 0; i < MAX_DISPLAY; i++) {
+      sampled.push(filtered[Math.floor(i * step)])
+    }
+    // Toujours inclure le dernier point
+    if (sampled[sampled.length - 1] !== filtered[filtered.length - 1]) {
+      sampled.push(filtered[filtered.length - 1])
+    }
+    return sampled
   }, [chartData, effectiveRange])
 
   // Événements filtrés pour la journée affichée

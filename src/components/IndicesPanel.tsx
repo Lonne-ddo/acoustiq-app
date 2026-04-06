@@ -5,6 +5,7 @@
 import { useState, useMemo } from 'react'
 import * as XLSX from 'xlsx'
 import { Download } from 'lucide-react'
+import HelpTooltip from './HelpTooltip'
 import type { MeasurementFile } from '../types'
 import {
   laeqAvg,
@@ -29,14 +30,14 @@ function ptColor(pt: string, i: number) {
   return POINT_COLORS[pt] ?? FALLBACK_COLORS[i % FALLBACK_COLORS.length]
 }
 
-// Définition des lignes d'indices
+// Définition des lignes d'indices avec descriptions
 const ROWS = [
-  { key: 'laeq',   label: 'LAeq',   unit: 'dB(A)' },
-  { key: 'l10',    label: 'L10',    unit: 'dB(A)' },
-  { key: 'l50',    label: 'L50',    unit: 'dB(A)' },
-  { key: 'l90',    label: 'L90',    unit: 'dB(A)' },
-  { key: 'lafmax', label: 'LAFmax', unit: 'dB(A)' },
-  { key: 'lafmin', label: 'LAFmin', unit: 'dB(A)' },
+  { key: 'laeq',   label: 'LAeq',   unit: 'dB(A)', help: 'Niveau sonore continu équivalent pondéré A — moyenne énergétique sur la période.' },
+  { key: 'l10',    label: 'L10',    unit: 'dB(A)', help: 'Niveau dépassé 10% du temps — caractérise les niveaux de pointe récurrents.' },
+  { key: 'l50',    label: 'L50',    unit: 'dB(A)', help: 'Niveau dépassé 50% du temps — médiane, représente le bruit « typique ».' },
+  { key: 'l90',    label: 'L90',    unit: 'dB(A)', help: 'Niveau dépassé 90% du temps — bruit résiduel (bruit de fond).' },
+  { key: 'lafmax', label: 'LAFmax', unit: 'dB(A)', help: 'Niveau maximal instantané pondéré A, constante Fast.' },
+  { key: 'lafmin', label: 'LAFmin', unit: 'dB(A)', help: 'Niveau minimal instantané pondéré A, constante Fast.' },
 ] as const
 
 type IndexKey = (typeof ROWS)[number]['key']
@@ -246,7 +247,12 @@ export default function IndicesPanel({ files, pointMap, selectedDate }: Props) {
                 key={row.key}
                 className={ri % 2 === 0 ? 'bg-gray-900' : 'bg-gray-850'}
               >
-                <td className="px-4 py-1.5 text-gray-400 font-medium">{row.label}</td>
+                <td className="px-4 py-1.5 text-gray-400 font-medium">
+                  <span className="inline-flex items-center gap-1">
+                    {row.label}
+                    <HelpTooltip text={row.help} position="right" />
+                  </span>
+                </td>
                 {pointNames.map((pt) => {
                   const vals = indicesByPoint[pt]
                   const v = vals ? (vals[row.key as IndexKey] as number) : null

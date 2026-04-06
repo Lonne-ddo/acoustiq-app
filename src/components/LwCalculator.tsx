@@ -4,6 +4,7 @@
  */
 import { useState, useMemo } from 'react'
 import { Plus, Trash2, Download, ChevronRight } from 'lucide-react'
+import HelpTooltip from './HelpTooltip'
 import {
   lwRoof,
   lwGround,
@@ -53,6 +54,12 @@ const TYPE_LABEL: Record<LwSource['type'], string> = {
   roof:            'Toiture Q=1',
   ground:          'Sol Q=2',
   parallelepiped:  'ISO 3744',
+}
+
+const TYPE_HELP: Record<LwSource['type'], string> = {
+  roof:            'Lw = Lp + 20·log₁₀(d) + 11 − C  — Rayonnement hémisphérique (source en toiture, Q=1).',
+  ground:          'Lw = Lp + 20·log₁₀(d) + 8 − C  — Rayonnement quart de sphère (source au sol, Q=2).',
+  parallelepiped:  'Lw = 10·log₁₀(Σ 10^(Lp_i/10) · S_i) − C  — Méthode mobile ISO 3744, somme sur les surfaces.',
 }
 
 // ---- Export CSV ------------------------------------------------------------
@@ -426,7 +433,10 @@ function SummaryTable({
                   {src.name}
                 </td>
                 <td className="px-2 py-1.5 text-gray-500 whitespace-nowrap">
-                  {TYPE_LABEL[src.type]}
+                  <span className="inline-flex items-center gap-1">
+                    {TYPE_LABEL[src.type]}
+                    <HelpTooltip text={TYPE_HELP[src.type]} position="right" />
+                  </span>
                 </td>
                 <td className="px-2 py-1.5 text-right tabular-nums text-gray-100 font-semibold whitespace-nowrap">
                   {lw.toFixed(1)}

@@ -48,6 +48,13 @@ import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
 import Settings from './components/Settings'
 import ShortcutsModal from './components/ShortcutsModal'
+import Onboarding, { shouldShowOnboarding, resetOnboarding } from './components/Onboarding'
+
+/** Fichier rejeté lors du parsing */
+interface RejectedFile {
+  name: string
+  error: string
+}
 
 // ---------------------------------------------------------------------------
 // Utilitaires
@@ -90,6 +97,73 @@ function saveRecent(projects: RecentProject[]) {
 
 type Tab = 'chart' | 'spectrogram' | 'lw' | 'concordance' | 'report'
 
+const FILE_LIST_LIMIT = 10
+
+/** Liste de fichiers avec virtualisation : affiche max 10, extensible */
+function FileList({ files, pointMap, onPointChange, onFileRemove }: {
+  files: MeasurementFile[]
+  pointMap: Record<string, string>
+  onPointChange: (fileId: string, point: string) => void
+  onFileRemove: (fileId: string) => void
+}) {
+  const [expanded, setExpanded] = useState(false)
+  const visible = expanded ? files : files.slice(0, FILE_LIST_LIMIT)
+  const hasMore = files.length > FILE_LIST_LIMIT && !expanded
+
+  return (
+    <>
+      <ul className="space-y-2">
+        {visible.map((f) => (
+          <li key={f.id} className="rounded-md px-3 py-2 bg-gray-800 border border-gray-700">
+            <div className="flex items-start gap-1">
+              <p className="text-sm font-medium truncate flex-1" title={f.name}>{f.name}</p>
+              <button
+                onClick={() => onFileRemove(f.id)}
+                className="text-gray-600 hover:text-red-400 shrink-0 mt-0.5 transition-colors"
+                title={t('sidebar.remove')}
+              >
+                <X size={12} />
+              </button>
+            </div>
+            <p className="text-xs text-gray-400 mt-0.5">{f.model} · {f.serial}</p>
+            <p className="text-xs text-gray-500">{f.date} · {f.startTime}–{f.stopTime}</p>
+            <p className="text-xs text-gray-600">{f.rowCount} {t('chart.points')}</p>
+            <div className="mt-2">
+              <select
+                value={pointMap[f.id] ?? ''}
+                onChange={(e) => onPointChange(f.id, e.target.value)}
+                className="w-full text-xs bg-gray-700 text-gray-100 border border-gray-600
+                           rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+              >
+                <option value="">{t('sidebar.assignPoint')}</option>
+                {MEASUREMENT_POINTS.map((pt) => (
+                  <option key={pt} value={pt}>{pt}</option>
+                ))}
+              </select>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {hasMore && (
+        <button
+          onClick={() => setExpanded(true)}
+          className="w-full mt-2 text-xs text-emerald-400 hover:text-emerald-300 py-1 transition-colors"
+        >
+          Afficher les {files.length - FILE_LIST_LIMIT} fichiers restants
+        </button>
+      )}
+      {expanded && files.length > FILE_LIST_LIMIT && (
+        <button
+          onClick={() => setExpanded(false)}
+          className="w-full mt-1 text-xs text-gray-500 hover:text-gray-300 py-1 transition-colors"
+        >
+          Réduire la liste
+        </button>
+      )}
+    </>
+  )
+}
+
 // ---------------------------------------------------------------------------
 // Barre latérale rétractable
 // ---------------------------------------------------------------------------
@@ -105,7 +179,7 @@ interface SidebarProps {
   chartTimeMin: number | null
   loading: boolean
   loadProgress: number
-  onFilesAdded: (files: MeasurementFile[]) => void
+  rejectedFiles: RejectedFile[]
   onPointChange: (fileId: string, point: string) => void
   onFileRemove: (fileId: string) => void
   onEventAdd: (ev: SourceEvent) => void
@@ -113,6 +187,7 @@ interface SidebarProps {
   onClearError: (i: number) => void
   onSaveProject: () => void
   onLoadProject: (json: string) => void
+  onParseFiles: (files: File[]) => void
   onAudioLoaded: (audio: AudioFile) => void
   onAudioRemove: () => void
   onAudioSeek: (timeMin: number) => void
@@ -121,27 +196,20 @@ interface SidebarProps {
 function Sidebar({
   collapsed, onToggle,
   files, pointMap, events, availableDates, errors,
-  audioFile, chartTimeMin, loading, loadProgress,
-  onFilesAdded, onPointChange, onFileRemove,
+  audioFile, chartTimeMin, loading, loadProgress, rejectedFiles,
+  onPointChange, onFileRemove,
   onEventAdd, onEventRemove, onClearError,
-  onSaveProject, onLoadProject,
+  onSaveProject, onLoadProject, onParseFiles,
   onAudioLoaded, onAudioRemove, onAudioSeek,
 }: SidebarProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const projectInputRef = useRef<HTMLInputElement>(null)
   const audioInputRef = useRef<HTMLInputElement>(null)
 
-  async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
+  function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files ?? [])
     if (selected.length === 0) return
-    const parsed: MeasurementFile[] = []
-    for (const file of selected) {
-      try {
-        const buf = await readAsArrayBuffer(file)
-        parsed.push(parseFile(buf, file.name))
-      } catch (err) { console.error(err) }
-    }
-    if (parsed.length > 0) onFilesAdded(parsed)
+    onParseFiles(selected)
     e.target.value = ''
   }
 
@@ -308,38 +376,27 @@ function Sidebar({
               <p className="text-xs text-gray-600">{t('sidebar.filesEmpty')}</p>
             </div>
           ) : (
-            <ul className="space-y-2">
-              {files.map((f) => (
-                <li key={f.id} className="rounded-md px-3 py-2 bg-gray-800 border border-gray-700">
-                  <div className="flex items-start gap-1">
-                    <p className="text-sm font-medium truncate flex-1" title={f.name}>{f.name}</p>
-                    <button
-                      onClick={() => onFileRemove(f.id)}
-                      className="text-gray-600 hover:text-red-400 shrink-0 mt-0.5 transition-colors"
-                      title={t('sidebar.remove')}
-                    >
-                      <X size={12} />
-                    </button>
-                  </div>
-                  <p className="text-xs text-gray-400 mt-0.5">{f.model} · {f.serial}</p>
-                  <p className="text-xs text-gray-500">{f.date} · {f.startTime}–{f.stopTime}</p>
-                  <p className="text-xs text-gray-600">{f.rowCount} {t('chart.points')}</p>
-                  <div className="mt-2">
-                    <select
-                      value={pointMap[f.id] ?? ''}
-                      onChange={(e) => onPointChange(f.id, e.target.value)}
-                      className="w-full text-xs bg-gray-700 text-gray-100 border border-gray-600
-                                 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                    >
-                      <option value="">{t('sidebar.assignPoint')}</option>
-                      {MEASUREMENT_POINTS.map((pt) => (
-                        <option key={pt} value={pt}>{pt}</option>
-                      ))}
-                    </select>
-                  </div>
-                </li>
+            <FileList
+              files={files}
+              pointMap={pointMap}
+              onPointChange={onPointChange}
+              onFileRemove={onFileRemove}
+            />
+          )}
+
+          {/* Fichiers non supportés */}
+          {rejectedFiles.length > 0 && (
+            <div className="mt-3">
+              <p className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-1.5">
+                Fichiers non supportés
+              </p>
+              {rejectedFiles.map((rf, i) => (
+                <div key={i} className="rounded px-2 py-1.5 mb-1 bg-red-950/30 border border-red-900/50">
+                  <p className="text-xs text-red-300 truncate" title={rf.name}>{rf.name}</p>
+                  <p className="text-xs text-red-500">{rf.error}</p>
+                </div>
               ))}
-            </ul>
+            </div>
           )}
         </div>
 
@@ -407,6 +464,7 @@ interface MainPanelProps {
   onSwitchProject: (project: RecentProject) => void
   onOpenSettings: () => void
   onOpenShortcuts: () => void
+  onOpenOnboarding: () => void
 }
 
 function MainPanel({
@@ -415,7 +473,7 @@ function MainPanel({
   projectName, recentProjects, settings,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
-  onOpenSettings, onOpenShortcuts,
+  onOpenSettings, onOpenShortcuts, onOpenOnboarding,
 }: MainPanelProps) {
   const chartFiles = files.filter((f) => !!pointMap[f.id])
   const hasChart = chartFiles.length > 0
@@ -500,6 +558,13 @@ function MainPanel({
               {chartFiles.length} {t('chart.filesShown')}
             </span>
           )}
+          <button
+            onClick={onOpenOnboarding}
+            className="p-1.5 text-gray-600 hover:text-emerald-400 hover:bg-gray-800 rounded transition-colors"
+            title="Guide de démarrage"
+          >
+            <span className="text-xs font-bold">?</span>
+          </button>
           <button
             onClick={onOpenShortcuts}
             className="p-1.5 text-gray-600 hover:text-gray-300 hover:bg-gray-800 rounded transition-colors"
@@ -635,6 +700,10 @@ export default function App() {
   // Chargement
   const [loading, setLoading] = useState(false)
   const [loadProgress, setLoadProgress] = useState(0)
+  const [rejectedFiles, setRejectedFiles] = useState<RejectedFile[]>([])
+
+  // Onboarding
+  const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding)
 
   // Ref pour ouvrir un projet depuis les raccourcis
   const projectInputRef = useRef<HTMLInputElement>(null)
@@ -796,20 +865,66 @@ export default function App() {
   // ---- Audio ----
   const handleAudioSeek = useCallback((timeMin: number) => { setChartTimeMin(timeMin) }, [])
 
-  // ---- Import avec progression ----
-  const handleFilesAddedWithProgress = useCallback((newFiles: MeasurementFile[]) => {
+  // ---- Import avec Web Worker et progression ----
+  const handleParseFiles = useCallback(async (rawFiles: File[]) => {
     setLoading(true)
     setLoadProgress(0)
-    // Simuler la progression pour les fichiers déjà parsés
-    const total = newFiles.length
-    let loaded = 0
-    const batch: MeasurementFile[] = []
-    for (const f of newFiles) {
-      batch.push(f)
-      loaded++
-      setLoadProgress(Math.round((loaded / total) * 100))
+    setRejectedFiles([])
+
+    const total = rawFiles.length
+    let completed = 0
+    const parsed: MeasurementFile[] = []
+    const rejected: RejectedFile[] = []
+
+    for (const file of rawFiles) {
+      try {
+        const buf = await readAsArrayBuffer(file)
+
+        // Utiliser le Web Worker pour les gros fichiers (> 1 Mo)
+        if (buf.byteLength > 1_000_000) {
+          const result = await new Promise<MeasurementFile>((resolve, reject) => {
+            const worker = new Worker(
+              new URL('./workers/parserWorker.ts', import.meta.url),
+              { type: 'module' },
+            )
+            worker.onmessage = (e) => {
+              const msg = e.data
+              if (msg.type === 'progress') {
+                // Progression intra-fichier
+                const filePct = msg.percent / 100
+                const overallPct = ((completed + filePct) / total) * 100
+                setLoadProgress(Math.round(overallPct))
+              } else if (msg.type === 'result') {
+                worker.terminate()
+                resolve(msg.file)
+              } else if (msg.type === 'error') {
+                worker.terminate()
+                reject(new Error(msg.error))
+              }
+            }
+            worker.onerror = (err) => {
+              worker.terminate()
+              reject(new Error(err.message))
+            }
+            worker.postMessage({ buffer: buf, fileName: file.name }, [buf])
+          })
+          parsed.push(result)
+        } else {
+          // Petit fichier : parser sur le thread principal
+          parsed.push(parseFile(buf, file.name))
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err)
+        rejected.push({ name: file.name, error: msg })
+      }
+      completed++
+      setLoadProgress(Math.round((completed / total) * 100))
     }
-    handleFilesAdded(batch)
+
+    if (parsed.length > 0) handleFilesAdded(parsed)
+    if (rejected.length > 0) setRejectedFiles(rejected)
+    setLoading(false)
+    setLoadProgress(0)
   }, [handleFilesAdded])
 
   // ---- Raccourcis clavier ----
@@ -837,6 +952,7 @@ export default function App() {
       if (e.key === 'Escape') {
         setShowSettings(false)
         setShowShortcuts(false)
+        setShowOnboarding(false)
         return
       }
 
@@ -912,7 +1028,8 @@ export default function App() {
         chartTimeMin={chartTimeMin}
         loading={loading}
         loadProgress={loadProgress}
-        onFilesAdded={handleFilesAddedWithProgress}
+        rejectedFiles={rejectedFiles}
+        onParseFiles={handleParseFiles}
         onPointChange={handlePointChange}
         onFileRemove={handleFileRemove}
         onEventAdd={handleEventAdd}
@@ -946,6 +1063,7 @@ export default function App() {
         onSwitchProject={handleSwitchProject}
         onOpenSettings={() => setShowSettings(true)}
         onOpenShortcuts={() => setShowShortcuts(true)}
+        onOpenOnboarding={() => { resetOnboarding(); setShowOnboarding(true) }}
       />
 
       {/* Modales */}
@@ -958,6 +1076,12 @@ export default function App() {
       )}
       {showShortcuts && (
         <ShortcutsModal onClose={() => setShowShortcuts(false)} />
+      )}
+      {showOnboarding && (
+        <Onboarding
+          language={settings.language}
+          onClose={() => setShowOnboarding(false)}
+        />
       )}
     </div>
   )

@@ -4,6 +4,7 @@
  * Export CSV disponible
  */
 import { Download } from 'lucide-react'
+import HelpTooltip from './HelpTooltip'
 import type { SourceEvent, ConcordanceState } from '../types'
 
 // Définition des états et de leur rendu
@@ -72,9 +73,18 @@ export default function ConcordanceTable({ events, pointNames, concordance, onCe
       {/* Barre d'outils */}
       <div className="flex items-center gap-3 px-6 py-3 border-b border-gray-800 shrink-0">
         <div className="flex items-center gap-4 text-xs text-gray-500">
-          <LegendDot color="bg-emerald-600" label="Confirmé" />
-          <LegendDot color="bg-amber-600" label="Incertain" />
-          <LegendDot color="bg-gray-600" label="Non visible" />
+          <span className="inline-flex items-center gap-1">
+            <LegendDot color="bg-emerald-600" label="Confirmé" />
+            <HelpTooltip text="La source est clairement identifiable sur ce point de mesure au moment de l'événement." position="bottom" />
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <LegendDot color="bg-amber-600" label="Incertain" />
+            <HelpTooltip text="Un changement de niveau est visible mais ne peut pas être attribué avec certitude à cette source." position="bottom" />
+          </span>
+          <span className="inline-flex items-center gap-1">
+            <LegendDot color="bg-gray-600" label="Non visible" />
+            <HelpTooltip text="Aucune variation significative du niveau sonore n'est détectable pour cet événement." position="bottom" />
+          </span>
           <span className="text-gray-700">· Cliquer pour changer l'état</span>
         </div>
         <button

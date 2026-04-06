@@ -2,7 +2,7 @@
  * Composant racine d'AcoustiQ
  * Gestion du chargement de fichiers, des événements, de la concordance et des onglets
  */
-import { useState, useMemo, useRef } from 'react'
+import { useState, useMemo, useRef, useCallback } from 'react'
 import {
   FileAudio,
   BarChart2,
@@ -14,11 +14,22 @@ import {
   Layers,
   Calculator,
   FileText,
+  Save,
+  FolderOpen,
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
-import type { MeasurementFile, SourceEvent, ConcordanceState, ZoomRange } from './types'
+import type { MeasurementFile, SourceEvent, ConcordanceState, ZoomRange, AudioFile } from './types'
 import { parse831C } from './modules/parser831C'
 import { parse821SE, detect821SE } from './modules/parser821SE'
+import { saveProject, loadProject } from './modules/projectManager'
+import TimeSeriesChart from './components/TimeSeriesChart'
+import IndicesPanel from './components/IndicesPanel'
+import EventsPanel from './components/EventsPanel'
+import ConcordanceTable from './components/ConcordanceTable'
+import Spectrogram from './components/Spectrogram'
+import LwCalculator from './components/LwCalculator'
+import ReportGenerator from './components/ReportGenerator'
+import AudioPlayer from './components/AudioPlayer'
 
 /**
  * Parse un fichier XLSX en essayant les parsers dans l'ordre :
@@ -27,26 +38,23 @@ import { parse821SE, detect821SE } from './modules/parser821SE'
 function parseFile(buffer: ArrayBuffer, fileName: string): MeasurementFile {
   const workbook = XLSX.read(buffer, { type: 'array', cellDates: false })
 
-  // Détection automatique du modèle
   if (detect821SE(workbook)) {
     return parse821SE(buffer, fileName)
   }
 
-  // Essayer le parser 831C en priorité
   try {
     return parse831C(buffer, fileName)
   } catch {
-    // Fallback vers le parser 821SE (détection heuristique des colonnes)
     return parse821SE(buffer, fileName)
   }
 }
-import TimeSeriesChart from './components/TimeSeriesChart'
-import IndicesPanel from './components/IndicesPanel'
-import EventsPanel from './components/EventsPanel'
-import ConcordanceTable from './components/ConcordanceTable'
-import Spectrogram from './components/Spectrogram'
-import LwCalculator from './components/LwCalculator'
-import ReportGenerator from './components/ReportGenerator'
+
+/** Tente d'extraire une date YYYY-MM-DD depuis un nom de fichier */
+function extractDateFromName(name: string): string | null {
+  const match = name.match(/(\d{4}[-_]\d{2}[-_]\d{2})/)
+  if (match) return match[1].replace(/_/g, '-')
+  return null
+}
 
 // Points de mesure disponibles
 const MEASUREMENT_POINTS = ['BV-94', 'BV-98', 'BV-105', 'BV-106', 'BV-37', 'BV-107']
@@ -72,12 +80,19 @@ interface SidebarProps {
   events: SourceEvent[]
   availableDates: string[]
   errors: string[]
+  audioFile: AudioFile | null
+  chartTimeMin: number | null
   onFilesAdded: (files: MeasurementFile[]) => void
   onPointChange: (fileId: string, point: string) => void
   onFileRemove: (fileId: string) => void
   onEventAdd: (ev: SourceEvent) => void
   onEventRemove: (id: string) => void
   onClearError: (i: number) => void
+  onSaveProject: () => void
+  onLoadProject: (json: string) => void
+  onAudioLoaded: (audio: AudioFile) => void
+  onAudioRemove: () => void
+  onAudioSeek: (timeMin: number) => void
 }
 
 function Sidebar({
@@ -86,14 +101,23 @@ function Sidebar({
   events,
   availableDates,
   errors,
+  audioFile,
+  chartTimeMin,
   onFilesAdded,
   onPointChange,
   onFileRemove,
   onEventAdd,
   onEventRemove,
   onClearError,
+  onSaveProject,
+  onLoadProject,
+  onAudioLoaded,
+  onAudioRemove,
+  onAudioSeek,
 }: SidebarProps) {
   const inputRef = useRef<HTMLInputElement>(null)
+  const projectInputRef = useRef<HTMLInputElement>(null)
+  const audioInputRef = useRef<HTMLInputElement>(null)
   const [loading, setLoading] = useState(false)
 
   async function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -106,12 +130,44 @@ function Sidebar({
         const buf = await readAsArrayBuffer(file)
         parsed.push(parseFile(buf, file.name))
       } catch (err) {
-        // Les erreurs remontent via le state parent
         console.error(err)
       }
     }
     if (parsed.length > 0) onFilesAdded(parsed)
     setLoading(false)
+    e.target.value = ''
+  }
+
+  // Chargement de projet JSON
+  async function handleProjectLoad(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const text = await file.text()
+    onLoadProject(text)
+    e.target.value = ''
+  }
+
+  // Chargement de fichier audio WAV
+  async function handleAudioLoad(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    if (!file) return
+    const buf = await readAsArrayBuffer(file)
+    const ctx = new AudioContext()
+    const decoded = await ctx.decodeAudioData(buf)
+    await ctx.close()
+
+    // Tenter d'extraire la date du nom de fichier
+    const date = extractDateFromName(file.name) ?? ''
+
+    const audio: AudioFile = {
+      id: crypto.randomUUID(),
+      name: file.name,
+      date,
+      buffer: decoded,
+      duration: decoded.duration,
+      startOffsetMin: 0,
+    }
+    onAudioLoaded(audio)
     e.target.value = ''
   }
 
@@ -147,9 +203,41 @@ function Sidebar({
           {loading ? 'Chargement…' : 'Importer des fichiers'}
         </button>
         <p className="text-xs text-gray-500 text-center mt-1">XLSX 831C / 821SE</p>
+
+        {/* Boutons projet */}
+        <div className="flex gap-1.5 mt-2">
+          <input
+            ref={projectInputRef}
+            type="file"
+            accept=".json"
+            className="hidden"
+            onChange={handleProjectLoad}
+          />
+          <button
+            onClick={onSaveProject}
+            disabled={files.length === 0}
+            className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
+                       bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-30
+                       text-xs font-medium border border-gray-600 transition-colors"
+            title="Sauvegarder le projet"
+          >
+            <Save size={11} />
+            Sauvegarder
+          </button>
+          <button
+            onClick={() => projectInputRef.current?.click()}
+            className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
+                       bg-gray-800 text-gray-300 hover:bg-gray-700
+                       text-xs font-medium border border-gray-600 transition-colors"
+            title="Ouvrir un projet"
+          >
+            <FolderOpen size={11} />
+            Ouvrir
+          </button>
+        </div>
       </div>
 
-      {/* Zone scrollable : erreurs + fichiers + événements */}
+      {/* Zone scrollable : erreurs + fichiers + audio + événements */}
       <div className="flex-1 overflow-y-auto flex flex-col">
         {/* Erreurs */}
         {errors.length > 0 && (
@@ -219,6 +307,35 @@ function Sidebar({
             </ul>
           )}
         </div>
+
+        {/* Audio WAV */}
+        {audioFile ? (
+          <AudioPlayer
+            audio={audioFile}
+            chartTimeMin={chartTimeMin}
+            onSeek={onAudioSeek}
+            onRemove={onAudioRemove}
+          />
+        ) : (
+          <div className="px-3 py-3 border-b border-gray-700">
+            <input
+              ref={audioInputRef}
+              type="file"
+              accept=".wav"
+              className="hidden"
+              onChange={handleAudioLoad}
+            />
+            <button
+              onClick={() => audioInputRef.current?.click()}
+              className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded
+                         bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200
+                         text-xs border border-dashed border-gray-600 transition-colors"
+            >
+              <FileAudio size={12} />
+              Charger un fichier .wav
+            </button>
+          </div>
+        )}
 
         {/* Panneau événements */}
         <EventsPanel
@@ -448,6 +565,8 @@ export default function App() {
   const [selectedDate, setSelectedDate] = useState<string>('')
   const [activeTab, setActiveTab] = useState<Tab>('chart')
   const [zoomRange, setZoomRange] = useState<ZoomRange | null>(null)
+  const [audioFile, setAudioFile] = useState<AudioFile | null>(null)
+  const [chartTimeMin, setChartTimeMin] = useState<number | null>(null)
 
   // Dates disponibles (fichiers avec point assigné)
   const availableDates = useMemo(() => {
@@ -511,6 +630,44 @@ export default function App() {
     setConcordance((prev) => ({ ...prev, [`${eventId}|${point}`]: state }))
   }
 
+  // ---- Handlers projet ----
+  const handleSaveProject = useCallback(() => {
+    saveProject(files, pointMap, events, concordance)
+  }, [files, pointMap, events, concordance])
+
+  const handleLoadProject = useCallback((json: string) => {
+    try {
+      const { project, missingFiles } = loadProject(json, files)
+
+      // Restaurer les assignations de points (en mappant par nom+date vers les IDs actuels)
+      const fileIdByKey = new Map(files.map((f) => [`${f.name}|${f.date}`, f.id]))
+      const newPointMap: Record<string, string> = {}
+      for (const pf of project.files) {
+        const currentId = fileIdByKey.get(`${pf.name}|${pf.date}`)
+        if (currentId && project.pointAssignments[pf.id]) {
+          newPointMap[currentId] = project.pointAssignments[pf.id]
+        }
+      }
+      setPointMap(newPointMap)
+      setEvents(project.events)
+      setConcordance(project.concordance)
+
+      if (missingFiles.length > 0) {
+        setErrors((prev) => [
+          ...prev,
+          `Projet chargé — fichiers manquants : ${missingFiles.join(', ')}`,
+        ])
+      }
+    } catch (err) {
+      setErrors((prev) => [...prev, `Erreur de chargement du projet : ${String(err)}`])
+    }
+  }, [files])
+
+  // ---- Handlers audio ----
+  const handleAudioSeek = useCallback((timeMin: number) => {
+    setChartTimeMin(timeMin)
+  }, [])
+
   return (
     <div className="flex min-h-screen font-sans">
       <Sidebar
@@ -519,12 +676,19 @@ export default function App() {
         events={events}
         availableDates={availableDates}
         errors={errors}
+        audioFile={audioFile}
+        chartTimeMin={chartTimeMin}
         onFilesAdded={handleFilesAdded}
         onPointChange={handlePointChange}
         onFileRemove={handleFileRemove}
         onEventAdd={handleEventAdd}
         onEventRemove={handleEventRemove}
         onClearError={handleClearError}
+        onSaveProject={handleSaveProject}
+        onLoadProject={handleLoadProject}
+        onAudioLoaded={setAudioFile}
+        onAudioRemove={() => setAudioFile(null)}
+        onAudioSeek={handleAudioSeek}
       />
       <MainPanel
         files={files}

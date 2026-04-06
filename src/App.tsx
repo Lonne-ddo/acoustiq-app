@@ -13,9 +13,10 @@ import {
   TableProperties,
   Layers,
   Calculator,
+  FileText,
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
-import type { MeasurementFile, SourceEvent, ConcordanceState } from './types'
+import type { MeasurementFile, SourceEvent, ConcordanceState, ZoomRange } from './types'
 import { parse831C } from './modules/parser831C'
 import { parse821SE, detect821SE } from './modules/parser821SE'
 
@@ -45,6 +46,7 @@ import EventsPanel from './components/EventsPanel'
 import ConcordanceTable from './components/ConcordanceTable'
 import Spectrogram from './components/Spectrogram'
 import LwCalculator from './components/LwCalculator'
+import ReportGenerator from './components/ReportGenerator'
 
 // Points de mesure disponibles
 const MEASUREMENT_POINTS = ['BV-94', 'BV-98', 'BV-105', 'BV-106', 'BV-37', 'BV-107']
@@ -59,7 +61,7 @@ function readAsArrayBuffer(file: File): Promise<ArrayBuffer> {
   })
 }
 
-type Tab = 'chart' | 'spectrogram' | 'lw' | 'concordance'
+type Tab = 'chart' | 'spectrogram' | 'lw' | 'concordance' | 'report'
 
 // ---------------------------------------------------------------------------
 // Barre latérale
@@ -247,9 +249,11 @@ interface MainPanelProps {
   availableDates: string[]
   activeTab: Tab
   assignedPoints: string[]
+  zoomRange: ZoomRange | null
   onDateChange: (date: string) => void
   onTabChange: (tab: Tab) => void
   onCellChange: (eventId: string, point: string, state: ConcordanceState) => void
+  onZoomChange: (range: ZoomRange | null) => void
 }
 
 function MainPanel({
@@ -261,9 +265,11 @@ function MainPanel({
   availableDates,
   activeTab,
   assignedPoints,
+  zoomRange,
   onDateChange,
   onTabChange,
   onCellChange,
+  onZoomChange,
 }: MainPanelProps) {
   const chartFiles = files.filter((f) => !!pointMap[f.id])
   const hasChart = chartFiles.length > 0
@@ -303,6 +309,12 @@ function MainPanel({
             icon={<TableProperties size={13} />}
             label="Concordance"
           />
+          <TabButton
+            active={activeTab === 'report'}
+            onClick={() => onTabChange('report')}
+            icon={<FileText size={13} />}
+            label="Rapport"
+          />
         </nav>
 
         {hasChart && activeTab === 'chart' && (
@@ -326,6 +338,8 @@ function MainPanel({
                   availableDates={availableDates}
                   onDateChange={onDateChange}
                   events={events}
+                  zoomRange={zoomRange}
+                  onZoomChange={onZoomChange}
                 />
               </div>
               {/* Indices — hauteur fixe en bas */}
@@ -358,6 +372,7 @@ function MainPanel({
             availableDates={availableDates}
             onDateChange={onDateChange}
             events={events}
+            zoomRange={zoomRange}
           />
         </div>
       )}
@@ -375,6 +390,19 @@ function MainPanel({
             pointNames={assignedPoints}
             concordance={concordance}
             onCellChange={onCellChange}
+          />
+        </div>
+      )}
+
+      {activeTab === 'report' && (
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <ReportGenerator
+            files={files}
+            pointMap={pointMap}
+            events={events}
+            concordance={concordance}
+            selectedDate={selectedDate}
+            assignedPoints={assignedPoints}
           />
         </div>
       )}
@@ -419,6 +447,7 @@ export default function App() {
   const [concordance, setConcordance] = useState<Record<string, ConcordanceState>>({})
   const [selectedDate, setSelectedDate] = useState<string>('')
   const [activeTab, setActiveTab] = useState<Tab>('chart')
+  const [zoomRange, setZoomRange] = useState<ZoomRange | null>(null)
 
   // Dates disponibles (fichiers avec point assigné)
   const availableDates = useMemo(() => {
@@ -506,9 +535,11 @@ export default function App() {
         availableDates={availableDates}
         activeTab={activeTab}
         assignedPoints={assignedPoints}
+        zoomRange={zoomRange}
         onDateChange={setSelectedDate}
         onTabChange={setActiveTab}
         onCellChange={handleCellChange}
+        onZoomChange={setZoomRange}
       />
     </div>
   )

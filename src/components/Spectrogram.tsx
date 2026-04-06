@@ -4,7 +4,7 @@
  * Un canvas par point de mesure, curseur synchronisé entre eux
  */
 import { useRef, useEffect, useMemo, useState } from 'react'
-import type { MeasurementFile, SourceEvent, DataPoint } from '../types'
+import type { MeasurementFile, SourceEvent, DataPoint, ZoomRange } from '../types'
 
 const CANVAS_HEIGHT = 160  // hauteur affichée en px par spectrogramme
 const Y_AXIS_W = 48        // largeur réservée aux étiquettes de fréquence
@@ -370,10 +370,13 @@ interface Props {
   availableDates: string[]
   onDateChange: (date: string) => void
   events: SourceEvent[]
+  /** Plage de zoom synchronisée avec le graphique temporel */
+  zoomRange?: ZoomRange | null
 }
 
 export default function Spectrogram({
   files, pointMap, selectedDate, availableDates, onDateChange, events,
+  zoomRange,
 }: Props) {
   const [minDb, setMinDb] = useState(30)
   const [maxDb, setMaxDb] = useState(90)
@@ -410,8 +413,15 @@ export default function Spectrogram({
         mn = Math.min(mn, t); mx = Math.max(mx, t); nb = Math.max(nb, sp.length)
       }
     }
-    return { tMin: mn === Infinity ? 0 : mn, tMax: mx === -Infinity ? 1439 : mx, nBands: nb }
-  }, [spectraByPoint])
+    // Appliquer le zoom si fourni
+    const baseMn = mn === Infinity ? 0 : mn
+    const baseMx = mx === -Infinity ? 1439 : mx
+    return {
+      tMin: zoomRange ? Math.max(baseMn, zoomRange.startMin) : baseMn,
+      tMax: zoomRange ? Math.min(baseMx, zoomRange.endMin) : baseMx,
+      nBands: nb,
+    }
+  }, [spectraByPoint, zoomRange])
 
   // Sous-ensemble des fréquences correspondant au nombre de bandes dans les données
   // Les bandes hautes sont toujours présentes → on prend les N dernières

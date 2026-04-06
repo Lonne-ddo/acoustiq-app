@@ -28,3 +28,9 @@ export interface SourceEvent {
 }
 
 export type ConcordanceState = 'Confirmé' | 'Incertain' | 'Non visible'
+
+/** Plage de zoom partagée entre le graphique et le spectrogramme */
+export interface ZoomRange {
+  startMin: number
+  endMin: number
+}

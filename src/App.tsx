@@ -49,6 +49,13 @@ import AudioPlayer from './components/AudioPlayer'
 import Settings from './components/Settings'
 import ShortcutsModal from './components/ShortcutsModal'
 import Onboarding, { shouldShowOnboarding, resetOnboarding } from './components/Onboarding'
+import { ToastProvider } from './components/Toast'
+
+// Couleurs par point pour la bordure des cartes
+const POINT_COLORS: Record<string, string> = {
+  'BV-94': '#10b981', 'BV-98': '#3b82f6', 'BV-105': '#f59e0b',
+  'BV-106': '#ef4444', 'BV-37': '#8b5cf6', 'BV-107': '#06b6d4',
+}
 
 /** Fichier rejeté lors du parsing */
 interface RejectedFile {
@@ -117,7 +124,7 @@ type Tab = 'chart' | 'spectrogram' | 'lw' | 'concordance' | 'report'
 
 const FILE_LIST_LIMIT = 10
 
-/** Liste de fichiers avec virtualisation : affiche max 10, extensible */
+/** Liste de fichiers groupée par date, avec bordure couleur du point */
 function FileList({ files, pointMap, onPointChange, onFileRemove }: {
   files: MeasurementFile[]
   pointMap: Record<string, string>
@@ -125,52 +132,96 @@ function FileList({ files, pointMap, onPointChange, onFileRemove }: {
   onFileRemove: (fileId: string) => void
 }) {
   const [expanded, setExpanded] = useState(false)
-  const visible = expanded ? files : files.slice(0, FILE_LIST_LIMIT)
-  const hasMore = files.length > FILE_LIST_LIMIT && !expanded
+
+  // Grouper par date
+  const grouped = useMemo(() => {
+    const map = new Map<string, MeasurementFile[]>()
+    for (const f of files) {
+      const date = f.date || 'Sans date'
+      if (!map.has(date)) map.set(date, [])
+      map.get(date)!.push(f)
+    }
+    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b))
+  }, [files])
+
+  // Limiter si pas étendu
+  const allFiles = grouped.flatMap(([, fs]) => fs)
+  const visibleCount = expanded ? allFiles.length : FILE_LIST_LIMIT
+  const hasMore = allFiles.length > FILE_LIST_LIMIT && !expanded
+  let rendered = 0
 
   return (
     <>
-      <ul className="space-y-2">
-        {visible.map((f) => (
-          <li key={f.id} className="rounded-md px-3 py-2 bg-gray-800 border border-gray-700">
-            <div className="flex items-start gap-1">
-              <p className="text-sm font-medium truncate flex-1" title={f.name}>{f.name}</p>
-              <button
-                onClick={() => onFileRemove(f.id)}
-                className="text-gray-600 hover:text-red-400 shrink-0 mt-0.5 transition-colors"
-                title={t('sidebar.remove')}
-              >
-                <X size={12} />
-              </button>
-            </div>
-            <p className="text-xs text-gray-400 mt-0.5">{f.model} · {f.serial}</p>
-            <p className="text-xs text-gray-500">{f.date} · {f.startTime}–{f.stopTime}</p>
-            <p className="text-xs text-gray-600">{f.rowCount} {t('chart.points')}</p>
-            <div className="mt-2">
-              <select
-                value={pointMap[f.id] ?? ''}
-                onChange={(e) => onPointChange(f.id, e.target.value)}
-                className="w-full text-xs bg-gray-700 text-gray-100 border border-gray-600
-                           rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-              >
-                <option value="">{t('sidebar.assignPoint')}</option>
-                {MEASUREMENT_POINTS.map((pt) => (
-                  <option key={pt} value={pt}>{pt}</option>
-                ))}
-              </select>
-            </div>
-          </li>
-        ))}
-      </ul>
+      {grouped.map(([date, dateFiles]) => {
+        const remaining = visibleCount - rendered
+        if (remaining <= 0) return null
+        const visible = dateFiles.slice(0, remaining)
+        rendered += visible.length
+
+        return (
+          <div key={date}>
+            {grouped.length > 1 && (
+              <p className="text-xs text-gray-600 font-medium mt-2 mb-1">{date}</p>
+            )}
+            <ul className="space-y-2">
+              {visible.map((f) => {
+                const pt = pointMap[f.id]
+                const borderColor = pt ? POINT_COLORS[pt] ?? '#374151' : '#374151'
+                return (
+                  <li
+                    key={f.id}
+                    className="rounded-md px-3 py-2 bg-gray-800 border border-gray-700"
+                    style={{ borderLeftWidth: 3, borderLeftColor: borderColor }}
+                  >
+                    <div className="flex items-start gap-1">
+                      <p className="text-sm font-medium truncate flex-1" title={f.name}>{f.name}</p>
+                      <button
+                        onClick={() => onFileRemove(f.id)}
+                        className="text-gray-600 hover:text-red-400 shrink-0 mt-0.5 transition-colors"
+                        title={t('sidebar.remove')}
+                        aria-label={`Retirer ${f.name}`}
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                    <p className="text-xs text-gray-400 mt-0.5">
+                      <span className="mr-1">&#127908;</span>
+                      {f.model} · {f.serial}
+                    </p>
+                    <p className="text-xs text-gray-500">
+                      {f.startTime} → {f.stopTime}
+                    </p>
+                    <p className="text-xs text-gray-600">{f.rowCount} {t('chart.points')}</p>
+                    <div className="mt-2">
+                      <select
+                        value={pointMap[f.id] ?? ''}
+                        onChange={(e) => onPointChange(f.id, e.target.value)}
+                        aria-label={`Point de mesure pour ${f.name}`}
+                        className="w-full text-xs bg-gray-700 text-gray-100 border border-gray-600
+                                   rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      >
+                        <option value="">{t('sidebar.assignPoint')}</option>
+                        {MEASUREMENT_POINTS.map((pt) => (
+                          <option key={pt} value={pt}>{pt}</option>
+                        ))}
+                      </select>
+                    </div>
+                  </li>
+                )
+              })}
+            </ul>
+          </div>
+        )
+      })}
       {hasMore && (
         <button
           onClick={() => setExpanded(true)}
           className="w-full mt-2 text-xs text-emerald-400 hover:text-emerald-300 py-1 transition-colors"
         >
-          Afficher les {files.length - FILE_LIST_LIMIT} fichiers restants
+          Afficher les {allFiles.length - FILE_LIST_LIMIT} fichiers restants
         </button>
       )}
-      {expanded && files.length > FILE_LIST_LIMIT && (
+      {expanded && allFiles.length > FILE_LIST_LIMIT && (
         <button
           onClick={() => setExpanded(false)}
           className="w-full mt-1 text-xs text-gray-500 hover:text-gray-300 py-1 transition-colors"
@@ -223,12 +274,54 @@ function Sidebar({
   const inputRef = useRef<HTMLInputElement>(null)
   const projectInputRef = useRef<HTMLInputElement>(null)
   const audioInputRef = useRef<HTMLInputElement>(null)
+  const [dragOver, setDragOver] = useState(false)
 
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files ?? [])
     if (selected.length === 0) return
     onParseFiles(selected)
     e.target.value = ''
+  }
+
+  // Drag & drop sur toute la sidebar
+  function handleDragOver(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOver(true)
+  }
+  function handleDragLeave(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOver(false)
+  }
+  function handleDrop(e: React.DragEvent) {
+    e.preventDefault()
+    e.stopPropagation()
+    setDragOver(false)
+    const droppedFiles = Array.from(e.dataTransfer.files)
+    const xlsx = droppedFiles.filter((f) => f.name.endsWith('.xlsx'))
+    const wav = droppedFiles.filter((f) => f.name.endsWith('.wav'))
+    const json = droppedFiles.filter((f) => f.name.endsWith('.json'))
+    if (xlsx.length > 0) onParseFiles(xlsx)
+    if (wav.length > 0 && wav[0]) {
+      // Charger le premier .wav
+      readAsArrayBuffer(wav[0]).then(async (buf) => {
+        const ctx = new AudioContext()
+        const decoded = await ctx.decodeAudioData(buf)
+        await ctx.close()
+        onAudioLoaded({
+          id: crypto.randomUUID(),
+          name: wav[0].name,
+          date: extractDateFromName(wav[0].name) ?? '',
+          buffer: decoded,
+          duration: decoded.duration,
+          startOffsetMin: 0,
+        })
+      })
+    }
+    if (json.length > 0 && json[0]) {
+      json[0].text().then(onLoadProject)
+    }
   }
 
   async function handleProjectLoad(e: React.ChangeEvent<HTMLInputElement>) {
@@ -259,7 +352,15 @@ function Sidebar({
   // Mode rétracté : icônes seules
   if (collapsed) {
     return (
-      <aside className="w-12 min-h-screen bg-gray-900 text-gray-100 flex flex-col border-r border-gray-700 shrink-0 items-center">
+      <aside
+        className={`w-12 min-h-screen bg-gray-900 text-gray-100 flex flex-col border-r shrink-0 items-center transition-colors ${
+          dragOver ? 'border-emerald-500 bg-emerald-950/20' : 'border-gray-700'
+        }`}
+        onDragOver={handleDragOver}
+        onDragEnter={handleDragOver}
+        onDragLeave={handleDragLeave}
+        onDrop={handleDrop}
+      >
         <div className="py-4">
           <Activity className="text-emerald-400" size={20} />
         </div>
@@ -299,7 +400,15 @@ function Sidebar({
   }
 
   return (
-    <aside className="w-64 min-h-screen bg-gray-900 text-gray-100 flex flex-col border-r border-gray-700 shrink-0">
+    <aside
+      className={`w-64 min-h-screen bg-gray-900 text-gray-100 flex flex-col border-r shrink-0 transition-colors ${
+        dragOver ? 'border-emerald-500 bg-emerald-950/10' : 'border-gray-700'
+      }`}
+      onDragOver={handleDragOver}
+      onDragEnter={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
       {/* En-tête */}
       <div className="px-4 py-5 border-b border-gray-700 shrink-0">
         <div className="flex items-center gap-2">
@@ -565,7 +674,7 @@ function MainPanel({
             ['concordance', <TableProperties size={13} key="t" />, t('tab.concordance')],
             ['report', <FileText size={13} key="r" />, t('tab.report')],
           ] as [Tab, React.ReactNode, string][]).map(([id, icon, label]) => (
-            <TabButton key={id} active={activeTab === id} onClick={() => onTabChange(id)} icon={icon} label={label} />
+            <TabButton key={id} active={activeTab === id} onClick={() => onTabChange(id)} icon={icon} label={label} aria-label={label} />
           ))}
         </nav>
 
@@ -602,7 +711,7 @@ function MainPanel({
 
       {/* Contenu selon l'onglet */}
       {activeTab === 'chart' && (
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+        <div className="flex-1 flex flex-col min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           {hasChart ? (
             <>
               <div className="flex-1 min-h-0">
@@ -635,7 +744,7 @@ function MainPanel({
       )}
 
       {activeTab === 'spectrogram' && (
-        <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           <Spectrogram
             files={chartFiles} pointMap={pointMap} selectedDate={selectedDate}
             availableDates={availableDates} onDateChange={onDateChange}
@@ -645,17 +754,17 @@ function MainPanel({
       )}
 
       {activeTab === 'lw' && (
-        <div className="flex-1 min-h-0 overflow-hidden"><LwCalculator /></div>
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]"><LwCalculator /></div>
       )}
 
       {activeTab === 'concordance' && (
-        <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           <ConcordanceTable events={events} pointNames={assignedPoints} concordance={concordance} onCellChange={onCellChange} />
         </div>
       )}
 
       {activeTab === 'report' && (
-        <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           <ReportGenerator
             files={files} pointMap={pointMap} events={events}
             concordance={concordance} selectedDate={selectedDate}
@@ -667,12 +776,15 @@ function MainPanel({
   )
 }
 
-function TabButton({ active, onClick, icon, label }: {
+function TabButton({ active, onClick, icon, label, ...rest }: {
   active: boolean; onClick: () => void; icon: React.ReactNode; label: string
+  'aria-label'?: string
 }) {
   return (
     <button
       onClick={onClick}
+      aria-label={rest['aria-label'] ?? label}
+      aria-current={active ? 'page' : undefined}
       className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition-colors ${
         active
           ? 'bg-gray-800 text-gray-100 border border-gray-600'
@@ -723,6 +835,9 @@ export default function App() {
   // Onboarding
   const [showOnboarding, setShowOnboarding] = useState(shouldShowOnboarding)
 
+  // Dernier point assigné (pour auto-suggestion)
+  const lastUsedPointRef = useRef('')
+
   // Ref pour ouvrir un projet depuis les raccourcis
   const projectInputRef = useRef<HTMLInputElement>(null)
 
@@ -758,12 +873,26 @@ export default function App() {
       const existing = new Set(prev.map((f) => `${f.name}|${f.date}`))
       return [...prev, ...newFiles.filter((f) => !existing.has(`${f.name}|${f.date}`))]
     })
+    // Auto-assigner le dernier point utilisé si un seul point existe
+    setPointMap((prevMap) => {
+      const pts = new Set(Object.values(prevMap).filter(Boolean))
+      if (pts.size === 1) {
+        const singlePoint = [...pts][0]
+        const updated = { ...prevMap }
+        for (const f of newFiles) {
+          if (!updated[f.id]) updated[f.id] = singlePoint
+        }
+        return updated
+      }
+      return prevMap
+    })
     setLoading(false)
     setLoadProgress(0)
   }, [])
 
   function handlePointChange(fileId: string, point: string) {
     setPointMap((prev) => ({ ...prev, [fileId]: point }))
+    if (point) lastUsedPointRef.current = point
   }
 
   function handleFileRemove(fileId: string) {
@@ -1024,6 +1153,7 @@ export default function App() {
   }
 
   return (
+    <ToastProvider>
     <div className="flex min-h-screen font-sans">
       {/* Input caché pour Ctrl+O */}
       <input
@@ -1102,5 +1232,6 @@ export default function App() {
         />
       )}
     </div>
+    </ToastProvider>
   )
 }

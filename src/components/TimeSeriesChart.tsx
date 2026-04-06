@@ -106,6 +106,7 @@ export default function TimeSeriesChart({
   const chartAreaRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState(false)
   const [exporting, setExporting] = useState(false)
+  const [hiddenLines, setHiddenLines] = useState<Set<string>>(new Set())
   const dragStartX = useRef(0)
   const dragStartRange = useRef<ZoomRange | null>(null)
 
@@ -508,9 +509,24 @@ export default function TimeSeriesChart({
               />
 
               <Legend
-                wrapperStyle={{ fontSize: 12, paddingTop: 4 }}
+                wrapperStyle={{ fontSize: 12, paddingTop: 4, cursor: 'pointer' }}
+                onClick={(e) => {
+                  const name = typeof e === 'object' && e && 'value' in e ? String(e.value) : ''
+                  if (!name) return
+                  setHiddenLines((prev) => {
+                    const next = new Set(prev)
+                    if (next.has(name)) next.delete(name)
+                    else next.add(name)
+                    return next
+                  })
+                }}
                 formatter={(value) => (
-                  <span style={{ color: '#d1d5db' }}>{value}</span>
+                  <span style={{
+                    color: hiddenLines.has(String(value)) ? '#4b5563' : '#d1d5db',
+                    textDecoration: hiddenLines.has(String(value)) ? 'line-through' : 'none',
+                  }}>
+                    {value}
+                  </span>
                 )}
               />
 
@@ -526,6 +542,7 @@ export default function TimeSeriesChart({
                   dot={false}
                   activeDot={{ r: 4 }}
                   connectNulls={false}
+                  hide={hiddenLines.has(pt)}
                 />
               ))}
 

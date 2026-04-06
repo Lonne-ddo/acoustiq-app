@@ -11,6 +11,8 @@ import {
   AlertCircle,
   X,
   TableProperties,
+  Layers,
+  Calculator,
 } from 'lucide-react'
 import type { MeasurementFile, SourceEvent, ConcordanceState } from './types'
 import { parse831C } from './modules/parser831C'
@@ -18,6 +20,8 @@ import TimeSeriesChart from './components/TimeSeriesChart'
 import IndicesPanel from './components/IndicesPanel'
 import EventsPanel from './components/EventsPanel'
 import ConcordanceTable from './components/ConcordanceTable'
+import Spectrogram from './components/Spectrogram'
+import LwCalculator from './components/LwCalculator'
 
 // Points de mesure disponibles
 const MEASUREMENT_POINTS = ['BV-94', 'BV-98', 'BV-105', 'BV-106', 'BV-37', 'BV-107']
@@ -32,7 +36,7 @@ function readAsArrayBuffer(file: File): Promise<ArrayBuffer> {
   })
 }
 
-type Tab = 'chart' | 'concordance'
+type Tab = 'chart' | 'spectrogram' | 'lw' | 'concordance'
 
 // ---------------------------------------------------------------------------
 // Barre latérale
@@ -259,6 +263,18 @@ function MainPanel({
             label="Visualisation"
           />
           <TabButton
+            active={activeTab === 'spectrogram'}
+            onClick={() => onTabChange('spectrogram')}
+            icon={<Layers size={13} />}
+            label="Spectrogramme"
+          />
+          <TabButton
+            active={activeTab === 'lw'}
+            onClick={() => onTabChange('lw')}
+            icon={<Calculator size={13} />}
+            label="Calcul Lw"
+          />
+          <TabButton
             active={activeTab === 'concordance'}
             onClick={() => onTabChange('concordance')}
             icon={<TableProperties size={13} />}
@@ -307,6 +323,25 @@ function MainPanel({
               )}
             </div>
           )}
+        </div>
+      )}
+
+      {activeTab === 'spectrogram' && (
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <Spectrogram
+            files={chartFiles}
+            pointMap={pointMap}
+            selectedDate={selectedDate}
+            availableDates={availableDates}
+            onDateChange={onDateChange}
+            events={events}
+          />
+        </div>
+      )}
+
+      {activeTab === 'lw' && (
+        <div className="flex-1 min-h-0 overflow-hidden">
+          <LwCalculator />
         </div>
       )}
 

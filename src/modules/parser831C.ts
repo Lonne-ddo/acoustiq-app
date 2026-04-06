@@ -102,9 +102,9 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
     const laeq = typeof laeqVal === 'number' ? laeqVal : parseFloat(String(laeqVal))
     if (isNaN(laeq)) continue
 
-    // Colonnes index 41+ : spectres 1/3 octave LZeq
+    // Colonnes index 41–67 : spectres 1/3 octave LZeq (6.3 Hz – 20 kHz)
     const spectra: number[] = []
-    for (let c = 41; c < row.length; c++) {
+    for (let c = 41; c <= 67 && c < row.length; c++) {
       const v = row[c]
       const num = typeof v === 'number' ? v : parseFloat(String(v))
       if (!isNaN(num)) spectra.push(num)

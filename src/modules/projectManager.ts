@@ -7,9 +7,10 @@ import type {
   SourceEvent,
   ConcordanceState,
   ProjectData,
+  MarkerPos,
 } from '../types'
 
-const PROJECT_VERSION = '1.0'
+const PROJECT_VERSION = '1.1'
 
 /**
  * Sauvegarde le projet courant en fichier JSON
@@ -19,6 +20,8 @@ export function saveProject(
   pointMap: Record<string, string>,
   events: SourceEvent[],
   concordance: Record<string, ConcordanceState>,
+  mapImage: string | null = null,
+  mapMarkers: Record<string, MarkerPos> = {},
 ): void {
   const project: ProjectData = {
     version: PROJECT_VERSION,
@@ -36,6 +39,8 @@ export function saveProject(
     pointAssignments: { ...pointMap },
     events: events.map((ev) => ({ ...ev })),
     concordance: { ...concordance },
+    mapImage,
+    mapMarkers: { ...mapMarkers },
   }
 
   const json = JSON.stringify(project, null, 2)

@@ -6,9 +6,11 @@ Deployed at: acoustiq-app.pages.dev
 Reference framework: Lignes directrices MELCCFP 2026.
 Stack: Vite + React 19 + TypeScript 6 + Tailwind CSS 4 + Recharts + SheetJS
 
-## Tab order (final v1)
-Visualisation → Spectrogramme → Conformité 2026 → Calcul Lw → Concordance → Rapport
-(matches the typical workflow: load → look → check compliance → compute Lw → cross-reference events → generate report)
+## Tab order (current)
+Visualisation → Carte → Spectrogramme → Conformité 2026 → Calcul Lw → Concordance → Rapport
+(matches the typical workflow: load → look → place on map → check compliance → compute Lw → cross-reference events → generate report)
+
+The Visualisation tab now also embeds a compact, collapsible spectrogram (~200 px) under the chart so users can stay on one screen. The standalone Spectrogramme tab is kept for full-screen analysis with multiple points.
 
 ## App version
 Injected at build time from `package.json` via Vite `define` (`__APP_VERSION__`). Bump `package.json` to bump the sidebar/header badge.
@@ -23,13 +25,29 @@ Injected at build time from `package.json` via Vite `define` (`__APP_VERSION__`)
 - Drag & drop import (XLSX, WAV, JSON anywhere on sidebar)
 
 ### Visualization
-- Time series chart with zoom/pan (mouse wheel, click+drag, double-click reset)
+- Time series chart with zoom/pan (mouse wheel = zoom on cursor, click+drag = pan, double-click = reset)
+- Zoom limits: minimum 2 minutes visible, maximum = full day
+- Y axis auto-fits to visible data ±5 dB padding when zoomed
+- Sticky per-point labels (top-right overlay) showing live last-visible LAeq value, anchored to right edge
+- Zoom level badge ("×n zoom") top-left when zoomed
+- Aggregation selector in chart toolbar: 1 s / 5 s / 10 s / 30 s / 1 min / 5 min (default) / 15 min / 1 h. Selection lifted to App and shared with the embedded + full-screen spectrogram. High-resolution warning if 1 s/5 s with > 10 000 raw points.
+- **Shift + drag** = time range selection. Popup shows start/end/duration, LAeq and L90 (energy aggregates over the raw data within the selected window) and an "Ajouter comme événement" button. Click outside or press Esc to dismiss.
+- **Comparer ON/OFF** button (chart toolbar) → drag once for "Source ON" range (green), drag again for "OFF" range (grey). Result strip below the chart shows ON / OFF / Δ / L_source = 10·log10(10^Lon/10 − 10^Loff/10) plus a confidence badge (green Δ ≥ 3 dB, amber 1–3 dB, rose < 1 dB). "Annuler" exits and clears. Replaces the old time-input ComparisonPanel.
+- **Multi-day overlay** — when more than one day is loaded, the date selector becomes a button list. Each non-primary day has a layers icon: click it to overlay that day on the chart (max 1 overlay = 2 days total). Overlay lines are dashed at 55 % opacity, sticky labels read "BV-94 (09 mars)", and the Recharts tooltip shows both days at the hovered time.
 - Zoom/pan keyboard shortcuts (+/-, arrows, Space for audio)
 - Legend click to toggle individual lines on/off
 - Dynamic XAxis tick interval adapting to zoom level
 - Min/max decimation downsampling (max 2000 display points)
-- Spectrogram 1/3 octave (canvas heatmap, viridis palette)
+- Spectrogram 1/3 octave (canvas heatmap, viridis palette) — both embedded under the chart (compact mode, 200 px) and as a standalone Spectrogramme tab. Spectrogram aggregation follows the chart aggregation.
 - Spectrogram synchronized with chart zoom state
+
+### Site map (Carte tab)
+- Upload a JPG/PNG/WebP image of the site plan (drag & drop or file picker)
+- For each assigned point: pick the active point in the toolbar then click on the image to drop a colored marker
+- Markers can be dragged to reposition; click a marker to see its current LAeq (computed over the chart's current zoom range, or full day if not zoomed)
+- "Réinitialiser les marqueurs" button
+- Export PNG of the annotated map (image + colored circles + labels rendered at native resolution via offscreen canvas)
+- Marker positions are normalized (fraction 0–1) and persisted in the project save/load JSON via `mapImage` (data URL) and `mapMarkers`
 
 ### Analysis
 - 6 acoustic indices: LAeq, L10, L50, L90, LAFmax, LAFmin
@@ -41,6 +59,7 @@ Injected at build time from `package.json` via Vite `define` (`__APP_VERSION__`)
 
 ### Events & concordance
 - Source events with color picker and timestamps
+- **Détecter événements** button (sidebar Events panel) — runs `detectRisingEvents` over each (point × day) raw stream looking for ≥ 6 dB rises within a sliding 60 s window (deduped within 60 s). Candidates appear as orange dashed reference lines on the chart and as a checklist in the Events panel. Each row has confirm (✓ → becomes a regular SourceEvent in orange `#fb923c`) and dismiss (✗) buttons. Helper lives in `src/utils/acoustics.ts`; types in `CandidateEvent` (`src/types/index.ts`).
 - 3-state concordance table (events x points) with CSV export
 - Help tooltips on concordance states
 
@@ -100,7 +119,7 @@ The Rapport tab pre-fills 5 sections from the live state: header (project, dates
 - No undo/redo system
 - Audio file must be loaded manually (no auto-association with measurement)
 - Spectrogram not yet interactive (no click-to-zoom)
-- Bundle size ~388 kB gzip (XLSX + Recharts are the heaviest dependencies — well under the 2 MB target)
+- Bundle size ~395 kB gzip (XLSX + Recharts are the heaviest dependencies — well under the 2 MB target)
 - No .wav analysis (only playback, no LAeq from audio)
 - Project save does not include raw measurement data (files must be re-imported)
 

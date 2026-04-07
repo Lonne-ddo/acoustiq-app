@@ -6,9 +6,9 @@
 import { useRef, useEffect, useMemo, useState } from 'react'
 import type { MeasurementFile, SourceEvent, DataPoint, ZoomRange } from '../types'
 
-const CANVAS_HEIGHT = 160  // hauteur affichée en px par spectrogramme
-const Y_AXIS_W = 48        // largeur réservée aux étiquettes de fréquence
-const LEGEND_W = 36        // largeur réservée à la légende de couleur
+const DEFAULT_CANVAS_HEIGHT = 160  // hauteur affichée en px par spectrogramme (mode plein)
+const Y_AXIS_W = 48                // largeur réservée aux étiquettes de fréquence
+const LEGEND_W = 36                // largeur réservée à la légende de couleur
 
 // ---- Fréquences ------------------------------------------------------------
 // 36 bandes tiers d'octave standard (6.3 Hz → 20 kHz)
@@ -70,16 +70,21 @@ function freqLabel(hz: number): string {
   return hz >= 1000 ? `${hz / 1000}k` : String(hz)
 }
 
-/** Agrège les spectres par buckets de 5 minutes (moyenne énergétique par bande) */
-function aggregateSpectra(data: DataPoint[]): Map<number, number[]> {
+/**
+ * Agrège les spectres par buckets de `aggSec` secondes (moyenne énergétique par bande).
+ * La clé du bucket est en minutes (float) pour rester compatible avec l'axe X.
+ */
+function aggregateSpectra(data: DataPoint[], aggSec: number): Map<number, number[]> {
   const acc = new Map<number, { pow: number[]; n: number }>()
   for (const dp of data) {
     if (!dp.spectra?.length) continue
-    const bucket = Math.floor(dp.t / 5) * 5
-    if (!acc.has(bucket)) {
-      acc.set(bucket, { pow: new Array(dp.spectra.length).fill(0), n: 0 })
+    const tSec = Math.round(dp.t * 60)
+    const bucketSec = Math.floor(tSec / aggSec) * aggSec
+    const bucketMin = bucketSec / 60
+    if (!acc.has(bucketMin)) {
+      acc.set(bucketMin, { pow: new Array(dp.spectra.length).fill(0), n: 0 })
     }
-    const a = acc.get(bucket)!
+    const a = acc.get(bucketMin)!
     dp.spectra.forEach((v, i) => { a.pow[i] += Math.pow(10, v / 10) })
     a.n++
   }
@@ -91,7 +96,11 @@ function aggregateSpectra(data: DataPoint[]): Map<number, number[]> {
 }
 
 // ---- ColorScaleLegend ------------------------------------------------------
-function ColorScaleLegend({ minDb, maxDb }: { minDb: number; maxDb: number }) {
+function ColorScaleLegend({
+  minDb,
+  maxDb,
+  height,
+}: { minDb: number; maxDb: number; height: number }) {
   const ref = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -99,7 +108,6 @@ function ColorScaleLegend({ minDb, maxDb }: { minDb: number; maxDb: number }) {
     if (!canvas) return
     const ctx = canvas.getContext('2d')!
     const H = canvas.height
-    // Construire l'image 1×H et l'étirer sur toute la largeur
     const tmp = document.createElement('canvas')
     tmp.width = 1; tmp.height = H
     const tctx = tmp.getContext('2d')!
@@ -111,7 +119,7 @@ function ColorScaleLegend({ minDb, maxDb }: { minDb: number; maxDb: number }) {
     }
     tctx.putImageData(img, 0, 0)
     ctx.drawImage(tmp, 0, 0, canvas.width, H)
-  }, [minDb, maxDb])
+  }, [minDb, maxDb, height])
 
   const mid = Math.round((minDb + maxDb) / 2)
 
@@ -120,8 +128,7 @@ function ColorScaleLegend({ minDb, maxDb }: { minDb: number; maxDb: number }) {
       className="flex flex-col shrink-0"
       style={{ width: LEGEND_W, paddingTop: 20 /* aligne avec le canvas */ }}
     >
-      {/* Étiquettes dB */}
-      <div className="flex gap-1" style={{ height: CANVAS_HEIGHT }}>
+      <div className="flex gap-1" style={{ height }}>
         <div className="flex flex-col justify-between py-0.5 text-right">
           {[maxDb, mid, minDb].map((v) => (
             <span key={v} className="text-gray-500 select-none" style={{ fontSize: 9 }}>
@@ -129,13 +136,12 @@ function ColorScaleLegend({ minDb, maxDb }: { minDb: number; maxDb: number }) {
             </span>
           ))}
         </div>
-        {/* Barre de gradient */}
         <canvas
           ref={ref}
           width={10}
-          height={CANVAS_HEIGHT}
+          height={height}
           className="rounded-sm"
-          style={{ width: 10, height: CANVAS_HEIGHT }}
+          style={{ width: 10, height }}
         />
       </div>
       <span
@@ -199,12 +205,18 @@ interface SingleSpectrogramProps {
   hoverTime: number | null
   events: SourceEvent[]
   onHoverTime: (t: number | null) => void
+  /** Hauteur du canvas en px (variable selon mode embedded/full) */
+  canvasHeight: number
+  /** Pas d'agrégation en secondes (largeur de chaque bucket) */
+  aggSec: number
+  compact?: boolean
 }
 
 function SingleSpectrogram({
   pointName, pointColor, spectraByBucket,
   tMin, tMax, nBands, freqBands,
   minDb, maxDb, hoverTime, events, onHoverTime,
+  canvasHeight, aggSec, compact,
 }: SingleSpectrogramProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -227,14 +239,14 @@ function SingleSpectrogram({
 
     const dpr = window.devicePixelRatio || 1
     canvas.width = canvasW * dpr
-    canvas.height = CANVAS_HEIGHT * dpr
+    canvas.height = canvasHeight * dpr
 
     const ctx = canvas.getContext('2d')!
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
 
     // Fond sombre pour les buckets sans données
     ctx.fillStyle = '#030712'
-    ctx.fillRect(0, 0, canvasW, CANVAS_HEIGHT)
+    ctx.fillRect(0, 0, canvasW, canvasHeight)
 
     if (spectraByBucket.size === 0) return
 
@@ -265,12 +277,13 @@ function SingleSpectrogram({
 
     // Dessiner chaque bucket à sa position temporelle exacte
     ctx.imageSmoothingEnabled = false
+    const aggMin = aggSec / 60
     sorted.forEach(([bucket], ti) => {
       const x0 = Math.round(((bucket - tMin) / tRange) * canvasW)
-      const x1 = Math.round(((bucket + 5 - tMin) / tRange) * canvasW)
-      ctx.drawImage(tmp, ti, 0, 1, nBands, x0, 0, Math.max(1, x1 - x0), CANVAS_HEIGHT)
+      const x1 = Math.round(((bucket + aggMin - tMin) / tRange) * canvasW)
+      ctx.drawImage(tmp, ti, 0, 1, nBands, x0, 0, Math.max(1, x1 - x0), canvasHeight)
     })
-  }, [spectraByBucket, nBands, minDb, maxDb, canvasW, tMin, tMax])
+  }, [spectraByBucket, nBands, minDb, maxDb, canvasW, tMin, tMax, aggSec, canvasHeight])
 
   const tRange = tMax - tMin || 1
   const cursorPct = hoverTime !== null ? ((hoverTime - tMin) / tRange) * 100 : null
@@ -278,11 +291,12 @@ function SingleSpectrogram({
   function handleMouseMove(e: React.MouseEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect()
     const frac = (e.clientX - rect.left) / rect.width
-    onHoverTime(Math.floor((tMin + frac * tRange) / 5) * 5)
+    const aggMin = aggSec / 60
+    onHoverTime(Math.floor((tMin + frac * tRange) / aggMin) * aggMin)
   }
 
   return (
-    <div className="mb-3">
+    <div className={compact ? 'mb-1' : 'mb-3'}>
       {/* Étiquette du point */}
       <div className="flex items-center gap-1.5 mb-1" style={{ paddingLeft: Y_AXIS_W }}>
         <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: pointColor }} />
@@ -293,7 +307,7 @@ function SingleSpectrogram({
 
       <div className="flex items-stretch">
         {/* Axe Y : étiquettes de fréquences */}
-        <div className="relative shrink-0" style={{ width: Y_AXIS_W, height: CANVAS_HEIGHT }}>
+        <div className="relative shrink-0" style={{ width: Y_AXIS_W, height: canvasHeight }}>
           {freqBands.map((f, bi) => {
             if (!Y_LABEL_SET.has(f)) return null
             const yPct = (1 - bi / Math.max(nBands - 1, 1)) * 100
@@ -313,14 +327,14 @@ function SingleSpectrogram({
         <div
           ref={containerRef}
           className="relative flex-1 cursor-crosshair overflow-hidden"
-          style={{ height: CANVAS_HEIGHT }}
+          style={{ height: canvasHeight }}
           onMouseMove={handleMouseMove}
           onMouseLeave={() => onHoverTime(null)}
         >
           <canvas
             ref={canvasRef}
             className="block w-full"
-            style={{ height: CANVAS_HEIGHT, backgroundColor: '#030712' }}
+            style={{ height: canvasHeight, backgroundColor: '#030712' }}
           />
 
           {/* Curseur temps */}
@@ -379,11 +393,20 @@ interface Props {
   events: SourceEvent[]
   /** Plage de zoom synchronisée avec le graphique temporel */
   zoomRange?: ZoomRange | null
+  /** Pas d'agrégation en secondes (par défaut 300 = 5 min) */
+  aggregationSeconds?: number
+  /** Mode compact : pas de barre d'outils, hauteur réduite par point, scroll interne */
+  compact?: boolean
+  /** Hauteur totale du conteneur (mode compact uniquement) */
+  height?: number
 }
 
 export default function Spectrogram({
   files, pointMap, selectedDate, availableDates, onDateChange, events,
   zoomRange,
+  aggregationSeconds = 300,
+  compact = false,
+  height,
 }: Props) {
   const [minDb, setMinDb] = useState(30)
   const [maxDb, setMaxDb] = useState(90)
@@ -407,10 +430,10 @@ export default function Spectrogram({
   const spectraByPoint = useMemo(() => {
     const m = new Map<string, Map<number, number[]>>()
     for (const [pt, fs] of filesByPoint) {
-      m.set(pt, aggregateSpectra(fs.flatMap((f) => f.data)))
+      m.set(pt, aggregateSpectra(fs.flatMap((f) => f.data), aggregationSeconds))
     }
     return m
-  }, [filesByPoint])
+  }, [filesByPoint, aggregationSeconds])
 
   // Plage temporelle globale et nombre de bandes
   const { tMin, tMax, nBands } = useMemo(() => {
@@ -443,22 +466,64 @@ export default function Spectrogram({
     [events, selectedDate],
   )
 
+  // Hauteur par canvas : compactée si embedded, sinon valeur par défaut
+  const perCanvasHeight = compact
+    ? Math.max(40, Math.floor(((height ?? 200) - 30) / Math.max(1, pointNames.length)))
+    : DEFAULT_CANVAS_HEIGHT
+
   // États vides
   if (pointNames.length === 0) {
     return (
       <div className="flex items-center justify-center h-full text-gray-600 text-sm px-8 text-center">
-        Chargez un fichier et assignez-lui un point de mesure.
+        {compact ? '—' : 'Chargez un fichier et assignez-lui un point de mesure.'}
       </div>
     )
   }
   if (nBands === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-600 text-sm px-8 text-center">
-        Les fichiers chargés ne contiennent pas de données spectrales 1/3 octave.
+      <div className="flex items-center justify-center h-full text-gray-600 text-xs px-4 text-center">
+        Aucune donnée spectrale 1/3 octave dans les fichiers chargés.
       </div>
     )
   }
 
+  // ── Mode compact (embarqué sous le graphique) ────────────────────────────
+  if (compact) {
+    return (
+      <div className="flex flex-col h-full" style={{ height }}>
+        <div className="flex-1 overflow-y-auto px-4 py-2">
+          <div className="flex gap-0">
+            <div className="flex-1 min-w-0">
+              {pointNames.map((pt, i) => (
+                <SingleSpectrogram
+                  key={pt}
+                  pointName={pt}
+                  pointColor={ptColor(pt, i)}
+                  spectraByBucket={spectraByPoint.get(pt) ?? new Map()}
+                  tMin={tMin}
+                  tMax={tMax}
+                  nBands={nBands}
+                  freqBands={freqBands}
+                  minDb={minDb}
+                  maxDb={maxDb}
+                  hoverTime={hoverTime}
+                  events={activeEvents}
+                  onHoverTime={setHoverTime}
+                  canvasHeight={perCanvasHeight}
+                  aggSec={aggregationSeconds}
+                  compact
+                />
+              ))}
+              <XAxis tMin={tMin} tMax={tMax} />
+            </div>
+            <ColorScaleLegend minDb={minDb} maxDb={maxDb} height={perCanvasHeight} />
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  // ── Mode plein (onglet Spectrogramme) ─────────────────────────────────────
   return (
     <div className="flex flex-col h-full">
       {/* Barre de contrôle */}
@@ -520,13 +585,15 @@ export default function Spectrogram({
                 hoverTime={hoverTime}
                 events={activeEvents}
                 onHoverTime={setHoverTime}
+                canvasHeight={DEFAULT_CANVAS_HEIGHT}
+                aggSec={aggregationSeconds}
               />
             ))}
             <XAxis tMin={tMin} tMax={tMax} />
           </div>
 
           {/* Légende de couleur */}
-          <ColorScaleLegend minDb={minDb} maxDb={maxDb} />
+          <ColorScaleLegend minDb={minDb} maxDb={maxDb} height={DEFAULT_CANVAS_HEIGHT} />
         </div>
       </div>
     </div>

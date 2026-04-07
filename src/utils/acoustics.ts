@@ -3,6 +3,52 @@
  */
 
 /**
+ * Détecte des candidats d'événement = montées de LAeq ≥ `minDeltaDb`
+ * sur une fenêtre glissante de `windowSec` secondes.
+ *
+ * Retourne pour chaque pic une heure HH:MM, le delta dB par rapport au
+ * minimum de la fenêtre et la valeur LAeq au pic. Anti-doublons : un nouvel
+ * événement n'est émis qu'après `windowSec` depuis le précédent.
+ */
+export function detectRisingEvents(
+  data: Array<{ t: number; laeq: number }>,
+  options: { minDeltaDb?: number; windowSec?: number } = {},
+): Array<{ time: string; delta: number; laeq: number; tMin: number }> {
+  const minDelta = options.minDeltaDb ?? 6
+  const windowSec = options.windowSec ?? 60
+  const windowMin = windowSec / 60
+
+  if (data.length < 2) return []
+  const sorted = [...data].sort((a, b) => a.t - b.t)
+
+  const out: Array<{ time: string; delta: number; laeq: number; tMin: number }> = []
+  let lo = 0
+  let lastEmittedT = -Infinity
+
+  for (let i = 0; i < sorted.length; i++) {
+    const cur = sorted[i]
+    // Avancer la borne basse pour respecter la fenêtre
+    while (lo < i && sorted[lo].t < cur.t - windowMin) lo++
+    if (lo === i) continue
+    // min LAeq dans [lo, i-1]
+    let minVal = Infinity
+    for (let j = lo; j < i; j++) {
+      if (sorted[j].laeq < minVal) minVal = sorted[j].laeq
+    }
+    const delta = cur.laeq - minVal
+    if (delta >= minDelta && cur.t - lastEmittedT >= windowMin) {
+      const h = Math.floor(cur.t / 60) % 24
+      const m = Math.floor(cur.t % 60)
+      const time = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+      out.push({ time, delta, laeq: cur.laeq, tMin: cur.t })
+      lastEmittedT = cur.t
+    }
+  }
+
+  return out
+}
+
+/**
  * Calcule la moyenne énergétique (LAeq) d'un tableau de niveaux en dB
  */
 export function laeqAvg(values: number[]): number {

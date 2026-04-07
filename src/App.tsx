@@ -23,6 +23,9 @@ import {
   ChevronRight,
   Plus,
   Loader2,
+  MapPin,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import type {
@@ -34,7 +37,10 @@ import type {
   AppSettings,
   RecentProject,
   ConformiteSummary,
+  MarkerPos,
+  CandidateEvent,
 } from './types'
+import { detectRisingEvents } from './utils/acoustics'
 import { parse831C } from './modules/parser831C'
 import { parse821SE, detect821SE } from './modules/parser821SE'
 import { saveProject, loadProject } from './modules/projectManager'
@@ -48,8 +54,8 @@ import Spectrogram from './components/Spectrogram'
 import LwCalculator from './components/LwCalculator'
 import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
-import ComparisonPanel from './components/ComparisonPanel'
 import Conformite2026 from './components/Conformite2026'
+import SiteMap from './components/SiteMap'
 import Settings from './components/Settings'
 import ShortcutsModal from './components/ShortcutsModal'
 import Onboarding, { shouldShowOnboarding, resetOnboarding } from './components/Onboarding'
@@ -129,7 +135,7 @@ function saveRecent(projects: RecentProject[]) {
   localStorage.setItem(RECENT_KEY, JSON.stringify(projects.slice(0, MAX_RECENT)))
 }
 
-type Tab = 'chart' | 'spectrogram' | 'lw' | 'concordance' | 'report' | 'reafie'
+type Tab = 'chart' | 'map' | 'spectrogram' | 'lw' | 'concordance' | 'report' | 'reafie'
 
 const FILE_LIST_LIMIT = 10
 
@@ -258,10 +264,14 @@ interface SidebarProps {
   loading: boolean
   loadProgress: number
   rejectedFiles: RejectedFile[]
+  candidates: CandidateEvent[]
   onPointChange: (fileId: string, point: string) => void
   onFileRemove: (fileId: string) => void
   onEventAdd: (ev: SourceEvent) => void
   onEventRemove: (id: string) => void
+  onDetectCandidates: () => void
+  onConfirmCandidate: (id: string) => void
+  onDismissCandidate: (id: string) => void
   onClearError: (i: number) => void
   onSaveProject: () => void
   onLoadProject: (json: string) => void
@@ -275,8 +285,10 @@ function Sidebar({
   collapsed, onToggle,
   files, pointMap, events, availableDates, errors,
   audioFile, chartTimeMin, loading, loadProgress, rejectedFiles,
+  candidates,
   onPointChange, onFileRemove,
   onEventAdd, onEventRemove, onClearError,
+  onDetectCandidates, onConfirmCandidate, onDismissCandidate,
   onSaveProject, onLoadProject, onParseFiles,
   onAudioLoaded, onAudioRemove, onAudioSeek,
 }: SidebarProps) {
@@ -565,6 +577,10 @@ function Sidebar({
           availableDates={availableDates}
           onAdd={onEventAdd}
           onRemove={onEventRemove}
+          candidates={candidates}
+          onDetect={onDetectCandidates}
+          onConfirmCandidate={onConfirmCandidate}
+          onDismissCandidate={onDismissCandidate}
         />
       </div>
 
@@ -604,6 +620,18 @@ interface MainPanelProps {
   settings: AppSettings
   conformiteSummary: ConformiteSummary | null
   onConformiteSummaryChange: (summary: ConformiteSummary | null) => void
+  aggregationSeconds: number
+  onAggregationChange: (s: number) => void
+  spectrogramExpanded: boolean
+  onSpectrogramToggle: () => void
+  onAddEvent: (event: SourceEvent) => void
+  mapImage: string | null
+  onMapImageChange: (image: string | null) => void
+  mapMarkers: Record<string, MarkerPos>
+  onMapMarkersChange: (markers: Record<string, MarkerPos>) => void
+  overlayDate: string | null
+  onOverlayDateChange: (d: string | null) => void
+  candidates: CandidateEvent[]
   onDateChange: (date: string) => void
   onTabChange: (tab: Tab) => void
   onCellChange: (eventId: string, point: string, state: ConcordanceState) => void
@@ -622,6 +650,10 @@ function MainPanel({
   selectedDate, availableDates, activeTab, assignedPoints, zoomRange,
   projectName, recentProjects, settings,
   conformiteSummary, onConformiteSummaryChange,
+  aggregationSeconds, onAggregationChange,
+  spectrogramExpanded, onSpectrogramToggle, onAddEvent,
+  mapImage, onMapImageChange, mapMarkers, onMapMarkersChange,
+  overlayDate, onOverlayDateChange, candidates,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
@@ -629,9 +661,6 @@ function MainPanel({
   const chartFiles = files.filter((f) => !!pointMap[f.id])
   const hasChart = chartFiles.length > 0
   const [showRecent, setShowRecent] = useState(false)
-  const [comparisonMode, setComparisonMode] = useState(false)
-  const [onRange, setOnRange] = useState({ start: '08:00', end: '12:00' })
-  const [offRange, setOffRange] = useState({ start: '00:00', end: '06:00' })
 
   return (
     <main className="flex-1 bg-gray-950 text-gray-100 flex flex-col min-w-0 overflow-hidden">
@@ -696,6 +725,7 @@ function MainPanel({
         <nav className="flex gap-1 ml-4">
           {([
             ['chart', <BarChart2 size={13} key="c" />, t('tab.visualization')],
+            ['map', <MapPin size={13} key="m" />, 'Carte'],
             ['spectrogram', <Layers size={13} key="s" />, t('tab.spectrogram')],
             ['reafie', <Shield size={13} key="re" />, 'Conformité 2026'],
             ['lw', <Calculator size={13} key="l" />, t('tab.lw')],
@@ -760,50 +790,49 @@ function MainPanel({
                   zoomRange={zoomRange}
                   onZoomChange={onZoomChange}
                   settings={settings}
+                  aggregationSeconds={aggregationSeconds}
+                  onAggregationChange={onAggregationChange}
+                  onAddEvent={onAddEvent}
+                  overlayDate={overlayDate}
+                  onOverlayDateChange={onOverlayDateChange}
+                  candidates={candidates}
                 />
               </div>
-              <IndicesPanel files={chartFiles} pointMap={pointMap} selectedDate={selectedDate} />
 
-              {/* Mode comparaison ON/OFF */}
-              <div className="border-t border-gray-800 bg-gray-900 shrink-0">
-                <div className="flex items-center gap-3 px-4 py-1.5">
-                  <label className="flex items-center gap-2 cursor-pointer">
-                    <input
-                      type="checkbox"
-                      checked={comparisonMode}
-                      onChange={(e) => setComparisonMode(e.target.checked)}
-                      className="w-3.5 h-3.5 rounded bg-gray-800 border-gray-600
-                                 text-emerald-500 focus:ring-emerald-500 focus:ring-offset-0"
+              {/* Spectrogramme embarqué (collapsible) */}
+              <div className="border-t border-gray-800 bg-gray-900/40 shrink-0">
+                <button
+                  onClick={onSpectrogramToggle}
+                  className="w-full flex items-center gap-2 px-6 py-1.5 text-xs text-gray-400
+                             hover:text-gray-200 hover:bg-gray-800/60 transition-colors"
+                  aria-expanded={spectrogramExpanded}
+                >
+                  {spectrogramExpanded ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+                  <Layers size={12} />
+                  <span className="font-semibold uppercase tracking-wider">Spectrogramme</span>
+                  <span className="text-gray-600 normal-case font-normal">
+                    — synchronisé avec le graphique
+                  </span>
+                </button>
+                {spectrogramExpanded && (
+                  <div style={{ height: 200 }}>
+                    <Spectrogram
+                      files={chartFiles}
+                      pointMap={pointMap}
+                      selectedDate={selectedDate}
+                      availableDates={availableDates}
+                      onDateChange={onDateChange}
+                      events={events}
+                      zoomRange={zoomRange}
+                      aggregationSeconds={aggregationSeconds}
+                      compact
+                      height={200}
                     />
-                    <span className="text-xs font-medium text-gray-400">Mode comparaison ON/OFF</span>
-                  </label>
-                  {comparisonMode && (
-                    <div className="flex items-center gap-2 ml-2 text-xs">
-                      <span className="text-emerald-400 font-medium">ON :</span>
-                      <input type="time" value={onRange.start} onChange={(e) => setOnRange((r) => ({ ...r, start: e.target.value }))}
-                        className="bg-gray-800 text-gray-100 border border-gray-600 rounded px-1 py-0.5 text-xs" />
-                      <span className="text-gray-600">–</span>
-                      <input type="time" value={onRange.end} onChange={(e) => setOnRange((r) => ({ ...r, end: e.target.value }))}
-                        className="bg-gray-800 text-gray-100 border border-gray-600 rounded px-1 py-0.5 text-xs" />
-                      <span className="text-red-400 font-medium ml-2">OFF :</span>
-                      <input type="time" value={offRange.start} onChange={(e) => setOffRange((r) => ({ ...r, start: e.target.value }))}
-                        className="bg-gray-800 text-gray-100 border border-gray-600 rounded px-1 py-0.5 text-xs" />
-                      <span className="text-gray-600">–</span>
-                      <input type="time" value={offRange.end} onChange={(e) => setOffRange((r) => ({ ...r, end: e.target.value }))}
-                        className="bg-gray-800 text-gray-100 border border-gray-600 rounded px-1 py-0.5 text-xs" />
-                    </div>
-                  )}
-                </div>
+                  </div>
+                )}
               </div>
-              {comparisonMode && (
-                <ComparisonPanel
-                  files={chartFiles}
-                  pointMap={pointMap}
-                  selectedDate={selectedDate}
-                  onRange={onRange}
-                  offRange={offRange}
-                />
-              )}
+
+              <IndicesPanel files={chartFiles} pointMap={pointMap} selectedDate={selectedDate} />
             </>
           ) : (
             <div className="flex-1 flex flex-col items-center justify-center text-gray-600 gap-3">
@@ -819,12 +848,30 @@ function MainPanel({
         </div>
       )}
 
+      {activeTab === 'map' && (
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+          <SiteMap
+            files={files}
+            pointMap={pointMap}
+            selectedDate={selectedDate}
+            assignedPoints={assignedPoints}
+            zoomRange={zoomRange}
+            mapImage={mapImage}
+            onMapImageChange={onMapImageChange}
+            markers={mapMarkers}
+            onMarkersChange={onMapMarkersChange}
+            settings={settings}
+          />
+        </div>
+      )}
+
       {activeTab === 'spectrogram' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           <Spectrogram
             files={chartFiles} pointMap={pointMap} selectedDate={selectedDate}
             availableDates={availableDates} onDateChange={onDateChange}
             events={events} zoomRange={zoomRange}
+            aggregationSeconds={aggregationSeconds}
           />
         </div>
       )}
@@ -901,6 +948,24 @@ export default function App() {
   const [audioFile, setAudioFile] = useState<AudioFile | null>(null)
   const [chartTimeMin, setChartTimeMin] = useState<number | null>(null)
   const [conformiteSummary, setConformiteSummary] = useState<ConformiteSummary | null>(null)
+
+  // Pas d'agrégation lifté ici pour partage entre chart, spectrogramme embarqué et plein écran
+  const [aggregationSeconds, setAggregationSeconds] = useState<number>(() => {
+    const fromSettings = loadSettings().aggregationInterval
+    // Compatibilité ascendante : fromSettings est en minutes
+    return Math.max(1, Math.round(fromSettings * 60)) || 300
+  })
+  const [spectrogramExpanded, setSpectrogramExpanded] = useState<boolean>(true)
+
+  // Plan de site
+  const [mapImage, setMapImage] = useState<string | null>(null)
+  const [mapMarkers, setMapMarkers] = useState<Record<string, MarkerPos>>({})
+
+  // Superposition multi-jours (max 1 jour superposé en plus du principal)
+  const [overlayDate, setOverlayDate] = useState<string | null>(null)
+
+  // Candidats événements (auto-détection)
+  const [candidates, setCandidates] = useState<CandidateEvent[]>([])
 
   // Multi-projet
   const [projectName, setProjectName] = useState(t('project.untitled'))
@@ -999,6 +1064,52 @@ export default function App() {
   function handleEventAdd(ev: SourceEvent) { setEvents((prev) => [...prev, ev]) }
   function handleEventRemove(id: string) { setEvents((prev) => prev.filter((ev) => ev.id !== id)) }
 
+  // ---- Auto-détection des candidats événements ----
+  const handleDetectCandidates = useCallback(() => {
+    const out: CandidateEvent[] = []
+    // Grouper les fichiers par (point, date)
+    const byPointDate = new Map<string, MeasurementFile[]>()
+    for (const f of files) {
+      const pt = pointMap[f.id]
+      if (!pt) continue
+      const k = `${pt}|${f.date}`
+      if (!byPointDate.has(k)) byPointDate.set(k, [])
+      byPointDate.get(k)!.push(f)
+    }
+    for (const [key, fs] of byPointDate) {
+      const [pt, day] = key.split('|')
+      const data = fs.flatMap((f) => f.data).map((dp) => ({ t: dp.t, laeq: dp.laeq }))
+      const detected = detectRisingEvents(data, { minDeltaDb: 6, windowSec: 60 })
+      for (const d of detected) {
+        out.push({
+          id: crypto.randomUUID(),
+          point: pt,
+          day,
+          time: d.time,
+          delta: d.delta,
+          laeq: d.laeq,
+        })
+      }
+    }
+    setCandidates(out)
+  }, [files, pointMap])
+
+  function handleConfirmCandidate(id: string) {
+    const c = candidates.find((x) => x.id === id)
+    if (!c) return
+    setCandidates((prev) => prev.filter((x) => x.id !== id))
+    handleEventAdd({
+      id: crypto.randomUUID(),
+      label: `${c.point} +${c.delta.toFixed(0)} dB`,
+      time: c.time,
+      day: c.day,
+      color: '#fb923c',
+    })
+  }
+  function handleDismissCandidate(id: string) {
+    setCandidates((prev) => prev.filter((x) => x.id !== id))
+  }
+
   // ---- Handlers concordance ----
   function handleCellChange(eventId: string, point: string, state: ConcordanceState) {
     setConcordance((prev) => ({ ...prev, [`${eventId}|${point}`]: state }))
@@ -1008,13 +1119,13 @@ export default function App() {
   const serializeCurrentState = useCallback(() => {
     return JSON.stringify({
       files: files.map((f) => ({ id: f.id, name: f.name, model: f.model, serial: f.serial, date: f.date, startTime: f.startTime, stopTime: f.stopTime, rowCount: f.rowCount })),
-      pointMap, events, concordance,
+      pointMap, events, concordance, mapImage, mapMarkers,
     })
-  }, [files, pointMap, events, concordance])
+  }, [files, pointMap, events, concordance, mapImage, mapMarkers])
 
   // ---- Handlers projet ----
   const handleSaveProject = useCallback(() => {
-    saveProject(files, pointMap, events, concordance)
+    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers)
     // Sauvegarder dans les projets récents
     const state = serializeCurrentState()
     const entry: RecentProject = { id: projectId, name: projectName, savedAt: new Date().toISOString(), state }
@@ -1024,7 +1135,7 @@ export default function App() {
       saveRecent(updated)
       return updated
     })
-  }, [files, pointMap, events, concordance, projectId, projectName, serializeCurrentState])
+  }, [files, pointMap, events, concordance, mapImage, mapMarkers, projectId, projectName, serializeCurrentState])
 
   const handleLoadProject = useCallback((json: string) => {
     try {
@@ -1038,6 +1149,8 @@ export default function App() {
       setPointMap(newPointMap)
       setEvents(project.events)
       setConcordance(project.concordance)
+      if (project.mapImage !== undefined) setMapImage(project.mapImage ?? null)
+      if (project.mapMarkers) setMapMarkers(project.mapMarkers)
       if (missingFiles.length > 0) {
         setErrors((prev) => [...prev, `${t('project.missingFiles')} : ${missingFiles.join(', ')}`])
       }
@@ -1063,6 +1176,8 @@ export default function App() {
     setFiles([]); setPointMap({}); setErrors([]); setEvents([])
     setConcordance({}); setSelectedDate(''); setZoomRange(null); setAudioFile(null)
     setConformiteSummary(null)
+    setMapImage(null); setMapMarkers({})
+    setOverlayDate(null); setCandidates([])
     setProjectId(crypto.randomUUID()); setProjectName(t('project.untitled'))
   }, [files, projectId, projectName, serializeCurrentState])
 
@@ -1086,8 +1201,11 @@ export default function App() {
       setProjectName(rp.name)
       setEvents(parsed.events ?? [])
       setConcordance(parsed.concordance ?? {})
+      setMapImage(parsed.mapImage ?? null)
+      setMapMarkers(parsed.mapMarkers ?? {})
       // Les fichiers doivent être rechargés manuellement
       setFiles([]); setPointMap({}); setZoomRange(null); setAudioFile(null); setConformiteSummary(null)
+      setOverlayDate(null); setCandidates([])
       if (parsed.files?.length > 0) {
         setErrors([`${t('project.missingFiles')} : ${parsed.files.map((f: { name: string }) => f.name).join(', ')}`])
       }
@@ -1270,12 +1388,16 @@ export default function App() {
         loading={loading}
         loadProgress={loadProgress}
         rejectedFiles={rejectedFiles}
+        candidates={candidates}
         onParseFiles={handleParseFiles}
         onPointChange={handlePointChange}
         onFileRemove={handleFileRemove}
         onEventAdd={handleEventAdd}
         onEventRemove={handleEventRemove}
         onClearError={handleClearError}
+        onDetectCandidates={handleDetectCandidates}
+        onConfirmCandidate={handleConfirmCandidate}
+        onDismissCandidate={handleDismissCandidate}
         onSaveProject={handleSaveProject}
         onLoadProject={handleLoadProject}
         onAudioLoaded={setAudioFile}
@@ -1297,6 +1419,18 @@ export default function App() {
         settings={settings}
         conformiteSummary={conformiteSummary}
         onConformiteSummaryChange={setConformiteSummary}
+        aggregationSeconds={aggregationSeconds}
+        onAggregationChange={setAggregationSeconds}
+        spectrogramExpanded={spectrogramExpanded}
+        onSpectrogramToggle={() => setSpectrogramExpanded((v) => !v)}
+        onAddEvent={handleEventAdd}
+        mapImage={mapImage}
+        onMapImageChange={setMapImage}
+        mapMarkers={mapMarkers}
+        onMapMarkersChange={setMapMarkers}
+        overlayDate={overlayDate}
+        onOverlayDateChange={setOverlayDate}
+        candidates={candidates}
         onDateChange={setSelectedDate}
         onTabChange={setActiveTab}
         onCellChange={handleCellChange}

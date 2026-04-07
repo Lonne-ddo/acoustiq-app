@@ -31,6 +31,16 @@ export interface SourceEvent {
 
 export type ConcordanceState = 'Confirmé' | 'Incertain' | 'Non visible'
 
+/** Candidat d'événement issu de la détection automatique (rise ≥ 6 dB en 60 s) */
+export interface CandidateEvent {
+  id: string
+  point: string  // nom du point de mesure (BV-94, etc.)
+  day: string    // YYYY-MM-DD
+  time: string   // HH:MM
+  delta: number  // delta dB par rapport au plancher de la fenêtre
+  laeq: number   // valeur LAeq au pic
+}
+
 /** Résumé partageable des résultats Conformité 2026 (pour le rapport) */
 export interface ConformiteSummary {
   receptor: 'I' | 'II' | 'III' | 'IV'
@@ -95,6 +105,12 @@ export interface AudioFile {
   startOffsetMin: number
 }
 
+/** Position normalisée (0–1) d'un marqueur sur l'image de plan de site */
+export interface MarkerPos {
+  x: number  // fraction 0..1 — colonne
+  y: number  // fraction 0..1 — ligne
+}
+
 /** Structure d'un projet sauvegardé */
 export interface ProjectData {
   version: string
@@ -112,4 +128,8 @@ export interface ProjectData {
   pointAssignments: Record<string, string>
   events: SourceEvent[]
   concordance: Record<string, ConcordanceState>
+  /** Image du plan de site (data URL base64) — optionnel */
+  mapImage?: string | null
+  /** Positions des marqueurs par point de mesure */
+  mapMarkers?: Record<string, MarkerPos>
 }

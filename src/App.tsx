@@ -33,6 +33,7 @@ import type {
   AudioFile,
   AppSettings,
   RecentProject,
+  ConformiteSummary,
 } from './types'
 import { parse831C } from './modules/parser831C'
 import { parse821SE, detect821SE } from './modules/parser821SE'
@@ -48,14 +49,15 @@ import LwCalculator from './components/LwCalculator'
 import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
 import ComparisonPanel from './components/ComparisonPanel'
-import ReafieCheck from './components/ReafieCheck'
+import Conformite2026 from './components/Conformite2026'
 import Settings from './components/Settings'
 import ShortcutsModal from './components/ShortcutsModal'
 import Onboarding, { shouldShowOnboarding, resetOnboarding } from './components/Onboarding'
 import Changelog from './components/Changelog'
 
-const APP_VERSION = '1.0.0'
-const BUILD_DATE = '2026-04-06'
+// Injecté par Vite (vite.config.ts → define)
+declare const __APP_VERSION__: string
+const APP_VERSION = __APP_VERSION__
 import { ToastProvider } from './components/Toast'
 
 // Couleurs par point pour la bordure des cartes
@@ -568,7 +570,17 @@ function Sidebar({
 
       <div className="px-4 py-3 border-t border-gray-700 text-xs text-gray-600 shrink-0 space-y-0.5">
         <p className="text-gray-500">AcoustiQ v{APP_VERSION}</p>
-        <p>Mise à jour : {BUILD_DATE}</p>
+        <a
+          href="https://acoustiq-app.pages.dev"
+          target="_blank"
+          rel="noreferrer"
+          className="block text-gray-600 hover:text-emerald-400 transition-colors truncate"
+        >
+          acoustiq-app.pages.dev
+        </a>
+        <p className="text-gray-700 leading-tight pt-0.5">
+          Basé sur les Lignes directrices MELCCFP 2026
+        </p>
       </div>
     </aside>
   )
@@ -590,6 +602,8 @@ interface MainPanelProps {
   projectName: string
   recentProjects: RecentProject[]
   settings: AppSettings
+  conformiteSummary: ConformiteSummary | null
+  onConformiteSummaryChange: (summary: ConformiteSummary | null) => void
   onDateChange: (date: string) => void
   onTabChange: (tab: Tab) => void
   onCellChange: (eventId: string, point: string, state: ConcordanceState) => void
@@ -607,6 +621,7 @@ function MainPanel({
   files, pointMap, events, concordance,
   selectedDate, availableDates, activeTab, assignedPoints, zoomRange,
   projectName, recentProjects, settings,
+  conformiteSummary, onConformiteSummaryChange,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
@@ -682,10 +697,10 @@ function MainPanel({
           {([
             ['chart', <BarChart2 size={13} key="c" />, t('tab.visualization')],
             ['spectrogram', <Layers size={13} key="s" />, t('tab.spectrogram')],
+            ['reafie', <Shield size={13} key="re" />, 'Conformité 2026'],
             ['lw', <Calculator size={13} key="l" />, t('tab.lw')],
             ['concordance', <TableProperties size={13} key="t" />, t('tab.concordance')],
             ['report', <FileText size={13} key="r" />, t('tab.report')],
-            ['reafie', <Shield size={13} key="re" />, 'REAFIE'],
           ] as [Tab, React.ReactNode, string][]).map(([id, icon, label]) => (
             <TabButton key={id} active={activeTab === id} onClick={() => onTabChange(id)} icon={icon} label={label} aria-label={label} />
           ))}
@@ -830,13 +845,20 @@ function MainPanel({
             files={files} pointMap={pointMap} events={events}
             concordance={concordance} selectedDate={selectedDate}
             assignedPoints={assignedPoints}
+            conformiteSummary={conformiteSummary}
+            companyName={settings.companyName}
           />
         </div>
       )}
 
       {activeTab === 'reafie' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
-          <ReafieCheck files={chartFiles} pointMap={pointMap} selectedDate={selectedDate} />
+          <Conformite2026
+            files={chartFiles}
+            pointMap={pointMap}
+            selectedDate={selectedDate}
+            onSummaryChange={onConformiteSummaryChange}
+          />
         </div>
       )}
     </main>
@@ -878,6 +900,7 @@ export default function App() {
   const [zoomRange, setZoomRange] = useState<ZoomRange | null>(null)
   const [audioFile, setAudioFile] = useState<AudioFile | null>(null)
   const [chartTimeMin, setChartTimeMin] = useState<number | null>(null)
+  const [conformiteSummary, setConformiteSummary] = useState<ConformiteSummary | null>(null)
 
   // Multi-projet
   const [projectName, setProjectName] = useState(t('project.untitled'))
@@ -1039,6 +1062,7 @@ export default function App() {
     // Reset
     setFiles([]); setPointMap({}); setErrors([]); setEvents([])
     setConcordance({}); setSelectedDate(''); setZoomRange(null); setAudioFile(null)
+    setConformiteSummary(null)
     setProjectId(crypto.randomUUID()); setProjectName(t('project.untitled'))
   }, [files, projectId, projectName, serializeCurrentState])
 
@@ -1063,7 +1087,7 @@ export default function App() {
       setEvents(parsed.events ?? [])
       setConcordance(parsed.concordance ?? {})
       // Les fichiers doivent être rechargés manuellement
-      setFiles([]); setPointMap({}); setZoomRange(null); setAudioFile(null)
+      setFiles([]); setPointMap({}); setZoomRange(null); setAudioFile(null); setConformiteSummary(null)
       if (parsed.files?.length > 0) {
         setErrors([`${t('project.missingFiles')} : ${parsed.files.map((f: { name: string }) => f.name).join(', ')}`])
       }
@@ -1271,6 +1295,8 @@ export default function App() {
         projectName={projectName}
         recentProjects={recentProjects}
         settings={settings}
+        conformiteSummary={conformiteSummary}
+        onConformiteSummaryChange={setConformiteSummary}
         onDateChange={setSelectedDate}
         onTabChange={setActiveTab}
         onCellChange={handleCellChange}

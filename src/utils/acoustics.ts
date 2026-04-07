@@ -82,3 +82,120 @@ export function sourceContribution(lTotal: number, lResidual: number): number | 
   if (diff <= 0) return null
   return 10 * Math.log10(diff)
 }
+
+/* ============================================================================
+ * Lignes directrices MELCCFP 2026 — Bruit environnemental
+ * En vigueur depuis le 13 janvier 2026 (remplace la NI 98-01)
+ * ========================================================================== */
+
+/**
+ * Extraction du bruit particulier (Bp) à partir du bruit ambiant (Ba) et du
+ * bruit résiduel (Br), méthode énergétique.
+ *
+ *     Bp = 10·log10( 10^(Ba/10) − 10^(Br/10) )
+ *
+ * Conformément aux lignes directrices, l'extraction n'est valide que si
+ * Ba − Br ≥ 3 dB. En deçà, le bruit particulier ne peut pas être isolé du
+ * bruit résiduel et la fonction retourne null.
+ */
+export function extractBp(ba: number, br: number): number | null {
+  if (ba - br < 3) return null
+  const diff = Math.pow(10, ba / 10) - Math.pow(10, br / 10)
+  if (diff <= 0) return null
+  return 10 * Math.log10(diff)
+}
+
+/**
+ * Centres des bandes de tiers d'octave (Hz), à partir de 6.3 Hz.
+ * Aligné sur l'ordre des spectres LZeq fournis par les sonomètres
+ * SoundAdvisor 831C / SoundExpert 821SE.
+ */
+export const THIRD_OCTAVE_CENTERS: number[] = [
+  6.3, 8, 10, 12.5, 16, 20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250,
+  315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300,
+  8000, 10000, 12500, 16000, 20000,
+]
+
+/**
+ * Seuil d'émergence tonale (dB) appliqué à une bande donnée selon sa fréquence.
+ * Tableau extrait des Lignes directrices MELCCFP 2026 (méthode 1/3 d'octave).
+ */
+function tonalThresholdForCenter(fc: number): number {
+  if (fc <= 125) return 15
+  if (fc <= 400) return 8
+  return 5
+}
+
+/**
+ * Détermine si une composante tonale est présente dans un spectre 1/3 d'octave
+ * (LZeq, dB) et retourne le terme correctif Kt = 5 dB le cas échéant.
+ *
+ * Critère : une bande est considérée comme tonale lorsqu'elle dépasse ses deux
+ * bandes adjacentes d'au moins :
+ *   - 15 dB pour fc ≤ 125 Hz
+ *   - 8  dB pour 160 ≤ fc ≤ 400 Hz
+ *   - 5  dB pour fc ≥ 500 Hz
+ *
+ * @param spectrum - niveaux LZeq par bande de tiers d'octave (dB)
+ */
+export function computeKt(spectrum: number[]): number {
+  if (!spectrum || spectrum.length < 3) return 0
+  for (let i = 1; i < spectrum.length - 1; i++) {
+    const fc = THIRD_OCTAVE_CENTERS[i]
+    if (fc === undefined) continue
+    const threshold = tonalThresholdForCenter(fc)
+    const lvl = spectrum[i]
+    const left = spectrum[i - 1]
+    const right = spectrum[i + 1]
+    if (lvl - left >= threshold && lvl - right >= threshold) {
+      return 5
+    }
+  }
+  return 0
+}
+
+/**
+ * Terme correctif basses fréquences Kb (Lignes directrices MELCCFP 2026).
+ * Kb = 5 dB lorsque LCeq − LAeq ≥ 20 dB sur la période évaluée.
+ */
+export function computeKb(lceq: number, laeq: number): number {
+  return lceq - laeq >= 20 ? 5 : 0
+}
+
+/**
+ * Terme correctif d'impulsivité Ki (méthode 1, DIN 45645-1).
+ *     Ki = LAFTeq − LAeq    (≥ 0)
+ * Conformément aux lignes directrices MELCCFP 2026, Ki n'est appliqué que
+ * lorsqu'il est strictement supérieur à 2 dB. Sinon, retourne 0.
+ *
+ * @param laftEq - niveau équivalent à pondération temporelle "Impulse" (dB(A))
+ * @param laeq   - niveau équivalent à pondération temporelle "Fast" (dB(A))
+ */
+export function computeKi(laftEq: number, laeq: number): number {
+  const ki = laftEq - laeq
+  return ki > 2 ? ki : 0
+}
+
+/**
+ * Niveau acoustique d'évaluation horaire LAr,1h selon les Lignes directrices
+ * MELCCFP 2026 :
+ *
+ *     LAr,1h = Bp + max(Kt, Ki, Kb, Ks)
+ *
+ * Seul le terme correctif le plus élevé est appliqué (et non leur somme).
+ *
+ * @param bp - bruit particulier (dB(A))
+ * @param kt - correction tonale
+ * @param ki - correction d'impulsivité
+ * @param kb - correction basses fréquences
+ * @param ks - correction subjective / spécifique (manuelle)
+ */
+export function computeLar1h(
+  bp: number,
+  kt: number,
+  ki: number,
+  kb: number,
+  ks: number,
+): number {
+  return bp + Math.max(kt, ki, kb, ks)
+}

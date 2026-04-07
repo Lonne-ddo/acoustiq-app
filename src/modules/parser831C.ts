@@ -102,6 +102,19 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
     const laeq = typeof laeqVal === 'number' ? laeqVal : parseFloat(String(laeqVal))
     if (isNaN(laeq)) continue
 
+    // Colonne index 9 : LCeq (pondération C) — utilisé pour la correction Kb
+    // selon les Lignes directrices MELCCFP 2026
+    const lceqVal = row[9]
+    const lceqNum = typeof lceqVal === 'number' ? lceqVal : parseFloat(String(lceqVal))
+    const lceq = isNaN(lceqNum) ? undefined : lceqNum
+
+    // Colonne index 8 : LAImax (utilisé comme proxy de LAFTeq) — correction Ki
+    // Note : LAImax et LAFTeq ne sont pas équivalents au sens strict,
+    // mais le 831C n'expose pas LAFTeq dans Time History.
+    const laftVal = row[8]
+    const laftNum = typeof laftVal === 'number' ? laftVal : parseFloat(String(laftVal))
+    const laftEq = isNaN(laftNum) ? undefined : laftNum
+
     // Colonnes index 41–67 : spectres 1/3 octave LZeq (6.3 Hz – 20 kHz)
     const spectra: number[] = []
     for (let c = 41; c <= 67 && c < row.length; c++) {
@@ -113,6 +126,8 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
     data.push({
       t,
       laeq,
+      ...(lceq !== undefined ? { lceq } : {}),
+      ...(laftEq !== undefined ? { laftEq } : {}),
       ...(spectra.length > 0 ? { spectra } : {}),
     })
   }

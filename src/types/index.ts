@@ -16,6 +16,8 @@ export interface MeasurementFile {
 export interface DataPoint {
   t: number           // minutes depuis minuit
   laeq: number
+  lceq?: number       // LCeq (pondération C) — utilisé pour le terme Kb
+  laftEq?: number     // LAImax / LAFTeq (proxy) — utilisé pour le terme Ki
   spectra?: number[]  // bandes tiers d'octave si disponibles
 }
 
@@ -28,6 +30,26 @@ export interface SourceEvent {
 }
 
 export type ConcordanceState = 'Confirmé' | 'Incertain' | 'Non visible'
+
+/** Résumé partageable des résultats Conformité 2026 (pour le rapport) */
+export interface ConformiteSummary {
+  receptor: 'I' | 'II' | 'III' | 'IV'
+  receptorLabel: string
+  period: 'jour' | 'nuit'
+  evalHour: string         // HH:MM
+  date: string
+  limit: number            // dB(A)
+  points: Array<{
+    point: string
+    ba: number | null
+    br: number | null
+    bp: number | null
+    lar: number | null
+    criterion: number
+    appliedKLabel: string
+    pass: boolean | null
+  }>
+}
 
 /** Plage de zoom partagée entre le graphique et le spectrogramme */
 export interface ZoomRange {

@@ -8,9 +8,10 @@
  * d'affichage.
  */
 import { useRef, useState, useMemo, useCallback, useEffect } from 'react'
-import { Upload, MapPin, RotateCcw, Download, X } from 'lucide-react'
+import { Upload, MapPin, RotateCcw, Download, X, Activity, EyeOff } from 'lucide-react'
 import type { MeasurementFile, MarkerPos, ZoomRange, AppSettings } from '../types'
 import { laeqAvg } from '../utils/acoustics'
+import { drawQrBadge } from '../utils/qrBadge'
 
 const POINT_COLORS: Record<string, string> = {
   'BV-94':  '#10b981',
@@ -58,6 +59,9 @@ export default function SiteMap({
   const [activePoint, setActivePoint] = useState<string>(() => assignedPoints[0] ?? '')
   const [draggingPt, setDraggingPt] = useState<string | null>(null)
   const [popupPt, setPopupPt] = useState<string | null>(null)
+  // Isophones (interpolation IDW)
+  const [showZones, setShowZones] = useState(false)
+  const overlayRef = useRef<HTMLCanvasElement>(null)
 
   // Garder activePoint synchronisé avec la liste des points disponibles
   useEffect(() => {
@@ -83,6 +87,82 @@ export default function SiteMap({
     }
     return out
   }, [files, pointMap, selectedDate, assignedPoints, zoomRange])
+
+  // ── Isophones : interpolation IDW + rendu sur canvas overlay ────────────
+  /** Sources placées : marqueur + LAeq disponible */
+  const isophoneSources = useMemo(() => {
+    return assignedPoints
+      .map((pt) => {
+        const m = markers[pt]
+        const v = laeqByPoint[pt]
+        if (!m || v === null) return null
+        return { pt, x: m.x, y: m.y, v }
+      })
+      .filter((s): s is { pt: string; x: number; y: number; v: number } => !!s)
+  }, [assignedPoints, markers, laeqByPoint])
+
+  function isophoneColor(v: number): [number, number, number] {
+    if (v >= 60) return [220, 38, 38]   // rouge
+    if (v >= 50) return [234, 88, 12]   // orange
+    if (v >= 40) return [234, 179, 8]   // jaune
+    return [22, 163, 74]                 // vert
+  }
+
+  /** Dessine les zones sur un contexte 2D donné, à la résolution spécifiée. */
+  function drawIsophones(
+    ctx: CanvasRenderingContext2D,
+    w: number,
+    h: number,
+    sources: typeof isophoneSources,
+    alpha = 90,
+  ) {
+    if (sources.length < 2) return
+    const img = ctx.createImageData(w, h)
+    for (let py = 0; py < h; py++) {
+      for (let px = 0; px < w; px++) {
+        const fx = (px + 0.5) / w
+        const fy = (py + 0.5) / h
+        let sumW = 0
+        let sumWV = 0
+        for (const s of sources) {
+          const dx = fx - s.x
+          const dy = fy - s.y
+          const d2 = dx * dx + dy * dy
+          if (d2 < 1e-9) {
+            sumW = 1; sumWV = s.v
+            break
+          }
+          const wgt = 1 / d2
+          sumW += wgt
+          sumWV += wgt * s.v
+        }
+        const v = sumWV / sumW
+        const [r, g, b] = isophoneColor(v)
+        const idx = (py * w + px) * 4
+        img.data[idx] = r
+        img.data[idx + 1] = g
+        img.data[idx + 2] = b
+        img.data[idx + 3] = alpha
+      }
+    }
+    ctx.putImageData(img, 0, 0)
+  }
+
+  // Met à jour le canvas overlay quand les sources/visibilité changent
+  useEffect(() => {
+    const canvas = overlayRef.current
+    const img = imgRef.current
+    if (!canvas || !img || !showZones) return
+    const W = 200
+    const aspect = (img.naturalHeight || 1) / (img.naturalWidth || 1)
+    const H = Math.max(1, Math.round(W * aspect))
+    canvas.width = W
+    canvas.height = H
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.clearRect(0, 0, W, H)
+    drawIsophones(ctx, W, H, isophoneSources)
+  }, [showZones, isophoneSources, mapImage])
 
   // ── Chargement de l'image ────────────────────────────────────────────────
   function handleFile(file: File) {
@@ -171,6 +251,24 @@ export default function SiteMap({
     const ctx = canvas.getContext('2d')!
     ctx.drawImage(img, 0, 0, naturalW, naturalH)
 
+    // Zones isophones (si activées) — rendu basse résolution puis upscale
+    if (showZones && isophoneSources.length >= 2) {
+      const W = 200
+      const H = Math.max(1, Math.round(W * (naturalH / naturalW)))
+      const tmp = document.createElement('canvas')
+      tmp.width = W
+      tmp.height = H
+      const tctx = tmp.getContext('2d')
+      if (tctx) {
+        drawIsophones(tctx, W, H, isophoneSources, 110)
+        ctx.save()
+        ctx.globalCompositeOperation = 'multiply'
+        ctx.imageSmoothingEnabled = true
+        ctx.drawImage(tmp, 0, 0, naturalW, naturalH)
+        ctx.restore()
+      }
+    }
+
     // Cercles + étiquettes pour chaque marqueur
     const radius = Math.max(10, Math.round(Math.min(naturalW, naturalH) / 60))
     ctx.font = `bold ${Math.max(12, Math.round(radius * 1.4))}px sans-serif`
@@ -201,6 +299,9 @@ export default function SiteMap({
       ctx.fillText(pt, cx, cy + radius * 2.5)
       i++
     }
+
+    // Badge QR + libellé en bas à droite
+    await drawQrBadge(canvas, { scale: Math.max(1, Math.round(naturalW / 800)) })
 
     canvas.toBlob((blob) => {
       if (!blob) return
@@ -281,6 +382,20 @@ export default function SiteMap({
             <RotateCcw size={12} />
             Réinitialiser les marqueurs
           </button>
+          {isophoneSources.length >= 2 && (
+            <button
+              onClick={() => setShowZones((v) => !v)}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border transition-colors ${
+                showZones
+                  ? 'bg-emerald-700 text-white border-emerald-600'
+                  : 'bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100 border-gray-600'
+              }`}
+              title="Interpolation simplifiée IDW (inverse distance) — non substituable à ISO 9613-2"
+            >
+              {showZones ? <EyeOff size={12} /> : <Activity size={12} />}
+              {showZones ? 'Masquer isophones' : 'Calculer isophones'}
+            </button>
+          )}
           <button
             onClick={handleExportPNG}
             disabled={!mapImage}
@@ -336,6 +451,33 @@ export default function SiteMap({
               onClick={placeMarker}
               style={{ cursor: activePoint ? 'crosshair' : 'default' }}
             />
+            {/* Canvas isophones (interpolation IDW) */}
+            {showZones && (
+              <canvas
+                ref={overlayRef}
+                className="pointer-events-none absolute inset-0 w-full h-full"
+                style={{ imageRendering: 'auto', mixBlendMode: 'multiply' }}
+              />
+            )}
+            {/* Légende isophones + avertissement */}
+            {showZones && (
+              <div className="absolute left-2 bottom-2 px-2 py-1.5 rounded bg-gray-900/85
+                              border border-gray-700 text-[10px] text-gray-200 space-y-1
+                              pointer-events-none">
+                <div className="font-semibold text-gray-300 uppercase tracking-wider text-[9px]">
+                  Isophones (LAeq)
+                </div>
+                <div className="flex items-center gap-3">
+                  <span className="flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 rounded-sm" style={{backgroundColor:'#16a34a'}}/>&lt; 40 dB</span>
+                  <span className="flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 rounded-sm" style={{backgroundColor:'#eab308'}}/>40–50 dB</span>
+                  <span className="flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 rounded-sm" style={{backgroundColor:'#ea580c'}}/>50–60 dB</span>
+                  <span className="flex items-center gap-1"><i className="inline-block w-2.5 h-2.5 rounded-sm" style={{backgroundColor:'#dc2626'}}/>&gt; 60 dB</span>
+                </div>
+                <div className="text-amber-400 italic">
+                  ⚠ Estimation simplifiée — non substituable à une modélisation ISO 9613-2
+                </div>
+              </div>
+            )}
             {/* Marqueurs */}
             {assignedPoints.map((pt, i) => {
               const m = markers[pt]

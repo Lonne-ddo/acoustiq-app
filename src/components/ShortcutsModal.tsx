@@ -4,13 +4,16 @@
 import { X } from 'lucide-react'
 import { t } from '../modules/i18n'
 
-const SHORTCUTS = [
-  { keys: 'Espace', descKey: 'shortcuts.space' },
-  { keys: '← / →', descKey: 'shortcuts.arrows' },
-  { keys: '+ / -', descKey: 'shortcuts.zoom' },
-  { keys: 'Ctrl + S', descKey: 'shortcuts.save' },
-  { keys: 'Ctrl + O', descKey: 'shortcuts.openProject' },
-  { keys: 'Échap', descKey: 'shortcuts.escape' },
+const SHORTCUTS: Array<{ keys: string; description: string }> = [
+  { keys: 'Espace', description: 'Lecture / pause de l\'audio' },
+  { keys: '← / →', description: 'Pan du graphique gauche / droite' },
+  { keys: '+ / −', description: 'Zoom avant / arrière' },
+  { keys: 'R', description: 'Réinitialiser le zoom (vue complète)' },
+  { keys: 'F', description: 'Basculer le mode présentation (plein écran)' },
+  { keys: 'D', description: 'Détecter les événements automatiquement' },
+  { keys: 'Ctrl + S', description: 'Sauvegarder le projet' },
+  { keys: 'Ctrl + O', description: 'Ouvrir un projet' },
+  { keys: 'Échap', description: 'Quitter mode/sélection courante (présentation, comparaison, modale)' },
 ]
 
 interface Props {
@@ -34,7 +37,7 @@ export default function ShortcutsModal({ onClose }: Props) {
         <div className="px-5 py-4 space-y-2">
           {SHORTCUTS.map((s) => (
             <div key={s.keys} className="flex items-center justify-between py-1.5">
-              <span className="text-xs text-gray-300">{t(s.descKey)}</span>
+              <span className="text-xs text-gray-300">{s.description}</span>
               <kbd className="text-xs bg-gray-800 text-gray-400 border border-gray-600
                              rounded px-2 py-0.5 font-mono">
                 {s.keys}

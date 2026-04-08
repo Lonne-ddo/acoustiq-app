@@ -41,6 +41,72 @@ export interface CandidateEvent {
   laeq: number   // valeur LAeq au pic
 }
 
+/** Annotation textuelle ancrée à un instant et un niveau dB sur le graphique */
+export interface ChartAnnotation {
+  id: string
+  text: string
+  day: string    // YYYY-MM-DD
+  time: string   // HH:MM
+  laeq: number   // niveau dB(A) sur l'axe Y
+  color?: string
+}
+
+/** Snapshot d'indices acoustiques pour un point/date — sauvegardé dans le projet
+ *  pour permettre la comparaison sans recharger les données brutes. */
+export interface IndicesSnapshot {
+  laeq: number
+  l10: number
+  l50: number
+  l90: number
+  lafmax: number
+  lafmin: number
+}
+
+/** Conditions météorologiques saisies manuellement par l'utilisateur. */
+export interface MeteoData {
+  windSpeed: number | null     // km/h
+  windDirection: '' | 'N' | 'NE' | 'E' | 'SE' | 'S' | 'SO' | 'O' | 'NO'
+  temperature: number | null   // °C
+  conditions: '' | 'Dégagé' | 'Nuageux' | 'Couvert' | 'Précipitations'
+  note: string
+}
+
+export const DEFAULT_METEO: MeteoData = {
+  windSpeed: null,
+  windDirection: '',
+  temperature: null,
+  conditions: '',
+  note: '',
+}
+
+/** Item d'une checklist terrain (case à cocher) */
+export interface ChecklistItem {
+  id: string
+  text: string
+  checked: boolean
+  /** Vrai si l'item a été ajouté manuellement par l'utilisateur (suppressible) */
+  custom?: boolean
+}
+
+/** État complet de la checklist terrain (3 sections + items custom) */
+export interface ChecklistState {
+  before: ChecklistItem[]
+  during: ChecklistItem[]
+  after: ChecklistItem[]
+}
+
+/** Modèle de configuration réutilisable (point names, conformité, plage Y) */
+export interface ProjectTemplate {
+  id: string
+  name: string
+  builtin?: boolean
+  pointNames: string[]
+  receptor: 'I' | 'II' | 'III' | 'IV'
+  period: 'jour' | 'nuit'
+  yMin: number
+  yMax: number
+}
+
 /** Résumé partageable des résultats Conformité 2026 (pour le rapport) */
 export interface ConformiteSummary {
   receptor: 'I' | 'II' | 'III' | 'IV'
@@ -49,6 +115,8 @@ export interface ConformiteSummary {
   evalHour: string         // HH:MM
   date: string
   limit: number            // dB(A)
+  /** Incertitude combinée appliquée (± dB) — ISO 9613-2 */
+  uncertainty?: number
   points: Array<{
     point: string
     ba: number | null
@@ -58,6 +126,10 @@ export interface ConformiteSummary {
     criterion: number
     appliedKLabel: string
     pass: boolean | null
+    /** LAr,1h + incertitude combinée (dB(A)), null si lar null */
+    larPlusU?: number | null
+    /** Vrai si la marge d'incertitude conduit au dépassement */
+    margeNonConforme?: boolean
   }>
 }
 
@@ -132,4 +204,12 @@ export interface ProjectData {
   mapImage?: string | null
   /** Positions des marqueurs par point de mesure */
   mapMarkers?: Record<string, MarkerPos>
+  /** Conditions météorologiques saisies manuellement */
+  meteo?: MeteoData
+  /** État de la checklist terrain (cases cochées + items personnalisés) */
+  checklist?: ChecklistState
+  /** Snapshot d'indices par point — clé "BV-94" ou "BV-94|2026-03-09" si plusieurs jours */
+  indicesSnapshot?: Record<string, IndicesSnapshot>
+  /** Nom du projet (purement informatif, utilisé par la comparaison) */
+  projectName?: string
 }

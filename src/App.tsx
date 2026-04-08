@@ -10,9 +10,7 @@ import {
   Upload,
   AlertCircle,
   X,
-  TableProperties,
   Layers,
-  Calculator,
   FileText,
   Shield,
   Save,
@@ -23,9 +21,10 @@ import {
   ChevronRight,
   Plus,
   Loader2,
-  MapPin,
   ChevronDown,
   ChevronUp,
+  GitCompare,
+  ClipboardCheck,
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import type {
@@ -39,8 +38,35 @@ import type {
   ConformiteSummary,
   MarkerPos,
   CandidateEvent,
+  ChartAnnotation,
+  ProjectTemplate,
+  MeteoData,
+  IndicesSnapshot,
+  ChecklistState,
 } from './types'
-import { detectRisingEvents } from './utils/acoustics'
+import { DEFAULT_METEO } from './types'
+import ChecklistModal, { DEFAULT_CHECKLIST } from './components/ChecklistModal'
+import HistoryTab from './components/HistoryTab'
+import RegulationTab from './components/RegulationTab'
+import WorkflowGuide from './components/WorkflowGuide'
+import {
+  detectRisingEvents,
+  laeqAvg,
+  computeL10,
+  computeL50,
+  computeL90,
+  computeLAFmax,
+  computeLAFmin,
+} from './utils/acoustics'
+import {
+  BUILTIN_TEMPLATES,
+  loadUserTemplates,
+  saveUserTemplates,
+  MAX_USER_TEMPLATES,
+} from './modules/templates'
+import TemplatesSection from './components/TemplatesSection'
+import MeteoSection from './components/MeteoSection'
+import ComparisonModal from './components/ComparisonModal'
 import { parse831C } from './modules/parser831C'
 import { parse821SE, detect821SE } from './modules/parser821SE'
 import { saveProject, loadProject } from './modules/projectManager'
@@ -135,7 +161,41 @@ function saveRecent(projects: RecentProject[]) {
   localStorage.setItem(RECENT_KEY, JSON.stringify(projects.slice(0, MAX_RECENT)))
 }
 
-type Tab = 'chart' | 'map' | 'spectrogram' | 'lw' | 'concordance' | 'report' | 'reafie'
+type Tab = 'chart' | 'map' | 'lw' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation'
+
+/**
+ * Regroupement des onglets en 4 catégories principales pour réduire le bruit
+ * visuel. Le spectrogramme est désormais uniquement embarqué sous le graphique
+ * (l'ancien onglet « spectrogram » a été retiré — le composant Spectrogram
+ * reste utilisé en mode compact dans l'onglet « Analyse »).
+ */
+type PrimaryTab = 'analyse' | 'conformite' | 'rapport' | 'outils'
+
+const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
+  chart: 'analyse',
+  reafie: 'conformite',
+  report: 'rapport',
+  lw: 'rapport',
+  concordance: 'rapport',
+  map: 'outils',
+  regulation: 'outils',
+  history: 'outils',
+}
+
+const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
+  analyse: [{ id: 'chart', label: 'Visualisation' }],
+  conformite: [{ id: 'reafie', label: 'Conformité 2026' }],
+  rapport: [
+    { id: 'report', label: 'Rapport' },
+    { id: 'lw', label: 'Calcul Lw' },
+    { id: 'concordance', label: 'Concordance' },
+  ],
+  outils: [
+    { id: 'map', label: 'Carte' },
+    { id: 'regulation', label: 'Réglementation' },
+    { id: 'history', label: 'Historique' },
+  ],
+}
 
 const FILE_LIST_LIMIT = 10
 
@@ -265,6 +325,21 @@ interface SidebarProps {
   loadProgress: number
   rejectedFiles: RejectedFile[]
   candidates: CandidateEvent[]
+  annotations: ChartAnnotation[]
+  pendingAnnotationText: string | null
+  onAnnotationAdd: (a: ChartAnnotation) => void
+  onAnnotationRemove: (id: string) => void
+  onAnnotationUpdate: (id: string, text: string) => void
+  onPendingAnnotationChange: (text: string | null) => void
+  onOpenComparison: () => void
+  templates: ProjectTemplate[]
+  userTemplateCount: number
+  onSaveTemplate: (name: string) => void
+  onApplyTemplate: (template: ProjectTemplate) => void
+  onDeleteTemplate: (id: string) => void
+  meteo: MeteoData
+  onMeteoChange: (m: MeteoData) => void
+  onOpenChecklist: () => void
   onPointChange: (fileId: string, point: string) => void
   onFileRemove: (fileId: string) => void
   onEventAdd: (ev: SourceEvent) => void
@@ -281,11 +356,52 @@ interface SidebarProps {
   onAudioSeek: (timeMin: number) => void
 }
 
+/**
+ * Bloc accordéon utilisé dans la sidebar.
+ * En-tête cliquable, contenu replié/déplié, pas de bordures inutiles.
+ */
+function SidebarSection({
+  title,
+  defaultOpen = false,
+  children,
+}: {
+  title: string
+  defaultOpen?: boolean
+  children: React.ReactNode
+}) {
+  const [open, setOpen] = useState(defaultOpen)
+  return (
+    <div className="border-b border-gray-800/70">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center justify-between px-4 py-3 text-left
+                   hover:bg-gray-800/40 transition-colors"
+      >
+        <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+          {title}
+        </span>
+        <ChevronDown
+          size={12}
+          className={`text-gray-600 transition-transform ${open ? '' : '-rotate-90'}`}
+        />
+      </button>
+      {open && <div className="px-3 pb-4">{children}</div>}
+    </div>
+  )
+}
+
 function Sidebar({
   collapsed, onToggle,
   files, pointMap, events, availableDates, errors,
   audioFile, chartTimeMin, loading, loadProgress, rejectedFiles,
   candidates,
+  annotations, pendingAnnotationText,
+  onAnnotationAdd, onAnnotationRemove, onAnnotationUpdate, onPendingAnnotationChange,
+  onOpenComparison,
+  templates, userTemplateCount,
+  onSaveTemplate, onApplyTemplate, onDeleteTemplate,
+  meteo, onMeteoChange,
+  onOpenChecklist,
   onPointChange, onFileRemove,
   onEventAdd, onEventRemove, onClearError,
   onDetectCandidates, onConfirmCandidate, onDismissCandidate,
@@ -435,64 +551,56 @@ function Sidebar({
         <div className="flex items-center gap-2">
           <Activity className="text-emerald-400" size={20} />
           <span className="font-bold text-lg tracking-tight">{t('sidebar.title')}</span>
-          <button onClick={onToggle} className="ml-auto p-0.5 text-gray-600 hover:text-gray-300 transition-colors">
+          <button
+            onClick={onOpenComparison}
+            className="ml-auto p-1 text-gray-500 hover:text-emerald-400 hover:bg-gray-800 rounded transition-colors"
+            title="Comparer projets"
+            aria-label="Comparer projets"
+          >
+            <GitCompare size={13} />
+          </button>
+          <button onClick={onToggle} className="p-0.5 text-gray-600 hover:text-gray-300 transition-colors">
             <ChevronLeft size={14} />
           </button>
         </div>
         <p className="text-xs text-gray-400 mt-1">{t('sidebar.subtitle')}</p>
       </div>
 
-      {/* Import + projet */}
-      <div className="px-3 py-3 border-b border-gray-700 shrink-0">
-        <input ref={inputRef} type="file" accept=".xlsx" multiple className="hidden" onChange={handleFileChange} />
+      {/* Actions rapides : projet + checklist */}
+      <div className="px-3 py-2 border-b border-gray-800 shrink-0 flex gap-1.5">
+        <input ref={projectInputRef} type="file" accept=".json" className="hidden" onChange={handleProjectLoad} />
         <button
-          onClick={() => inputRef.current?.click()}
-          disabled={loading}
-          className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md
-                     bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50
-                     text-sm font-medium transition-colors"
+          onClick={onSaveProject}
+          disabled={files.length === 0}
+          className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
+                     bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-30
+                     text-xs font-medium transition-colors"
         >
-          {loading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
-          {loading ? t('sidebar.loading') : t('sidebar.import')}
+          <Save size={11} />
+          {t('sidebar.save')}
         </button>
-
-        {/* Barre de progression */}
-        {loading && loadProgress > 0 && (
-          <div className="mt-1.5 w-full bg-gray-800 rounded-full h-1">
-            <div
-              className="bg-emerald-500 h-1 rounded-full transition-all duration-300"
-              style={{ width: `${loadProgress}%` }}
-            />
-          </div>
-        )}
-
-        <p className="text-xs text-gray-500 text-center mt-1">{t('sidebar.importHint')}</p>
-
-        <div className="flex gap-1.5 mt-2">
-          <input ref={projectInputRef} type="file" accept=".json" className="hidden" onChange={handleProjectLoad} />
-          <button
-            onClick={onSaveProject}
-            disabled={files.length === 0}
-            className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
-                       bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-30
-                       text-xs font-medium border border-gray-600 transition-colors"
-          >
-            <Save size={11} />
-            {t('sidebar.save')}
-          </button>
-          <button
-            onClick={() => projectInputRef.current?.click()}
-            className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
-                       bg-gray-800 text-gray-300 hover:bg-gray-700
-                       text-xs font-medium border border-gray-600 transition-colors"
-          >
-            <FolderOpen size={11} />
-            {t('sidebar.open')}
-          </button>
-        </div>
+        <button
+          onClick={() => projectInputRef.current?.click()}
+          className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
+                     bg-gray-800 text-gray-300 hover:bg-gray-700
+                     text-xs font-medium transition-colors"
+        >
+          <FolderOpen size={11} />
+          {t('sidebar.open')}
+        </button>
+        <button
+          onClick={onOpenChecklist}
+          className="flex items-center justify-center px-2 py-1.5 rounded
+                     bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-emerald-300
+                     transition-colors"
+          title="Checklist terrain"
+          aria-label="Checklist terrain"
+        >
+          <ClipboardCheck size={12} />
+        </button>
       </div>
 
-      {/* Zone scrollable */}
+      {/* Zone scrollable — 3 sections accordéon */}
       <div className="flex-1 overflow-y-auto flex flex-col">
         {/* Erreurs */}
         {errors.length > 0 && (
@@ -513,14 +621,31 @@ function Sidebar({
           </div>
         )}
 
-        {/* Fichiers */}
-        <div className="px-3 py-4 border-b border-gray-700">
-          <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
-            {t('sidebar.files')}
-          </p>
+        {/* ─── 📂 FICHIERS ─────────────────────────────────────────────── */}
+        <SidebarSection title="📂 Fichiers" defaultOpen>
+          <input ref={inputRef} type="file" accept=".xlsx" multiple className="hidden" onChange={handleFileChange} />
+          <button
+            onClick={() => inputRef.current?.click()}
+            disabled={loading}
+            className="w-full flex items-center justify-center gap-2 px-3 py-2 rounded-md
+                       bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50
+                       text-sm font-medium transition-colors mb-3"
+          >
+            {loading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />}
+            {loading ? t('sidebar.loading') : t('sidebar.import')}
+          </button>
+          {loading && loadProgress > 0 && (
+            <div className="mb-2 w-full bg-gray-800 rounded-full h-1">
+              <div
+                className="bg-emerald-500 h-1 rounded-full transition-all duration-300"
+                style={{ width: `${loadProgress}%` }}
+              />
+            </div>
+          )}
+
           {files.length === 0 ? (
-            <div className="text-center text-gray-500 text-sm mt-4 px-2">
-              <FileAudio size={28} className="mx-auto mb-2 opacity-40" />
+            <div className="text-center text-gray-500 text-sm py-3 px-2">
+              <FileAudio size={28} className="mx-auto mb-2 opacity-30" />
               <p className="text-xs text-gray-600">{t('sidebar.filesEmpty')}</p>
             </div>
           ) : (
@@ -532,7 +657,6 @@ function Sidebar({
             />
           )}
 
-          {/* Fichiers non supportés */}
           {rejectedFiles.length > 0 && (
             <div className="mt-3">
               <p className="text-xs font-semibold text-red-400 uppercase tracking-wider mb-1.5">
@@ -546,42 +670,65 @@ function Sidebar({
               ))}
             </div>
           )}
-        </div>
+        </SidebarSection>
 
-        {/* Audio */}
-        {audioFile ? (
-          <AudioPlayer
-            audio={audioFile}
-            chartTimeMin={chartTimeMin}
-            onSeek={onAudioSeek}
-            onRemove={onAudioRemove}
-          />
-        ) : (
-          <div className="px-3 py-3 border-b border-gray-700">
-            <input ref={audioInputRef} type="file" accept=".wav" className="hidden" onChange={handleAudioLoad} />
-            <button
-              onClick={() => audioInputRef.current?.click()}
-              className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded
-                         bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200
-                         text-xs border border-dashed border-gray-600 transition-colors"
-            >
-              <FileAudio size={12} />
-              {t('sidebar.loadWav')}
-            </button>
+        {/* ─── 📍 ÉVÉNEMENTS ───────────────────────────────────────────── */}
+        <SidebarSection title="📍 Événements" defaultOpen>
+          <div className="-mx-3">
+            <EventsPanel
+              events={events}
+              availableDates={availableDates}
+              onAdd={onEventAdd}
+              onRemove={onEventRemove}
+              candidates={candidates}
+              onDetect={onDetectCandidates}
+              onConfirmCandidate={onConfirmCandidate}
+              onDismissCandidate={onDismissCandidate}
+              annotations={annotations}
+              onAnnotationAdd={onAnnotationAdd}
+              onAnnotationRemove={onAnnotationRemove}
+              onAnnotationUpdate={onAnnotationUpdate}
+              pendingAnnotationText={pendingAnnotationText}
+              onPendingAnnotationChange={onPendingAnnotationChange}
+            />
           </div>
-        )}
+        </SidebarSection>
 
-        {/* Événements */}
-        <EventsPanel
-          events={events}
-          availableDates={availableDates}
-          onAdd={onEventAdd}
-          onRemove={onEventRemove}
-          candidates={candidates}
-          onDetect={onDetectCandidates}
-          onConfirmCandidate={onConfirmCandidate}
-          onDismissCandidate={onDismissCandidate}
-        />
+        {/* ─── ⚙️ OPTIONS ──────────────────────────────────────────────── */}
+        <SidebarSection title="⚙️ Options">
+          <div className="-mx-3 space-y-0">
+            <MeteoSection meteo={meteo} onChange={onMeteoChange} />
+            <TemplatesSection
+              templates={templates}
+              userCount={userTemplateCount}
+              maxUser={MAX_USER_TEMPLATES}
+              onSave={onSaveTemplate}
+              onApply={onApplyTemplate}
+              onDelete={onDeleteTemplate}
+            />
+            {audioFile ? (
+              <AudioPlayer
+                audio={audioFile}
+                chartTimeMin={chartTimeMin}
+                onSeek={onAudioSeek}
+                onRemove={onAudioRemove}
+              />
+            ) : (
+              <div className="px-3 py-3 border-t border-gray-800">
+                <input ref={audioInputRef} type="file" accept=".wav" className="hidden" onChange={handleAudioLoad} />
+                <button
+                  onClick={() => audioInputRef.current?.click()}
+                  className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded
+                             bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200
+                             text-xs border border-dashed border-gray-600 transition-colors"
+                >
+                  <FileAudio size={12} />
+                  {t('sidebar.loadWav')}
+                </button>
+              </div>
+            )}
+          </div>
+        </SidebarSection>
       </div>
 
       <div className="px-4 py-3 border-t border-gray-700 text-xs text-gray-600 shrink-0 space-y-0.5">
@@ -632,6 +779,17 @@ interface MainPanelProps {
   overlayDate: string | null
   onOverlayDateChange: (d: string | null) => void
   candidates: CandidateEvent[]
+  annotations: ChartAnnotation[]
+  pendingAnnotationText: string | null
+  onAnnotationAdd: (a: ChartAnnotation) => void
+  onPendingAnnotationChange: (text: string | null) => void
+  conformiteReceptor: 'I' | 'II' | 'III' | 'IV'
+  conformitePeriod: 'jour' | 'nuit'
+  onConformiteReceptorChange: (r: 'I' | 'II' | 'III' | 'IV') => void
+  onConformitePeriodChange: (p: 'jour' | 'nuit') => void
+  meteo: MeteoData
+  presentationMode: boolean
+  onPresentationToggle: () => void
   onDateChange: (date: string) => void
   onTabChange: (tab: Tab) => void
   onCellChange: (eventId: string, point: string, state: ConcordanceState) => void
@@ -654,6 +812,11 @@ function MainPanel({
   spectrogramExpanded, onSpectrogramToggle, onAddEvent,
   mapImage, onMapImageChange, mapMarkers, onMapMarkersChange,
   overlayDate, onOverlayDateChange, candidates,
+  annotations, pendingAnnotationText,
+  onAnnotationAdd, onPendingAnnotationChange,
+  conformiteReceptor, conformitePeriod,
+  onConformiteReceptorChange, onConformitePeriodChange,
+  meteo, presentationMode, onPresentationToggle,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
@@ -662,9 +825,13 @@ function MainPanel({
   const hasChart = chartFiles.length > 0
   const [showRecent, setShowRecent] = useState(false)
 
+  // En mode présentation, on force l'onglet Visualisation
+  const effectiveTab: Tab = presentationMode ? 'chart' : activeTab
+
   return (
-    <main className="flex-1 bg-gray-950 text-gray-100 flex flex-col min-w-0 overflow-hidden">
-      {/* Barre de navigation */}
+    <main className={`flex-1 ${presentationMode ? 'bg-black' : 'bg-gray-950'} text-gray-100 flex flex-col min-w-0 overflow-hidden`}>
+      {/* Barre de navigation — masquée en mode présentation */}
+      {!presentationMode && (
       <header className="px-6 py-3 border-b border-gray-800 flex items-center gap-4 shrink-0">
         <div className="flex items-center gap-2">
           <BarChart2 size={18} className="text-emerald-400" />
@@ -721,19 +888,26 @@ function MainPanel({
           </div>
         </div>
 
-        {/* Onglets */}
+        {/* Onglets primaires (4) — sous-onglets affichés en dessous si > 1 */}
         <nav className="flex gap-1 ml-4">
           {([
-            ['chart', <BarChart2 size={13} key="c" />, t('tab.visualization')],
-            ['map', <MapPin size={13} key="m" />, 'Carte'],
-            ['spectrogram', <Layers size={13} key="s" />, t('tab.spectrogram')],
-            ['reafie', <Shield size={13} key="re" />, 'Conformité 2026'],
-            ['lw', <Calculator size={13} key="l" />, t('tab.lw')],
-            ['concordance', <TableProperties size={13} key="t" />, t('tab.concordance')],
-            ['report', <FileText size={13} key="r" />, t('tab.report')],
-          ] as [Tab, React.ReactNode, string][]).map(([id, icon, label]) => (
-            <TabButton key={id} active={activeTab === id} onClick={() => onTabChange(id)} icon={icon} label={label} aria-label={label} />
-          ))}
+            ['analyse',    <BarChart2 size={13} key="a" />,  'Analyse'],
+            ['conformite', <Shield size={13} key="c" />,     'Conformité'],
+            ['rapport',    <FileText size={13} key="r" />,   'Rapport'],
+            ['outils',     <Layers size={13} key="o" />,     'Outils'],
+          ] as [PrimaryTab, React.ReactNode, string][]).map(([pid, icon, label]) => {
+            const isActive = PRIMARY_TAB_OF[activeTab] === pid
+            return (
+              <TabButton
+                key={pid}
+                active={isActive}
+                onClick={() => onTabChange(SUBTABS[pid][0].id)}
+                icon={icon}
+                label={label}
+                aria-label={label}
+              />
+            )
+          })}
         </nav>
 
         {/* Actions header */}
@@ -773,9 +947,42 @@ function MainPanel({
           </button>
         </div>
       </header>
+      )}
+
+      {/* Sous-onglets : visible uniquement quand l'onglet primaire en a > 1 */}
+      {!presentationMode && (() => {
+        const sub = SUBTABS[PRIMARY_TAB_OF[activeTab]]
+        if (sub.length <= 1) return null
+        return (
+          <nav className="flex items-center gap-1 px-6 py-1.5 border-b border-gray-800/70 bg-gray-900/40">
+            {sub.map((s) => (
+              <button
+                key={s.id}
+                onClick={() => onTabChange(s.id)}
+                className={`text-xs px-2.5 py-1 rounded transition-colors ${
+                  activeTab === s.id
+                    ? 'bg-emerald-700 text-white'
+                    : 'text-gray-400 hover:text-gray-100 hover:bg-gray-800'
+                }`}
+              >
+                {s.label}
+              </button>
+            ))}
+          </nav>
+        )
+      })()}
+
+      {/* Bandeau guidé en 3 étapes (visible si workflow incomplet) */}
+      {!presentationMode && (
+        <WorkflowGuide
+          hasFiles={files.length > 0}
+          allAssigned={files.length > 0 && files.every((f) => !!pointMap[f.id])}
+          hasChart={hasChart && !!selectedDate}
+        />
+      )}
 
       {/* Contenu selon l'onglet */}
-      {activeTab === 'chart' && (
+      {effectiveTab === 'chart' && (
         <div className="flex-1 flex flex-col min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           {hasChart ? (
             <>
@@ -796,6 +1003,14 @@ function MainPanel({
                   overlayDate={overlayDate}
                   onOverlayDateChange={onOverlayDateChange}
                   candidates={candidates}
+                  annotations={annotations}
+                  pendingAnnotationText={pendingAnnotationText}
+                  onAnnotationPlace={onAnnotationAdd}
+                  onPendingAnnotationCleared={() => onPendingAnnotationChange(null)}
+                  presentationMode={presentationMode}
+                  onPresentationToggle={onPresentationToggle}
+                  projectName={projectName}
+                  meteo={meteo}
                 />
               </div>
 
@@ -832,23 +1047,25 @@ function MainPanel({
                 )}
               </div>
 
-              <IndicesPanel files={chartFiles} pointMap={pointMap} selectedDate={selectedDate} />
+              {!presentationMode && (
+                <IndicesPanel files={chartFiles} pointMap={pointMap} selectedDate={selectedDate} meteo={meteo} aggregationSeconds={aggregationSeconds} />
+              )}
             </>
           ) : (
-            <div className="flex-1 flex flex-col items-center justify-center text-gray-600 gap-3">
-              <BarChart2 size={48} className="opacity-20" />
-              <p className="text-sm">{t('general.loadFile')}</p>
-              {files.length > 0 && (
-                <p className="text-xs text-gray-700">
-                  {files.length} fichier{files.length > 1 ? 's' : ''} — {t('general.waitingAssign')}
-                </p>
-              )}
-            </div>
+            <EmptyState
+              icon={<BarChart2 size={40} />}
+              text="Importez un fichier 831C pour commencer."
+              hint={
+                files.length > 0
+                  ? `${files.length} fichier${files.length > 1 ? 's' : ''} chargé${files.length > 1 ? 's' : ''} — ${t('general.waitingAssign')}`
+                  : undefined
+              }
+            />
           )}
         </div>
       )}
 
-      {activeTab === 'map' && (
+      {effectiveTab === 'map' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           <SiteMap
             files={files}
@@ -865,50 +1082,89 @@ function MainPanel({
         </div>
       )}
 
-      {activeTab === 'spectrogram' && (
-        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
-          <Spectrogram
-            files={chartFiles} pointMap={pointMap} selectedDate={selectedDate}
-            availableDates={availableDates} onDateChange={onDateChange}
-            events={events} zoomRange={zoomRange}
-            aggregationSeconds={aggregationSeconds}
-          />
-        </div>
-      )}
-
-      {activeTab === 'lw' && (
+      {effectiveTab === 'lw' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]"><LwCalculator /></div>
       )}
 
-      {activeTab === 'concordance' && (
+      {effectiveTab === 'concordance' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           <ConcordanceTable events={events} pointNames={assignedPoints} concordance={concordance} onCellChange={onCellChange} />
         </div>
       )}
 
-      {activeTab === 'report' && (
+      {effectiveTab === 'report' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
-          <ReportGenerator
-            files={files} pointMap={pointMap} events={events}
-            concordance={concordance} selectedDate={selectedDate}
-            assignedPoints={assignedPoints}
-            conformiteSummary={conformiteSummary}
-            companyName={settings.companyName}
-          />
+          {hasChart ? (
+            <ReportGenerator
+              files={files} pointMap={pointMap} events={events}
+              concordance={concordance} selectedDate={selectedDate}
+              assignedPoints={assignedPoints}
+              conformiteSummary={conformiteSummary}
+              companyName={settings.companyName}
+              meteo={meteo}
+            />
+          ) : (
+            <EmptyState
+              icon={<FileText size={40} />}
+              text="Les données du projet apparaîtront ici une fois les mesures importées."
+            />
+          )}
         </div>
       )}
 
-      {activeTab === 'reafie' && (
+      {effectiveTab === 'history' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
-          <Conformite2026
-            files={chartFiles}
-            pointMap={pointMap}
-            selectedDate={selectedDate}
-            onSummaryChange={onConformiteSummaryChange}
-          />
+          <HistoryTab />
+        </div>
+      )}
+
+      {effectiveTab === 'regulation' && (
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+          <RegulationTab />
+        </div>
+      )}
+
+      {effectiveTab === 'reafie' && (
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+          {hasChart ? (
+            <Conformite2026
+              files={chartFiles}
+              pointMap={pointMap}
+              selectedDate={selectedDate}
+              onSummaryChange={onConformiteSummaryChange}
+              receptor={conformiteReceptor}
+              onReceptorChange={onConformiteReceptorChange}
+              period={conformitePeriod}
+              onPeriodChange={onConformitePeriodChange}
+            />
+          ) : (
+            <EmptyState
+              icon={<Shield size={40} />}
+              text="Chargez des données et définissez le bruit résiduel pour évaluer la conformité."
+            />
+          )}
         </div>
       )}
     </main>
+  )
+}
+
+/** État vide unifié pour les onglets sans données. */
+function EmptyState({
+  icon,
+  text,
+  hint,
+}: {
+  icon: React.ReactNode
+  text: string
+  hint?: string
+}) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center text-gray-500 gap-3 px-8 text-center">
+      <div className="text-gray-700 opacity-40">{icon}</div>
+      <p className="text-sm text-gray-400 max-w-md">{text}</p>
+      {hint && <p className="text-xs text-gray-600">{hint}</p>}
+    </div>
   )
 }
 
@@ -966,6 +1222,60 @@ export default function App() {
 
   // Candidats événements (auto-détection)
   const [candidates, setCandidates] = useState<CandidateEvent[]>([])
+
+  // Annotations textuelles (ancrées sur le graphique)
+  const [annotations, setAnnotations] = useState<ChartAnnotation[]>([])
+  const [pendingAnnotationText, setPendingAnnotationText] = useState<string | null>(null)
+
+  // Conformité 2026 — récepteur et période lifted ici pour partage avec les templates
+  const [conformiteReceptor, setConformiteReceptor] = useState<'I' | 'II' | 'III' | 'IV'>('I')
+  const [conformitePeriod, setConformitePeriod] = useState<'jour' | 'nuit'>('jour')
+
+  // Météo (saisie manuelle)
+  const [meteo, setMeteo] = useState<MeteoData>(DEFAULT_METEO)
+
+  // Checklist terrain (sauvegardée avec le projet)
+  const [checklist, setChecklist] = useState<ChecklistState>(DEFAULT_CHECKLIST)
+  const [checklistOpen, setChecklistOpen] = useState(false)
+
+  // Mode présentation : masque sidebar + barre d'onglets
+  const [presentationMode, setPresentationMode] = useState(false)
+
+  // Modal de comparaison de projets
+  const [showComparison, setShowComparison] = useState(false)
+
+  // Snapshot d'indices courants (utilisé par la modal de comparaison)
+  const currentIndicesSnapshot = useMemo<Record<string, IndicesSnapshot>>(() => {
+    const groups = new Map<string, number[]>()
+    for (const f of files) {
+      const pt = pointMap[f.id]
+      if (!pt) continue
+      const key = `${pt}|${f.date}`
+      if (!groups.has(key)) groups.set(key, [])
+      const arr = groups.get(key)!
+      for (const dp of f.data) arr.push(dp.laeq)
+    }
+    const out: Record<string, IndicesSnapshot> = {}
+    for (const [key, vals] of groups) {
+      if (vals.length === 0) continue
+      out[key] = {
+        laeq: laeqAvg(vals),
+        l10: computeL10(vals),
+        l50: computeL50(vals),
+        l90: computeL90(vals),
+        lafmax: computeLAFmax(vals),
+        lafmin: computeLAFmin(vals),
+      }
+    }
+    return out
+  }, [files, pointMap])
+
+  // Templates utilisateurs
+  const [userTemplates, setUserTemplates] = useState<ProjectTemplate[]>(loadUserTemplates)
+  const allTemplates = useMemo<ProjectTemplate[]>(
+    () => [...BUILTIN_TEMPLATES, ...userTemplates],
+    [userTemplates],
+  )
 
   // Multi-projet
   const [projectName, setProjectName] = useState(t('project.untitled'))
@@ -1110,6 +1420,55 @@ export default function App() {
     setCandidates((prev) => prev.filter((x) => x.id !== id))
   }
 
+  // ---- Annotations textuelles ----
+  function handleAnnotationAdd(a: ChartAnnotation) {
+    setAnnotations((prev) => [...prev, a])
+  }
+  function handleAnnotationRemove(id: string) {
+    setAnnotations((prev) => prev.filter((a) => a.id !== id))
+  }
+  function handleAnnotationUpdate(id: string, text: string) {
+    setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, text } : a)))
+  }
+
+  // ---- Templates ----
+  const handleSaveTemplate = useCallback(
+    (name: string) => {
+      const tpl: ProjectTemplate = {
+        id: crypto.randomUUID(),
+        name,
+        pointNames: [...MEASUREMENT_POINTS],
+        receptor: conformiteReceptor,
+        period: conformitePeriod,
+        yMin: settings.yAxisMin,
+        yMax: settings.yAxisMax,
+      }
+      const next = [...userTemplates, tpl].slice(0, MAX_USER_TEMPLATES)
+      setUserTemplates(next)
+      saveUserTemplates(next)
+    },
+    [conformiteReceptor, conformitePeriod, settings.yAxisMin, settings.yAxisMax, userTemplates],
+  )
+
+  const handleApplyTemplate = useCallback(
+    (tpl: ProjectTemplate) => {
+      // Met à jour la configuration sans toucher aux fichiers/événements
+      setConformiteReceptor(tpl.receptor)
+      setConformitePeriod(tpl.period)
+      setSettings((s) => ({ ...s, yAxisMin: tpl.yMin, yAxisMax: tpl.yMax }))
+    },
+    [],
+  )
+
+  const handleDeleteTemplate = useCallback(
+    (id: string) => {
+      const next = userTemplates.filter((t) => t.id !== id)
+      setUserTemplates(next)
+      saveUserTemplates(next)
+    },
+    [userTemplates],
+  )
+
   // ---- Handlers concordance ----
   function handleCellChange(eventId: string, point: string, state: ConcordanceState) {
     setConcordance((prev) => ({ ...prev, [`${eventId}|${point}`]: state }))
@@ -1119,13 +1478,13 @@ export default function App() {
   const serializeCurrentState = useCallback(() => {
     return JSON.stringify({
       files: files.map((f) => ({ id: f.id, name: f.name, model: f.model, serial: f.serial, date: f.date, startTime: f.startTime, stopTime: f.stopTime, rowCount: f.rowCount })),
-      pointMap, events, concordance, mapImage, mapMarkers,
+      pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist,
     })
-  }, [files, pointMap, events, concordance, mapImage, mapMarkers])
+  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist])
 
   // ---- Handlers projet ----
   const handleSaveProject = useCallback(() => {
-    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers)
+    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist)
     // Sauvegarder dans les projets récents
     const state = serializeCurrentState()
     const entry: RecentProject = { id: projectId, name: projectName, savedAt: new Date().toISOString(), state }
@@ -1135,7 +1494,7 @@ export default function App() {
       saveRecent(updated)
       return updated
     })
-  }, [files, pointMap, events, concordance, mapImage, mapMarkers, projectId, projectName, serializeCurrentState])
+  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectId, projectName, checklist, serializeCurrentState])
 
   const handleLoadProject = useCallback((json: string) => {
     try {
@@ -1151,6 +1510,8 @@ export default function App() {
       setConcordance(project.concordance)
       if (project.mapImage !== undefined) setMapImage(project.mapImage ?? null)
       if (project.mapMarkers) setMapMarkers(project.mapMarkers)
+      if (project.meteo) setMeteo(project.meteo)
+      if (project.checklist) setChecklist(project.checklist)
       if (missingFiles.length > 0) {
         setErrors((prev) => [...prev, `${t('project.missingFiles')} : ${missingFiles.join(', ')}`])
       }
@@ -1178,6 +1539,9 @@ export default function App() {
     setConformiteSummary(null)
     setMapImage(null); setMapMarkers({})
     setOverlayDate(null); setCandidates([])
+    setAnnotations([]); setPendingAnnotationText(null)
+    setMeteo(DEFAULT_METEO)
+    setChecklist(DEFAULT_CHECKLIST)
     setProjectId(crypto.randomUUID()); setProjectName(t('project.untitled'))
   }, [files, projectId, projectName, serializeCurrentState])
 
@@ -1206,6 +1570,9 @@ export default function App() {
       // Les fichiers doivent être rechargés manuellement
       setFiles([]); setPointMap({}); setZoomRange(null); setAudioFile(null); setConformiteSummary(null)
       setOverlayDate(null); setCandidates([])
+      setAnnotations([]); setPendingAnnotationText(null)
+      setMeteo(parsed.meteo ?? DEFAULT_METEO)
+      setChecklist(parsed.checklist ?? DEFAULT_CHECKLIST)
       if (parsed.files?.length > 0) {
         setErrors([`${t('project.missingFiles')} : ${parsed.files.map((f: { name: string }) => f.name).join(', ')}`])
       }
@@ -1305,12 +1672,13 @@ export default function App() {
         return
       }
 
-      // Échap : fermer panneaux
+      // Échap : fermer panneaux ou quitter le mode présentation
       if (e.key === 'Escape') {
         setShowSettings(false)
         setShowShortcuts(false)
         setShowOnboarding(false)
         setShowChangelog(false)
+        setPresentationMode(false)
         return
       }
 
@@ -1349,11 +1717,32 @@ export default function App() {
         document.dispatchEvent(new CustomEvent('acoustiq:zoom-out'))
         return
       }
+
+      // F : bascule mode présentation
+      if (e.key === 'f' || e.key === 'F') {
+        e.preventDefault()
+        setPresentationMode((v) => !v)
+        return
+      }
+
+      // D : détection automatique d'événements
+      if (e.key === 'd' || e.key === 'D') {
+        e.preventDefault()
+        handleDetectCandidates()
+        return
+      }
+
+      // R : reset du zoom (vue complète)
+      if (e.key === 'r' || e.key === 'R') {
+        e.preventDefault()
+        setZoomRange(null)
+        return
+      }
     }
 
     document.addEventListener('keydown', handleKeyDown)
     return () => document.removeEventListener('keydown', handleKeyDown)
-  }, [handleSaveProject])
+  }, [handleSaveProject, handleDetectCandidates])
 
   // Input caché pour Ctrl+O
   function handleProjectFileInput(e: React.ChangeEvent<HTMLInputElement>) {
@@ -1375,6 +1764,7 @@ export default function App() {
         onChange={handleProjectFileInput}
       />
 
+      {!presentationMode && (
       <Sidebar
         collapsed={sidebarCollapsed}
         onToggle={() => setSidebarCollapsed((v) => !v)}
@@ -1389,6 +1779,21 @@ export default function App() {
         loadProgress={loadProgress}
         rejectedFiles={rejectedFiles}
         candidates={candidates}
+        annotations={annotations}
+        pendingAnnotationText={pendingAnnotationText}
+        onAnnotationAdd={handleAnnotationAdd}
+        onAnnotationRemove={handleAnnotationRemove}
+        onAnnotationUpdate={handleAnnotationUpdate}
+        onPendingAnnotationChange={setPendingAnnotationText}
+        onOpenComparison={() => setShowComparison(true)}
+        templates={allTemplates}
+        userTemplateCount={userTemplates.length}
+        onSaveTemplate={handleSaveTemplate}
+        onApplyTemplate={handleApplyTemplate}
+        onDeleteTemplate={handleDeleteTemplate}
+        meteo={meteo}
+        onMeteoChange={setMeteo}
+        onOpenChecklist={() => setChecklistOpen(true)}
         onParseFiles={handleParseFiles}
         onPointChange={handlePointChange}
         onFileRemove={handleFileRemove}
@@ -1404,6 +1809,7 @@ export default function App() {
         onAudioRemove={() => setAudioFile(null)}
         onAudioSeek={handleAudioSeek}
       />
+      )}
       <MainPanel
         files={files}
         pointMap={pointMap}
@@ -1431,6 +1837,17 @@ export default function App() {
         overlayDate={overlayDate}
         onOverlayDateChange={setOverlayDate}
         candidates={candidates}
+        annotations={annotations}
+        pendingAnnotationText={pendingAnnotationText}
+        onAnnotationAdd={handleAnnotationAdd}
+        onPendingAnnotationChange={setPendingAnnotationText}
+        conformiteReceptor={conformiteReceptor}
+        conformitePeriod={conformitePeriod}
+        onConformiteReceptorChange={setConformiteReceptor}
+        onConformitePeriodChange={setConformitePeriod}
+        meteo={meteo}
+        presentationMode={presentationMode}
+        onPresentationToggle={() => setPresentationMode((v) => !v)}
         onDateChange={setSelectedDate}
         onTabChange={setActiveTab}
         onCellChange={handleCellChange}
@@ -1464,6 +1881,19 @@ export default function App() {
       {showChangelog && (
         <Changelog onClose={() => setShowChangelog(false)} />
       )}
+      {showComparison && (
+        <ComparisonModal
+          currentIndices={currentIndicesSnapshot}
+          currentProjectName={projectName}
+          onClose={() => setShowComparison(false)}
+        />
+      )}
+      <ChecklistModal
+        open={checklistOpen}
+        state={checklist}
+        onChange={setChecklist}
+        onClose={() => setChecklistOpen(false)}
+      />
     </div>
     </ToastProvider>
   )

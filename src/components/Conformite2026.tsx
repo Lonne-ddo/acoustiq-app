@@ -26,18 +26,23 @@ import {
   Shield,
   Info,
   Clock,
+  BookOpen,
+  ChevronRight,
+  ExternalLink,
 } from 'lucide-react'
+import { loadAll as loadRegulationDocs, OFFICIAL_SOURCES } from '../modules/regulationDB'
 import HelpTooltip from './HelpTooltip'
 import type { MeasurementFile, DataPoint, ConformiteSummary } from '../types'
 import {
   laeqAvg,
   computeL90,
   extractBp,
-  computeKt,
+  detectKt,
   computeKb,
   computeKi,
   computeLar1h,
 } from '../utils/acoustics'
+import type { KtDetection } from '../utils/acoustics'
 
 // ────────────────────────────────────────────────────────────────────────────
 // Référentiel : Tableau 1 — Lignes directrices MELCCFP 2026
@@ -77,6 +82,11 @@ interface Props {
   selectedDate: string
   /** Notifie le parent (App) à chaque recalcul, pour partage avec le Rapport. */
   onSummaryChange?: (summary: ConformiteSummary | null) => void
+  /** Récepteur conformité (contrôlé depuis App, pour les templates) */
+  receptor?: ReceptorType
+  onReceptorChange?: (r: ReceptorType) => void
+  period?: Period
+  onPeriodChange?: (p: Period) => void
 }
 
 interface PointResult {
@@ -87,6 +97,7 @@ interface PointResult {
   bpReason: 'ok' | 'insufficient' | 'noBr' | 'noData'
   kt: number
   ktAuto: boolean
+  ktDetection: KtDetection | null
   ki: number
   kiAuto: boolean
   kb: number
@@ -120,10 +131,24 @@ function hhmmToMinutes(s: string): number {
 // Composant
 // ────────────────────────────────────────────────────────────────────────────
 
-export default function Conformite2026({ files, pointMap, selectedDate, onSummaryChange }: Props) {
-  // Référentiel sélectionné
-  const [receptor, setReceptor] = useState<ReceptorType>('I')
-  const [period, setPeriod] = useState<Period>('jour')
+export default function Conformite2026({
+  files, pointMap, selectedDate, onSummaryChange,
+  receptor: receptorProp, onReceptorChange,
+  period: periodProp, onPeriodChange,
+}: Props) {
+  // Référentiel sélectionné — contrôlé si props fournies, sinon état local
+  const [receptorLocal, setReceptorLocal] = useState<ReceptorType>('I')
+  const [periodLocal, setPeriodLocal] = useState<Period>('jour')
+  const receptor = receptorProp ?? receptorLocal
+  const period = periodProp ?? periodLocal
+  const setReceptor = (r: ReceptorType) => {
+    if (onReceptorChange) onReceptorChange(r)
+    else setReceptorLocal(r)
+  }
+  const setPeriod = (p: Period) => {
+    if (onPeriodChange) onPeriodChange(p)
+    else setPeriodLocal(p)
+  }
 
   // Bruit résiduel (saisie globale, jour/nuit)
   const [brJour, setBrJour] = useState<string>('')
@@ -135,6 +160,15 @@ export default function Conformite2026({ files, pointMap, selectedDate, onSummar
 
   // Heure d'évaluation (fenêtre 1 h glissante : [evalHour, evalHour + 60 min])
   const [evalHour, setEvalHour] = useState<string>('14:00')
+
+  // Incertitude : ISO 9613-2
+  // - mesurage = ± 1 dB (sonomètre classe 1, fixe)
+  // - propagation = saisie utilisateur (défaut 3 dB)
+  // - combinée = sqrt(1² + propagation²)
+  const MEASUREMENT_UNCERTAINTY = 1
+  const [propagationUncertainty, setPropagationUncertainty] = useState<string>('3')
+  const propU = num(propagationUncertainty) ?? 3
+  const combinedU = Math.sqrt(MEASUREMENT_UNCERTAINTY * MEASUREMENT_UNCERTAINTY + propU * propU)
 
   // Termes correctifs : surcharges manuelles (par point)
   const [ktManual, setKtManual] = useState<Record<string, number | null>>({})
@@ -213,6 +247,7 @@ export default function Conformite2026({ files, pointMap, selectedDate, onSummar
           bpReason: 'noData',
           kt: 0,
           ktAuto: false,
+          ktDetection: null,
           ki: 0,
           kiAuto: false,
           kb: 0,
@@ -244,6 +279,7 @@ export default function Conformite2026({ files, pointMap, selectedDate, onSummar
       // Kt — auto sur spectre moyen, sinon override manuel
       let kt = 0
       let ktAuto = false
+      let ktDetection: KtDetection | null = null
       const manualKt = ktManual[pt]
       if (manualKt !== undefined && manualKt !== null) {
         kt = manualKt
@@ -255,7 +291,8 @@ export default function Conformite2026({ files, pointMap, selectedDate, onSummar
             const vals = specs.map((s) => s[i]).filter((v) => typeof v === 'number')
             return laeqAvg(vals)
           })
-          kt = computeKt(avgSpec)
+          ktDetection = detectKt(avgSpec, ba)
+          kt = ktDetection.kt
           ktAuto = true
         }
       }
@@ -306,6 +343,7 @@ export default function Conformite2026({ files, pointMap, selectedDate, onSummar
         bpReason,
         kt,
         ktAuto,
+        ktDetection,
         ki,
         kiAuto,
         kb,
@@ -348,18 +386,24 @@ export default function Conformite2026({ files, pointMap, selectedDate, onSummar
       evalHour,
       date: selectedDate,
       limit: LIMITS[receptor][period],
-      points: results.map((r) => ({
-        point: r.point,
-        ba: r.ba,
-        br: r.br,
-        bp: r.bp,
-        lar: r.lar,
-        criterion: r.criterion,
-        appliedKLabel: r.appliedKLabel,
-        pass: r.pass,
-      })),
+      uncertainty: combinedU,
+      points: results.map((r) => {
+        const larPlusU = r.lar !== null ? r.lar + combinedU : null
+        return {
+          point: r.point,
+          ba: r.ba,
+          br: r.br,
+          bp: r.bp,
+          lar: r.lar,
+          criterion: r.criterion,
+          appliedKLabel: r.appliedKLabel,
+          pass: r.pass,
+          larPlusU,
+          margeNonConforme: larPlusU !== null && larPlusU > r.criterion,
+        }
+      }),
     })
-  }, [results, receptor, period, evalHour, selectedDate, onSummaryChange])
+  }, [results, receptor, period, evalHour, selectedDate, onSummaryChange, combinedU])
 
   // ──────────────────────────────────────────────────────────────────────────
   // Export Excel
@@ -368,27 +412,39 @@ export default function Conformite2026({ files, pointMap, selectedDate, onSummar
   function handleExport() {
     const wb = XLSX.utils.book_new()
 
-    const sheetRows = results.map((r) => ({
-      Point: r.point,
-      'Ba (LAeq) dB(A)': r.ba !== null ? r.ba.toFixed(1) : '',
-      'Br dB(A)': r.br !== null ? r.br.toFixed(1) : '',
-      'Bp dB(A)':
-        r.bp !== null
-          ? r.bp.toFixed(1)
-          : r.bpReason === 'insufficient'
-          ? 'non calculable (Ba−Br < 3 dB)'
-          : '',
-      Kt: r.kt,
-      Ki: r.ki.toFixed(1),
-      Kb: r.kb,
-      Ks: r.ks,
-      'Correction appliquée': r.appliedKLabel,
-      'LAr,1h dB(A)': r.lar !== null ? r.lar.toFixed(1) : '',
-      'Critère dB(A)': r.criterion.toFixed(1),
-      Résultat: r.pass === null ? '—' : r.pass ? 'CONFORME' : 'NON CONFORME',
-      Dépassement:
-        r.pass === false && r.lar !== null ? (r.lar - r.criterion).toFixed(1) : '',
-    }))
+    const sheetRows = results.map((r) => {
+      const larPlusU = r.lar !== null ? r.lar + combinedU : null
+      const margeNonConforme = larPlusU !== null && larPlusU > r.criterion
+      return {
+        Point: r.point,
+        'Ba (LAeq) dB(A)': r.ba !== null ? r.ba.toFixed(1) : '',
+        'Br dB(A)': r.br !== null ? r.br.toFixed(1) : '',
+        'Bp dB(A)':
+          r.bp !== null
+            ? r.bp.toFixed(1)
+            : r.bpReason === 'insufficient'
+            ? 'non calculable (Ba−Br < 3 dB)'
+            : '',
+        Kt: r.kt,
+        Ki: r.ki.toFixed(1),
+        Kb: r.kb,
+        Ks: r.ks,
+        'Correction appliquée': r.appliedKLabel,
+        'LAr,1h dB(A)': r.lar !== null ? r.lar.toFixed(1) : '',
+        'Incertitude combinée ± dB': combinedU.toFixed(1),
+        'LAr,1h + U dB(A)': larPlusU !== null ? larPlusU.toFixed(1) : '',
+        'Critère dB(A)': r.criterion.toFixed(1),
+        Résultat: r.pass === null ? '—' : r.pass ? 'CONFORME' : 'NON CONFORME',
+        'Marge incertitude':
+          larPlusU === null
+            ? '—'
+            : margeNonConforme
+            ? 'NON CONFORME AVEC MARGE'
+            : 'CONFORME AVEC MARGE',
+        Dépassement:
+          r.pass === false && r.lar !== null ? (r.lar - r.criterion).toFixed(1) : '',
+      }
+    })
     XLSX.utils.book_append_sheet(
       wb,
       XLSX.utils.json_to_sheet(sheetRows),
@@ -405,6 +461,16 @@ export default function Conformite2026({ files, pointMap, selectedDate, onSummar
         Date: selectedDate,
         'Points conformes': results.filter((r) => r.pass === true).length,
         'Points non conformes': results.filter((r) => r.pass === false).length,
+      },
+      {
+        Référentiel: 'Généré par AcoustiQ',
+        Note: 'https://acoustiq-app.pages.dev',
+        'Type de récepteur': '',
+        Période: '',
+        "Heure d'évaluation": '',
+        Date: '',
+        'Points conformes': '',
+        'Points non conformes': '',
       },
     ]
     XLSX.utils.book_append_sheet(
@@ -720,6 +786,22 @@ export default function Conformite2026({ files, pointMap, selectedDate, onSummar
                             }
                             hasOverride={ktManual[r.point] !== undefined}
                           />
+                          {r.ktAuto && ktManual[r.point] === undefined && r.ktDetection && (
+                            <div
+                              className={`mt-0.5 text-[9px] leading-tight ${
+                                r.ktDetection.detected ? 'text-orange-400' : 'text-emerald-500'
+                              }`}
+                              title={
+                                r.ktDetection.detected
+                                  ? `Composante tonale détectée à ${r.ktDetection.fc} Hz — émergence ${r.ktDetection.emergence?.toFixed(1)} dB (seuil ${r.ktDetection.threshold} dB)`
+                                  : 'Aucune composante tonale détectée selon Tableau 2 MELCCFP 2026'
+                              }
+                            >
+                              {r.ktDetection.detected
+                                ? `Auto — détecté · ${r.ktDetection.fc} Hz · +${r.ktDetection.emergence?.toFixed(1)} dB`
+                                : 'Auto — non détecté'}
+                            </div>
+                          )}
                         </td>
                         {/* Ki */}
                         <td className="px-3 py-2 text-center">
@@ -791,6 +873,104 @@ export default function Conformite2026({ files, pointMap, selectedDate, onSummar
               </div>
             </section>
 
+            {/* G) Incertitude — ISO 9613-2 */}
+            <section className="border border-gray-800 rounded-lg p-4 bg-gray-900/30">
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-3">
+                G · Incertitude (ISO 9613-2)
+              </h3>
+              <div className="flex items-end gap-4 flex-wrap mb-3">
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wider">
+                    Mesurage
+                  </label>
+                  <div className="text-xs text-gray-300 tabular-nums mt-0.5">
+                    ± {MEASUREMENT_UNCERTAINTY.toFixed(1)} dB
+                    <span className="text-[9px] text-gray-600 ml-1">(sonomètre classe 1)</span>
+                  </div>
+                </div>
+                <label className="text-xs text-gray-400">
+                  <span className="text-[10px] text-gray-500 uppercase tracking-wider block">
+                    Propagation
+                  </span>
+                  <div className="flex items-center gap-1 mt-0.5">
+                    <span className="text-gray-500 text-xs">±</span>
+                    <input
+                      type="number"
+                      step="0.1"
+                      value={propagationUncertainty}
+                      onChange={(e) => setPropagationUncertainty(e.target.value)}
+                      className="w-16 text-xs bg-gray-800 text-gray-200 border border-gray-700
+                                 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                    />
+                    <span className="text-xs text-gray-500">dB</span>
+                  </div>
+                </label>
+                <div>
+                  <label className="text-[10px] text-gray-500 uppercase tracking-wider">
+                    Combinée
+                  </label>
+                  <div className="text-xs text-emerald-300 font-semibold tabular-nums mt-0.5">
+                    ± {combinedU.toFixed(1)} dB
+                    <span className="text-[9px] text-gray-600 ml-1">
+                      = √(1² + {propU.toFixed(1)}²)
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Vérification par point : LAr,1h + U vs critère */}
+              <div className="space-y-1 text-[11px]">
+                {results.filter((r) => r.lar !== null).map((r) => {
+                  const larPlusU = (r.lar as number) + combinedU
+                  const margeNonConforme = larPlusU > r.criterion
+                  return (
+                    <div
+                      key={`u-${r.point}`}
+                      className={`px-2 py-1 rounded border flex items-center gap-2 ${
+                        margeNonConforme
+                          ? 'border-amber-800/60 bg-amber-950/20'
+                          : 'border-gray-800 bg-gray-900/40'
+                      }`}
+                    >
+                      <span className="font-semibold text-gray-200 w-16">{r.point}</span>
+                      <span className="text-gray-400 tabular-nums">
+                        LAr,1h ({(r.lar as number).toFixed(1)} dB) + incertitude
+                        (±{combinedU.toFixed(1)} dB) = <span className="text-gray-100 font-semibold">{larPlusU.toFixed(1)} dB</span>
+                      </span>
+                      <span className="text-gray-600">vs</span>
+                      <span className="text-gray-400 tabular-nums">
+                        critère {r.criterion.toFixed(1)} dB
+                      </span>
+                      {margeNonConforme ? (
+                        <span className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5
+                                         rounded bg-amber-900/50 text-amber-200 text-[10px] font-semibold">
+                          <AlertTriangle size={10} /> Non conforme avec marge d'incertitude
+                        </span>
+                      ) : (
+                        <span className="ml-auto inline-flex items-center gap-1 px-1.5 py-0.5
+                                         rounded bg-emerald-900/40 text-emerald-300 text-[10px] font-semibold">
+                          <CheckCircle size={10} /> Conforme avec marge
+                        </span>
+                      )}
+                    </div>
+                  )
+                })}
+                {results.filter((r) => r.lar !== null).length === 0 && (
+                  <div className="text-gray-600 italic">
+                    Aucun LAr,1h calculable — vérifier la fenêtre d'évaluation et Br.
+                  </div>
+                )}
+              </div>
+              <p className="text-[10px] text-gray-600 italic mt-2">
+                Méthode ISO 9613-2 — Combinaison quadratique des incertitudes de mesurage
+                et de propagation. Si LAr,1h + incertitude dépasse le critère, la conformité
+                doit être confirmée par une étude approfondie.
+              </p>
+            </section>
+
+            {/* Références réglementaires (collapsible) */}
+            <ReferencesSection />
+
             {/* Synthèse */}
             {evaluable.length > 0 && (
               <div className="mt-2 px-3 py-2 rounded border border-gray-700 bg-gray-800/50">
@@ -813,6 +993,101 @@ export default function Conformite2026({ files, pointMap, selectedDate, onSummar
         )}
       </div>
     </div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Références réglementaires — section repliable, liens intelligents
+// ────────────────────────────────────────────────────────────────────────────
+
+interface ReferenceEntry {
+  label: string
+  /** Chaîne de recherche dans le titre des documents stockés (insensible à la casse) */
+  matchTitle: RegExp
+  /** URL de repli si aucun document local ne correspond */
+  fallbackUrl: string
+}
+
+const REFERENCES: ReferenceEntry[] = [
+  {
+    label: 'MELCCFP 2026 — Section 2.2 — Détermination du critère',
+    matchTitle: /lignes\s*directrices|melccfp/i,
+    fallbackUrl:
+      'https://www.environnement.gouv.qc.ca/publications/notes-instructions/98-01/lignes-directrices-bruit-2026.pdf',
+  },
+  {
+    label: 'MELCCFP 2026 — Tableau 1 — Niveaux maximaux LAr,1h',
+    matchTitle: /lignes\s*directrices|melccfp/i,
+    fallbackUrl:
+      'https://www.environnement.gouv.qc.ca/publications/notes-instructions/98-01/lignes-directrices-bruit-2026.pdf',
+  },
+  {
+    label: 'ISO 1996-2 — Extraction du bruit particulier',
+    matchTitle: /iso\s*1996/i,
+    fallbackUrl: 'https://www.iso.org/standard/76324.html',
+  },
+]
+
+function ReferencesSection() {
+  const [open, setOpen] = useState(false)
+  const docs = useMemo(() => loadRegulationDocs(), [open])
+
+  function resolveLink(entry: ReferenceEntry): { url: string; localTitle?: string } {
+    const found = docs.find((d) => entry.matchTitle.test(d.title))
+    if (found && found.lienOfficiel) return { url: found.lienOfficiel, localTitle: found.title }
+    if (found) {
+      // Document local sans lien : pointer vers la première source officielle
+      return { url: OFFICIAL_SOURCES[0].url, localTitle: found.title }
+    }
+    return { url: entry.fallbackUrl }
+  }
+
+  return (
+    <section className="border border-gray-800 rounded-lg bg-gray-900/30">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 px-4 py-2 text-left
+                   hover:bg-gray-800/50 transition-colors"
+      >
+        <BookOpen size={12} className="text-emerald-400" />
+        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+          Références
+        </span>
+        <ChevronRight
+          size={11}
+          className={`text-gray-600 transition-transform ${open ? 'rotate-90' : ''}`}
+        />
+      </button>
+      {open && (
+        <div className="px-4 pb-3 space-y-1">
+          {REFERENCES.map((entry, i) => {
+            const { url, localTitle } = resolveLink(entry)
+            return (
+              <a
+                key={i}
+                href={url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="flex items-center gap-2 text-[11px] px-2 py-1 rounded
+                           text-gray-300 hover:text-emerald-300 hover:bg-gray-800/50 transition-colors"
+              >
+                <ExternalLink size={10} className="text-gray-600 shrink-0" />
+                <span className="flex-1">{entry.label}</span>
+                {localTitle && (
+                  <span className="text-[9px] text-emerald-600">
+                    · doc local : {localTitle}
+                  </span>
+                )}
+              </a>
+            )
+          })}
+          <p className="text-[9px] text-gray-600 italic mt-2 px-2">
+            Importez les PDF officiels dans l'onglet « Réglementation » pour activer la
+            recherche plein-texte sur ces documents.
+          </p>
+        </div>
+      )}
+    </section>
   )
 }
 

@@ -8,12 +8,21 @@
  * n'écrase pas une section que l'utilisateur a modifiée à la main.
  */
 import { useState, useMemo, useEffect, useRef, useCallback } from 'react'
-import { Copy, Download, FileText, Check, Printer, RefreshCw } from 'lucide-react'
+import JSZip from 'jszip'
+import { Copy, Download, FileText, Check, Printer, RefreshCw, Image as ImageIcon } from 'lucide-react'
+import {
+  drawFigureCourbe,
+  drawFigureSpectrogramme,
+  drawFigureIndices,
+  drawFigureConformite,
+  canvasToPngBlob,
+} from '../utils/reportFigures'
 import type {
   MeasurementFile,
   SourceEvent,
   ConcordanceState,
   ConformiteSummary,
+  MeteoData,
 } from '../types'
 import {
   laeqAvg,
@@ -33,13 +42,14 @@ interface Props {
   assignedPoints: string[]
   conformiteSummary: ConformiteSummary | null
   companyName: string
+  meteo?: MeteoData
 }
 
 function fmt(n: number): string {
   return n.toFixed(1)
 }
 
-type SectionKey = 'header' | 'method' | 'results' | 'conformite' | 'events' | 'concordance'
+type SectionKey = 'header' | 'method' | 'meteo' | 'results' | 'conformite' | 'events' | 'concordance'
 
 export default function ReportGenerator({
   files,
@@ -50,6 +60,7 @@ export default function ReportGenerator({
   assignedPoints,
   conformiteSummary,
   companyName,
+  meteo,
 }: Props) {
   const [projectName, setProjectName] = useState('Étude d\'impact acoustique')
   const [copied, setCopied] = useState(false)
@@ -118,6 +129,25 @@ export default function ReportGenerator({
         `Points de mesure : ${points} (${assignedPoints.length})\n` +
         `Nombre de fichiers : ${fileCount}`
       )
+    }
+
+    function meteoSection(): string {
+      if (!meteo) return 'Aucune donnée météorologique saisie.'
+      const lines: string[] = []
+      if (meteo.windSpeed !== null) {
+        const valid = meteo.windSpeed < 20
+        lines.push(
+          `Vent : ${meteo.windSpeed} km/h${meteo.windDirection ? ` (${meteo.windDirection})` : ''}` +
+            (valid
+              ? ' — ✓ Valide (critère MELCCFP 2026 : < 20 km/h)'
+              : ' — ✗ Invalide (≥ 20 km/h — mesures potentiellement invalides selon les Lignes directrices MELCCFP 2026)'),
+        )
+      }
+      if (meteo.temperature !== null) lines.push(`Température : ${meteo.temperature} °C`)
+      if (meteo.conditions) lines.push(`Conditions : ${meteo.conditions}`)
+      if (meteo.note.trim()) lines.push(`Note : ${meteo.note.trim()}`)
+      if (lines.length === 0) return 'Aucune donnée météorologique saisie.'
+      return lines.join('\n')
     }
 
     function method(): string {
@@ -205,6 +235,24 @@ export default function ReportGenerator({
       })
       const passCount = cs.points.filter((p) => p.pass === true).length
       const failCount = cs.points.filter((p) => p.pass === false).length
+
+      // Bloc incertitude (ISO 9613-2) — si publié par Conformité 2026
+      let uncertaintyBlock = ''
+      if (typeof cs.uncertainty === 'number') {
+        const lines = cs.points
+          .filter((p) => typeof p.larPlusU === 'number')
+          .map((p) => {
+            const flag = p.margeNonConforme
+              ? '⚠ NON CONFORME avec marge'
+              : '✓ CONFORME avec marge'
+            return `  - ${p.point} : LAr,1h (${fmt(p.lar as number)}) + ±${fmt(cs.uncertainty as number)} = ${fmt(p.larPlusU as number)} dB(A) vs critère ${fmt(p.criterion)} dB(A) — ${flag}`
+          })
+        uncertaintyBlock =
+          `\n\nIncertitude (ISO 9613-2)\n` +
+          `Mesurage ± 1.0 dB (sonomètre classe 1) · Combinée ± ${fmt(cs.uncertainty)} dB\n` +
+          lines.join('\n')
+      }
+
       return (
         `Évaluation selon les Lignes directrices MELCCFP 2026 ` +
         `(en vigueur depuis le 13 janvier 2026).\n` +
@@ -214,7 +262,8 @@ export default function ReportGenerator({
         `Niveau maximal LAr,1h : ${cs.limit} dB(A)\n\n` +
         `${head}\n${separator}\n${rows.join('\n')}\n\n` +
         `Synthèse : ${passCount} point(s) conforme(s), ${failCount} non conforme(s) ` +
-        `sur ${cs.points.length} évalué(s).`
+        `sur ${cs.points.length} évalué(s).` +
+        uncertaintyBlock
       )
     }
 
@@ -282,6 +331,7 @@ export default function ReportGenerator({
     return {
       header,
       method,
+      meteo: meteoSection,
       results,
       conformite,
       events: eventsSection,
@@ -299,11 +349,13 @@ export default function ReportGenerator({
     dayEvents,
     concordance,
     conformiteSummary,
+    meteo,
   ])
 
   // Sections éditables + suivi de la "salissure" (édition manuelle)
   const [headerText, setHeaderText] = useState(() => generators.header())
   const [methodText, setMethodText] = useState(() => generators.method())
+  const [meteoText, setMeteoText] = useState(() => generators.meteo())
   const [resultsText, setResultsText] = useState(() => generators.results())
   const [conformiteText, setConformiteText] = useState(() => generators.conformite())
   const [eventsText, setEventsText] = useState(() => generators.events())
@@ -313,6 +365,7 @@ export default function ReportGenerator({
   const lastGeneratedRef = useRef<Record<SectionKey, string>>({
     header: generators.header(),
     method: generators.method(),
+    meteo: generators.meteo(),
     results: generators.results(),
     conformite: generators.conformite(),
     events: generators.events(),
@@ -325,6 +378,7 @@ export default function ReportGenerator({
     const next = {
       header: generators.header(),
       method: generators.method(),
+      meteo: generators.meteo(),
       results: generators.results(),
       conformite: generators.conformite(),
       events: generators.events(),
@@ -334,6 +388,7 @@ export default function ReportGenerator({
     const setters: Record<SectionKey, [string, (v: string) => void]> = {
       header: [headerText, setHeaderText],
       method: [methodText, setMethodText],
+      meteo: [meteoText, setMeteoText],
       results: [resultsText, setResultsText],
       conformite: [conformiteText, setConformiteText],
       events: [eventsText, setEventsText],
@@ -356,6 +411,7 @@ export default function ReportGenerator({
       switch (key) {
         case 'header': setHeaderText(value); break
         case 'method': setMethodText(value); break
+        case 'meteo': setMeteoText(value); break
         case 'results': setResultsText(value); break
         case 'conformite': setConformiteText(value); break
         case 'events': setEventsText(value); break
@@ -375,19 +431,23 @@ export default function ReportGenerator({
       '─'.repeat(40),
       methodText,
       '',
-      '2. RÉSULTATS',
+      '2. CONDITIONS MÉTÉOROLOGIQUES',
+      '─'.repeat(40),
+      meteoText,
+      '',
+      '3. RÉSULTATS',
       '─'.repeat(40),
       resultsText,
       '',
-      '3. CONFORMITÉ 2026 (MELCCFP)',
+      '4. CONFORMITÉ 2026 (MELCCFP)',
       '─'.repeat(40),
       conformiteText,
       '',
-      '4. ÉVÉNEMENTS SOURCES',
+      '5. ÉVÉNEMENTS SOURCES',
       '─'.repeat(40),
       eventsText,
       '',
-      '5. CONCORDANCE',
+      '6. CONCORDANCE',
       '─'.repeat(40),
       concordanceText,
       '',
@@ -412,6 +472,71 @@ export default function ReportGenerator({
       document.body.removeChild(textarea)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
+    }
+  }
+
+  // ── Export figures ZIP ────────────────────────────────────────────────────
+  const [exportingFigs, setExportingFigs] = useState(false)
+  async function handleExportFigures() {
+    setExportingFigs(true)
+    try {
+      const zip = new JSZip()
+      let n = 1
+
+      // Figure 1 — Courbe temporelle
+      const figCourbe = drawFigureCourbe({
+        files, pointMap, selectedDate, events,
+        number: n,
+      })
+      zip.file(`figure_${String(n).padStart(2, '0')}_courbe_temporelle.png`, await canvasToPngBlob(figCourbe))
+      n++
+
+      // Figure 2 — Spectrogramme (par point disposant de spectres)
+      const dataByPoint = new Map<string, MeasurementFile['data']>()
+      for (const f of files) {
+        const pt = pointMap[f.id]
+        if (!pt || f.date !== selectedDate) continue
+        const arr = dataByPoint.get(pt) ?? []
+        arr.push(...f.data)
+        dataByPoint.set(pt, arr)
+      }
+      for (const [pt, dps] of dataByPoint) {
+        const figSpec = drawFigureSpectrogramme({
+          pointName: pt, data: dps, selectedDate, number: n,
+        })
+        if (figSpec) {
+          zip.file(
+            `figure_${String(n).padStart(2, '0')}_spectrogramme_${pt}.png`,
+            await canvasToPngBlob(figSpec),
+          )
+          n++
+        }
+      }
+
+      // Figure 3 — Indices acoustiques
+      const figIdx = drawFigureIndices({ files, pointMap, selectedDate, number: n })
+      zip.file(`figure_${String(n).padStart(2, '0')}_indices.png`, await canvasToPngBlob(figIdx))
+      n++
+
+      // Figure 4 — Conformité 2026 (si données disponibles)
+      if (conformiteSummary && conformiteSummary.points.length > 0) {
+        const figConf = drawFigureConformite({ summary: conformiteSummary, number: n })
+        zip.file(`figure_${String(n).padStart(2, '0')}_conformite_2026.png`, await canvasToPngBlob(figConf))
+        n++
+      }
+
+      const blob = await zip.generateAsync({ type: 'blob' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.download = `acoustiq_figures_${selectedDate || 'rapport'}.zip`
+      link.href = url
+      link.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      console.error('Export figures échoué :', err)
+      alert('Export figures échoué — voir la console pour les détails.')
+    } finally {
+      setExportingFigs(false)
     }
   }
 
@@ -467,6 +592,17 @@ export default function ReportGenerator({
             Imprimer / PDF
           </button>
           <button
+            onClick={handleExportFigures}
+            disabled={exportingFigs}
+            className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium
+                       bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
+                       border border-gray-600 transition-colors disabled:opacity-50"
+            title="Génère un ZIP de figures PNG prêtes pour le rapport (1200×600 px)"
+          >
+            <ImageIcon size={12} />
+            {exportingFigs ? 'Export…' : 'Exporter figures'}
+          </button>
+          <button
             onClick={handleDownloadTxt}
             className="flex items-center gap-1 px-2.5 py-1 rounded text-xs font-medium
                        bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
@@ -484,16 +620,19 @@ export default function ReportGenerator({
           onRefresh={() => refresh('header')} />
         <Section title="1. Méthodologie" value={methodText} onChange={setMethodText} rows={7}
           onRefresh={() => refresh('method')} />
-        <Section title="2. Résultats — Indices" value={resultsText} onChange={setResultsText}
+        <Section title="2. Conditions météorologiques" value={meteoText} onChange={setMeteoText}
+          rows={4}
+          onRefresh={() => refresh('meteo')} />
+        <Section title="3. Résultats — Indices" value={resultsText} onChange={setResultsText}
           rows={Math.max(8, assignedPoints.length + 6)}
           onRefresh={() => refresh('results')} />
-        <Section title="3. Conformité 2026" value={conformiteText} onChange={setConformiteText}
+        <Section title="4. Conformité 2026" value={conformiteText} onChange={setConformiteText}
           rows={Math.max(8, (conformiteSummary?.points.length ?? 0) + 8)}
           onRefresh={() => refresh('conformite')} />
-        <Section title="4. Événements sources" value={eventsText} onChange={setEventsText}
+        <Section title="5. Événements sources" value={eventsText} onChange={setEventsText}
           rows={Math.max(3, dayEvents.length + 3)}
           onRefresh={() => refresh('events')} />
-        <Section title="5. Concordance" value={concordanceText} onChange={setConcordanceText}
+        <Section title="6. Concordance" value={concordanceText} onChange={setConcordanceText}
           rows={Math.max(6, dayEvents.length * 3 + 4)}
           onRefresh={() => refresh('concordance')} />
       </div>

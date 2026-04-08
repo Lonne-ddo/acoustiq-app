@@ -5,10 +5,23 @@
   box-sizing: border-box;
 }
 
+html {
+  /* Base typographique +1 px (Tailwind text-xs/sm/base sont relatifs) */
+  font-size: 15px;
+}
+
 body {
   margin: 0;
   font-family: system-ui, 'Segoe UI', Roboto, sans-serif;
   -webkit-font-smoothing: antialiased;
+  font-size: 14px;
+}
+
+/* Chiffres techniques (dB, valeurs numériques) en monospace tabulaire */
+.tabular-nums,
+[class*="tabular-nums"] {
+  font-feature-settings: 'tnum' 1;
+  font-variant-numeric: tabular-nums;
 }
 
 #root {

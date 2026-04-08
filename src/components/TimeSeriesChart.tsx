@@ -20,11 +20,14 @@ import {
   Tooltip,
   Legend,
   ReferenceLine,
+  ReferenceArea,
   ResponsiveContainer,
 } from 'recharts'
 import html2canvas from 'html2canvas'
-import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers } from 'lucide-react'
-import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent } from '../types'
+import { drawQrBadge } from '../utils/qrBadge'
+import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind } from 'lucide-react'
+import { ReferenceDot } from 'recharts'
+import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData } from '../types'
 import { laeqAvg, computeL90 } from '../utils/acoustics'
 
 // Palette de couleurs par point de mesure
@@ -70,14 +73,88 @@ function snapToBucket(time: string, aggSec: number): string {
 }
 
 /**
- * Calcule l'intervalle de tick optimal pour l'axe X en fonction de la plage visible
+ * Calcule des ticks adaptatifs pour l'axe X selon la plage visible.
+ * Retourne la liste des labels (sous-ensemble de ceux présents dans visibleData)
+ * et un formatter qui supprime ":00" final pour les labels HH:MM:SS.
+ *
+ * Règles :
+ *  - > 4h     : HH:MM, pas de 30 ou 60 min
+ *  - 1h – 4h  : HH:MM, pas de 15 ou 30 min
+ *  - 15min–1h : HH:MM, pas de 5 ou 10 min
+ *  - < 15min  : HH:MM:SS, pas de 1 ou 2 min
+ *  - Toujours au moins 4 ticks
  */
-function computeTickInterval(dataLength: number): number | 'preserveStartEnd' {
-  if (dataLength <= 12) return 0            // Tous les points
-  if (dataLength <= 30) return 1            // 1 sur 2
-  if (dataLength <= 60) return 4            // ~1 sur 5
-  if (dataLength <= 120) return 11          // ~1 sur 12
-  return 'preserveStartEnd'
+function computeAdaptiveTicks(
+  visibleData: ChartEntry[],
+  rangeMin: number,
+  aggSec: number,
+): { ticks: string[]; formatter: (s: string) => string } {
+  const formatter = (s: string): string => {
+    // Strip trailing :00 from HH:MM:SS labels
+    if (typeof s === 'string' && s.length === 8 && s.endsWith(':00')) return s.slice(0, 5)
+    return s
+  }
+  if (visibleData.length === 0) return { ticks: [], formatter }
+
+  // Pas idéal en secondes selon la plage visible
+  let idealStepSec: number
+  if (rangeMin > 240) idealStepSec = 3600       // 1 h
+  else if (rangeMin > 120) idealStepSec = 1800  // 30 min
+  else if (rangeMin > 60) idealStepSec = 900    // 15 min
+  else if (rangeMin > 30) idealStepSec = 600    // 10 min
+  else if (rangeMin > 15) idealStepSec = 300    // 5 min
+  else if (rangeMin > 5) idealStepSec = 120     // 2 min
+  else idealStepSec = 60                        // 1 min
+
+  // Le pas doit être au moins égal à l'agrégation pour aligner sur les buckets
+  let stepSec = Math.max(idealStepSec, aggSec)
+
+  // Sélection des labels alignés sur le pas
+  const pickByStep = (sec: number): string[] => {
+    const out: string[] = []
+    const seen = new Set<number>()
+    for (const row of visibleData) {
+      const tSec = Math.round(row.t * 60)
+      if (tSec % sec !== 0) continue
+      const k = Math.floor(tSec / sec)
+      if (seen.has(k)) continue
+      seen.add(k)
+      out.push(row.label as string)
+    }
+    return out
+  }
+
+  let ticks = pickByStep(stepSec)
+
+  // Garantir au moins 4 ticks : réduire le pas progressivement
+  const fallbackSteps = [stepSec / 2, stepSec / 3, aggSec]
+  for (const s of fallbackSteps) {
+    if (ticks.length >= 4) break
+    if (s > 0 && Number.isFinite(s)) {
+      ticks = pickByStep(Math.max(1, Math.round(s)))
+      stepSec = Math.max(1, Math.round(s))
+    }
+  }
+
+  // Dernier recours : échantillonnage uniforme sur visibleData
+  if (ticks.length < 4 && visibleData.length >= 4) {
+    ticks = []
+    const n = Math.min(8, visibleData.length)
+    for (let i = 0; i < n; i++) {
+      const idx = Math.round((i * (visibleData.length - 1)) / (n - 1))
+      ticks.push(visibleData[idx].label as string)
+    }
+  }
+
+  // Anti-chevauchement : limite la densité (~1 tick / 60 px → max ~12 ticks pour
+  // une largeur typique de chart). On dégrade en gardant 1 tick sur N.
+  const MAX_TICKS = 12
+  if (ticks.length > MAX_TICKS) {
+    const stride = Math.ceil(ticks.length / MAX_TICKS)
+    ticks = ticks.filter((_, i) => i % stride === 0)
+  }
+
+  return { ticks, formatter }
 }
 
 interface ChartEntry {
@@ -119,6 +196,18 @@ interface Props {
   onOverlayDateChange: (date: string | null) => void
   /** Candidats détectés automatiquement à afficher en pointillé orange */
   candidates: CandidateEvent[]
+  /** Annotations textuelles ancrées sur le graphique */
+  annotations: ChartAnnotation[]
+  /** Texte d'annotation en attente : si défini, le prochain clic sur le graphique la place */
+  pendingAnnotationText: string | null
+  onAnnotationPlace: (a: ChartAnnotation) => void
+  onPendingAnnotationCleared: () => void
+  /** Mode présentation : affiche un titre projet et un bouton Quitter */
+  presentationMode?: boolean
+  onPresentationToggle?: () => void
+  projectName?: string
+  /** Conditions météo (pour overlay vent invalide + courbe vent) */
+  meteo?: MeteoData
 }
 
 /** Format court d'une date ISO en français : "2026-03-09" → "09 mars" */
@@ -149,7 +238,17 @@ export default function TimeSeriesChart({
   overlayDate,
   onOverlayDateChange,
   candidates,
+  annotations,
+  pendingAnnotationText,
+  onAnnotationPlace,
+  onPendingAnnotationCleared,
+  presentationMode,
+  onPresentationToggle,
+  projectName,
+  meteo,
 }: Props) {
+  // Affichage des données météo (vent) sur le graphique
+  const [showWind, setShowWind] = useState(false)
   // Couleurs personnalisées depuis les paramètres
   const pointColors = settings?.pointColors ?? POINT_COLORS
   const settingsYMin = settings?.yAxisMin ?? 30
@@ -195,22 +294,101 @@ export default function TimeSeriesChart({
     compStartRef.current = null
   }
 
-  // Export PNG via html2canvas — capture la zone complète du graphique
+  // Refs miroirs pour les valeurs utilisées dans handleExportPNG (évite les
+  // dépendances circulaires : effectiveRange est déclaré plus bas).
+  const exportStateRef = useRef<{
+    effectiveRange: ZoomRange
+    aggSec: number
+  }>({ effectiveRange: { startMin: 0, endMin: 1440 }, aggSec: 300 })
+
+  // Export PNG via html2canvas — capture chart + spectrogramme embarqué (s'il est visible),
+  // empile dans un canvas composite avec en-tête (projet/points/date/plage) + watermark.
   const handleExportPNG = useCallback(async () => {
     const target = chartAreaRef.current ?? chartRef.current
     if (!target) return
     setExporting(true)
     try {
-      const canvas = await html2canvas(target, { backgroundColor: '#030712', scale: 2 })
+      const SCALE = 2
+      const opts: Parameters<typeof html2canvas>[1] = {
+        backgroundColor: '#030712',
+        scale: SCALE,
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+      }
+
+      const chartCanvas = await html2canvas(target, opts)
+
+      // Capture du spectrogramme embarqué s'il est visible dans le DOM
+      const spectroEl = document.querySelector<HTMLElement>('[data-acoustiq-spectrogram="compact"]')
+      let spectroCanvas: HTMLCanvasElement | null = null
+      if (spectroEl && spectroEl.offsetParent !== null) {
+        try {
+          spectroCanvas = await html2canvas(spectroEl, opts)
+        } catch {
+          spectroCanvas = null
+        }
+      }
+
+      // En-tête : projet, points, date, plage temporelle
+      const points = [...new Set(files.map((f) => pointMap[f.id]).filter(Boolean))].sort()
+      const { effectiveRange: er, aggSec: as } = exportStateRef.current
+      const headerLine1 = projectName || 'AcoustiQ'
+      const headerLine2 = `${points.join(' · ') || '—'} — ${selectedDate}`
+      const headerLine3 = `Plage : ${minutesToHHMM(er.startMin)} → ${minutesToHHMM(er.endMin)}` +
+        `   ·   Agrégation : ${as < 60 ? as + ' s' : Math.round(as / 60) + ' min'}`
+
+      const HEADER_H = 80 * SCALE
+      const GAP = 12 * SCALE
+      const totalW = Math.max(chartCanvas.width, spectroCanvas?.width ?? 0)
+      const totalH =
+        HEADER_H +
+        chartCanvas.height +
+        (spectroCanvas ? GAP + spectroCanvas.height : 0)
+
+      const composite = document.createElement('canvas')
+      composite.width = totalW
+      composite.height = totalH
+      const ctx = composite.getContext('2d')!
+
+      // Fond
+      ctx.fillStyle = '#030712'
+      ctx.fillRect(0, 0, totalW, totalH)
+
+      // En-tête textuel
+      ctx.fillStyle = '#f3f4f6'
+      ctx.font = `bold ${18 * SCALE}px system-ui, sans-serif`
+      ctx.textBaseline = 'top'
+      ctx.fillText(headerLine1, 20 * SCALE, 12 * SCALE)
+      ctx.fillStyle = '#9ca3af'
+      ctx.font = `${12 * SCALE}px system-ui, sans-serif`
+      ctx.fillText(headerLine2, 20 * SCALE, 38 * SCALE)
+      ctx.fillStyle = '#6b7280'
+      ctx.fillText(headerLine3, 20 * SCALE, 56 * SCALE)
+
+      // Chart
+      const chartX = Math.floor((totalW - chartCanvas.width) / 2)
+      ctx.drawImage(chartCanvas, chartX, HEADER_H)
+
+      // Spectrogramme
+      if (spectroCanvas) {
+        const sx = Math.floor((totalW - spectroCanvas.width) / 2)
+        ctx.drawImage(spectroCanvas, sx, HEADER_H + chartCanvas.height + GAP)
+      }
+
+      // Watermark QR + label en bas à droite
+      await drawQrBadge(composite, { scale: SCALE })
+
       const link = document.createElement('a')
-      const points = [...new Set(files.map((f) => pointMap[f.id]).filter(Boolean))].sort().join('_')
-      link.download = `acoustiq_${points || 'chart'}_${selectedDate}.png`
-      link.href = canvas.toDataURL('image/png')
+      link.download = `acoustiq_${points.join('_') || 'chart'}_${selectedDate}.png`
+      link.href = composite.toDataURL('image/png')
       link.click()
+    } catch (err) {
+      console.error('Export PNG échoué :', err)
     } finally {
       setExporting(false)
     }
-  }, [files, pointMap, selectedDate])
+  }, [files, pointMap, selectedDate, projectName])
 
   /** Dates effectivement affichées : la principale + l'overlay éventuel (max 2). */
   const renderedDates = useMemo(() => {
@@ -337,6 +515,17 @@ export default function TimeSeriesChart({
       })
   }, [lineSpecs, filesByPointDate, aggSec])
 
+  // ── Données vent injectées dans chartData (clé "_wind") ──────────────────
+  // Modèle simple : une seule valeur saisie → ligne plate sur toute la période.
+  // (Une future version pourra accepter meteo.windEntries[] pour des plages.)
+  const windSpeed = meteo?.windSpeed ?? null
+  const windInvalid = windSpeed !== null && windSpeed >= 20
+
+  const chartDataWithWind = useMemo<ChartEntry[]>(() => {
+    if (windSpeed === null) return chartData
+    return chartData.map((row) => ({ ...row, _wind: windSpeed } as ChartEntry))
+  }, [chartData, windSpeed])
+
   // Plage temporelle globale des données (en minutes)
   const fullRange = useMemo((): ZoomRange => {
     if (chartData.length === 0) return { startMin: 0, endMin: 1440 }
@@ -349,10 +538,14 @@ export default function TimeSeriesChart({
   // Plage effective (zoom ou pleine)
   const effectiveRange = zoomRange ?? fullRange
 
+  // Synchronisation des refs pour l'export PNG (déclaré plus haut)
+  exportStateRef.current.effectiveRange = effectiveRange
+  exportStateRef.current.aggSec = aggSec
+
   // Données filtrées par la plage de zoom, sous-échantillonnées à max 2000 points
   // Décimation min/max pour conserver les pics et les creux
   const visibleData = useMemo(() => {
-    const filtered = chartData.filter(
+    const filtered = chartDataWithWind.filter(
       (d) => d.t >= effectiveRange.startMin && d.t <= effectiveRange.endMin,
     )
     const MAX_DISPLAY = 2000
@@ -389,7 +582,7 @@ export default function TimeSeriesChart({
     }
 
     return sampled
-  }, [chartData, effectiveRange, lineSpecs])
+  }, [chartDataWithWind, effectiveRange, lineSpecs])
 
   // ── Axe Y auto-ajusté ────────────────────────────────────────────────────
   const isZoomed = zoomRange !== null
@@ -410,6 +603,12 @@ export default function TimeSeriesChart({
     // ±5 dB de marge selon la spec
     return [Math.floor(lo - 5), Math.ceil(hi + 5)]
   }, [isZoomed, visibleData, lineSpecs, hiddenLines, settingsYMin, settingsYMax])
+
+  // Ticks adaptatifs sur l'axe X
+  const adaptiveTicks = useMemo(
+    () => computeAdaptiveTicks(visibleData, effectiveRange.endMin - effectiveRange.startMin, aggSec),
+    [visibleData, effectiveRange, aggSec],
+  )
 
   // Dernière valeur visible par ligne — pour les étiquettes "collantes"
   const lastValueByKey = useMemo(() => {
@@ -497,12 +696,44 @@ export default function TimeSeriesChart({
     })
   }, [effectiveRange, fullRange, onZoomChange])
 
-  // Mouse down : pan, sélection (Shift) ou comparaison ON/OFF (mode actif)
+  // Mouse down : pan, sélection (Shift), comparaison ON/OFF, ou placement d'annotation
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return
     const rect = chartAreaRef.current?.getBoundingClientRect()
     if (!rect) return
     const xLocal = e.clientX - rect.left
+
+    // Placement d'annotation en attente : transformer le clic en placement
+    if (pendingAnnotationText) {
+      const tMin = xPxToMinutes(xLocal)
+      // Trouver le point de données le plus proche pour caler le Y sur la courbe
+      let nearestY = (yDomain[0] + yDomain[1]) / 2
+      let bestDist = Infinity
+      for (const row of chartData) {
+        const dt = Math.abs(row.t - tMin)
+        if (dt < bestDist) {
+          bestDist = dt
+          // Premier point disponible
+          for (const spec of lineSpecs) {
+            const v = row[spec.key]
+            if (typeof v === 'number') { nearestY = v; break }
+          }
+        }
+      }
+      const h = Math.floor(tMin / 60) % 24
+      const m = Math.round(tMin % 60)
+      const time = `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+      onAnnotationPlace({
+        id: crypto.randomUUID(),
+        text: pendingAnnotationText,
+        time,
+        day: selectedDate,
+        laeq: Math.round(nearestY * 10) / 10,
+        color: '#fbbf24',
+      })
+      onPendingAnnotationCleared()
+      return
+    }
 
     // Mode comparaison : drag = sélection ON puis OFF
     if (compPhase === 'pickON' || compPhase === 'pickOFF') {
@@ -521,7 +752,7 @@ export default function TimeSeriesChart({
     setDragging(true)
     dragStartX.current = e.clientX
     dragStartRange.current = { ...effectiveRange }
-  }, [effectiveRange, compPhase])
+  }, [effectiveRange, compPhase, pendingAnnotationText, xPxToMinutes, chartData, lineSpecs, yDomain, selectedDate, onAnnotationPlace, onPendingAnnotationCleared])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const rect = chartAreaRef.current?.getBoundingClientRect()
@@ -877,6 +1108,28 @@ export default function TimeSeriesChart({
           {visibleData.length} points
           {activeEvents.length > 0 && ` · ${activeEvents.length} événement(s)`}
         </span>
+
+        {/* Toggle Météo (vent) */}
+        {windSpeed !== null && (
+          <button
+            onClick={() => setShowWind((v) => !v)}
+            className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border transition-colors ${
+              showWind
+                ? 'bg-gray-700 text-gray-100 border-gray-500'
+                : 'bg-gray-800 text-gray-400 hover:text-gray-200 border-gray-600'
+            }`}
+            title={
+              windInvalid
+                ? `Vent : ${windSpeed} km/h — ≥ 20 km/h, mesures potentiellement invalides`
+                : `Vent : ${windSpeed} km/h — conforme MELCCFP (< 20 km/h)`
+            }
+            aria-pressed={showWind}
+          >
+            <Wind size={12} className={windInvalid ? 'text-rose-400' : 'text-emerald-400'} />
+            Afficher météo
+          </button>
+        )}
+
         <button
           onClick={handleExportPNG}
           disabled={exporting}
@@ -888,6 +1141,18 @@ export default function TimeSeriesChart({
           <Download size={12} />
           {exporting ? 'Export…' : 'Exporter PNG'}
         </button>
+        {onPresentationToggle && (
+          <button
+            onClick={onPresentationToggle}
+            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
+                       bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
+                       border border-gray-600 transition-colors"
+            title={presentationMode ? 'Quitter le mode présentation (Échap)' : 'Mode présentation'}
+            aria-label={presentationMode ? 'Quitter le mode présentation' : 'Mode présentation'}
+          >
+            {presentationMode ? <Minimize size={12} /> : <Maximize size={12} />}
+          </button>
+        )}
       </div>
 
       {/* Indice : Shift+drag */}
@@ -899,7 +1164,7 @@ export default function TimeSeriesChart({
       <div
         ref={chartAreaRef}
         className={`relative flex-1 min-h-0 ${
-          compPhase === 'pickON' || compPhase === 'pickOFF'
+          pendingAnnotationText || compPhase === 'pickON' || compPhase === 'pickOFF'
             ? 'cursor-crosshair'
             : dragging
             ? 'cursor-grabbing'
@@ -922,10 +1187,13 @@ export default function TimeSeriesChart({
                 tick={{ fontSize: 11, fill: '#9ca3af' }}
                 tickLine={false}
                 axisLine={{ stroke: '#374151' }}
-                interval={computeTickInterval(visibleData.length)}
+                interval={0}
+                ticks={adaptiveTicks.ticks}
+                tickFormatter={adaptiveTicks.formatter}
               />
 
               <YAxis
+                yAxisId="left"
                 domain={yDomain}
                 allowDataOverflow
                 tickCount={7}
@@ -935,6 +1203,22 @@ export default function TimeSeriesChart({
                 axisLine={{ stroke: '#374151' }}
                 width={56}
               />
+
+              {/* Axe Y secondaire pour la vitesse du vent (km/h) */}
+              {showWind && windSpeed !== null && (
+                <YAxis
+                  yAxisId="wind"
+                  orientation="right"
+                  domain={[0, 50]}
+                  allowDataOverflow
+                  tickCount={6}
+                  unit=" km/h"
+                  tick={{ fontSize: 10, fill: '#9ca3af' }}
+                  tickLine={false}
+                  axisLine={{ stroke: '#374151' }}
+                  width={60}
+                />
+              )}
 
               <Tooltip
                 contentStyle={{
@@ -980,6 +1264,7 @@ export default function TimeSeriesChart({
               {lineSpecs.map((spec) => (
                 <Line
                   key={spec.key}
+                  yAxisId="left"
                   type="monotone"
                   dataKey={spec.key}
                   name={spec.displayName}
@@ -995,10 +1280,66 @@ export default function TimeSeriesChart({
                 />
               ))}
 
+              {/* Vent : ligne pointillée grise sur l'axe Y secondaire */}
+              {showWind && windSpeed !== null && (
+                <Line
+                  yAxisId="wind"
+                  type="linear"
+                  dataKey="_wind"
+                  name="Vent (km/h)"
+                  stroke="#9ca3af"
+                  strokeWidth={1.25}
+                  strokeDasharray="4 3"
+                  dot={false}
+                  isAnimationActive={false}
+                  connectNulls
+                />
+              )}
+
+              {/* Seuil 20 km/h : trait rouge pointillé */}
+              {showWind && windSpeed !== null && (
+                <ReferenceLine
+                  yAxisId="wind"
+                  y={20}
+                  stroke="#ef4444"
+                  strokeDasharray="2 4"
+                  strokeWidth={1}
+                  ifOverflow="extendDomain"
+                  label={{
+                    value: '20 km/h',
+                    position: 'insideTopRight',
+                    fill: '#ef4444',
+                    fontSize: 9,
+                  }}
+                />
+              )}
+
+              {/* Overlay rouge : conditions météo invalides (vent ≥ 20 km/h) */}
+              {windInvalid && visibleData.length > 0 && (
+                <ReferenceArea
+                  yAxisId="left"
+                  x1={visibleData[0].label}
+                  x2={visibleData[visibleData.length - 1].label}
+                  fill="#ef4444"
+                  fillOpacity={0.08}
+                  stroke="#ef4444"
+                  strokeOpacity={0.35}
+                  strokeDasharray="3 3"
+                  ifOverflow="extendDomain"
+                  label={{
+                    value: 'Conditions météo invalides',
+                    position: 'insideTop',
+                    fill: '#fca5a5',
+                    fontSize: 10,
+                  }}
+                />
+              )}
+
               {/* Lignes verticales des événements */}
               {activeEvents.map((ev) => (
                 <ReferenceLine
                   key={ev.id}
+                  yAxisId="left"
                   x={snapToBucket(ev.time, aggSec)}
                   stroke={ev.color}
                   strokeDasharray="4 3"
@@ -1019,6 +1360,7 @@ export default function TimeSeriesChart({
                 .map((c) => (
                   <ReferenceLine
                     key={`cand-${c.id}`}
+                    yAxisId="left"
                     x={snapToBucket(c.time, aggSec)}
                     stroke="#fb923c"
                     strokeDasharray="2 3"
@@ -1029,6 +1371,30 @@ export default function TimeSeriesChart({
                       fill: '#fb923c',
                       fontSize: 9,
                       offset: 4,
+                    }}
+                  />
+                ))}
+
+              {/* Annotations textuelles (ReferenceDot + label) */}
+              {annotations
+                .filter((a) => a.day === selectedDate)
+                .map((a) => (
+                  <ReferenceDot
+                    key={`ann-${a.id}`}
+                    yAxisId="left"
+                    x={snapToBucket(a.time, aggSec)}
+                    y={a.laeq}
+                    r={3.5}
+                    fill={a.color ?? '#fbbf24'}
+                    stroke="#fff"
+                    strokeWidth={1}
+                    ifOverflow="extendDomain"
+                    label={{
+                      value: a.text,
+                      position: 'top',
+                      fill: a.color ?? '#fbbf24',
+                      fontSize: 10,
+                      offset: 6,
                     }}
                   />
                 ))}
@@ -1101,6 +1467,23 @@ export default function TimeSeriesChart({
                 compPhase === 'pickON' ? 'rgba(16,185,129,0.7)' : 'rgba(156,163,175,0.7)',
             }}
           />
+        )}
+
+        {/* Titre projet en mode présentation */}
+        {presentationMode && (projectName || pointNames.length > 0) && (
+          <div className="pointer-events-none absolute top-3 left-1/2 -translate-x-1/2
+                          text-center select-none">
+            {projectName && (
+              <div className="text-base font-semibold text-gray-100 tracking-wide">
+                {projectName}
+              </div>
+            )}
+            {pointNames.length > 0 && (
+              <div className="text-xs text-gray-400 mt-0.5">
+                {pointNames.join(' · ')} {selectedDate ? `— ${selectedDate}` : ''}
+              </div>
+            )}
+          </div>
         )}
 
         {/* Bandeau d'instructions pendant la comparaison */}

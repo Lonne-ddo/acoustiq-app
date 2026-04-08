@@ -8,7 +8,46 @@ import type {
   ConcordanceState,
   ProjectData,
   MarkerPos,
+  MeteoData,
+  IndicesSnapshot,
 } from '../types'
+import {
+  laeqAvg,
+  computeL10,
+  computeL50,
+  computeL90,
+  computeLAFmax,
+  computeLAFmin,
+} from '../utils/acoustics'
+
+/** Calcule un snapshot d'indices par (point × date) pour la sauvegarde. */
+function buildIndicesSnapshot(
+  files: MeasurementFile[],
+  pointMap: Record<string, string>,
+): Record<string, IndicesSnapshot> {
+  const groups = new Map<string, number[]>()
+  for (const f of files) {
+    const pt = pointMap[f.id]
+    if (!pt) continue
+    const key = `${pt}|${f.date}`
+    if (!groups.has(key)) groups.set(key, [])
+    const arr = groups.get(key)!
+    for (const dp of f.data) arr.push(dp.laeq)
+  }
+  const out: Record<string, IndicesSnapshot> = {}
+  for (const [key, vals] of groups) {
+    if (vals.length === 0) continue
+    out[key] = {
+      laeq: laeqAvg(vals),
+      l10: computeL10(vals),
+      l50: computeL50(vals),
+      l90: computeL90(vals),
+      lafmax: computeLAFmax(vals),
+      lafmin: computeLAFmin(vals),
+    }
+  }
+  return out
+}
 
 const PROJECT_VERSION = '1.1'
 
@@ -22,6 +61,9 @@ export function saveProject(
   concordance: Record<string, ConcordanceState>,
   mapImage: string | null = null,
   mapMarkers: Record<string, MarkerPos> = {},
+  meteo?: MeteoData,
+  projectName?: string,
+  checklist?: import('../types').ChecklistState,
 ): void {
   const project: ProjectData = {
     version: PROJECT_VERSION,
@@ -41,6 +83,10 @@ export function saveProject(
     concordance: { ...concordance },
     mapImage,
     mapMarkers: { ...mapMarkers },
+    meteo,
+    indicesSnapshot: buildIndicesSnapshot(files, pointMap),
+    projectName,
+    checklist,
   }
 
   const json = JSON.stringify(project, null, 2)

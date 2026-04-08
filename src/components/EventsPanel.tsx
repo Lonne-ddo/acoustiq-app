@@ -3,8 +3,8 @@
  * Permet d'ajouter des événements horodatés qui s'affichent sur le graphique
  */
 import { useState } from 'react'
-import { Plus, Trash2, Clock, Sparkles, Check, X } from 'lucide-react'
-import type { SourceEvent, CandidateEvent } from '../types'
+import { Plus, Trash2, Clock, Sparkles, Check, X, MessageSquare, MousePointerClick } from 'lucide-react'
+import type { SourceEvent, CandidateEvent, ChartAnnotation } from '../types'
 
 // Couleurs prédéfinies pour les événements
 const PRESET_COLORS = [
@@ -25,30 +25,60 @@ interface Props {
   onDetect: () => void
   onConfirmCandidate: (id: string) => void
   onDismissCandidate: (id: string) => void
+  annotations: ChartAnnotation[]
+  onAnnotationAdd: (a: ChartAnnotation) => void
+  onAnnotationRemove: (id: string) => void
+  onAnnotationUpdate: (id: string, text: string) => void
+  pendingAnnotationText: string | null
+  onPendingAnnotationChange: (text: string | null) => void
 }
 
 export default function EventsPanel({
   events, availableDates, onAdd, onRemove,
   candidates, onDetect, onConfirmCandidate, onDismissCandidate,
+  annotations, onAnnotationAdd, onAnnotationRemove, onAnnotationUpdate,
+  pendingAnnotationText, onPendingAnnotationChange,
 }: Props) {
   const [label, setLabel] = useState('')
   const [time, setTime] = useState('00:00')
   const [day, setDay] = useState(() => availableDates[0] ?? '')
   const [color, setColor] = useState(PRESET_COLORS[0])
   const [open, setOpen] = useState(true)
+  const [type, setType] = useState<'event' | 'annotation'>('event')
+  const [annLevel, setAnnLevel] = useState('60')
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editingText, setEditingText] = useState('')
 
   // Synchronise le jour sélectionné si les dates disponibles changent
   const effectiveDay = availableDates.includes(day) ? day : (availableDates[0] ?? '')
 
   function handleAdd() {
     if (!label.trim() || !effectiveDay) return
-    onAdd({
-      id: crypto.randomUUID(),
-      label: label.trim(),
-      time,
-      day: effectiveDay,
-      color,
-    })
+    if (type === 'event') {
+      onAdd({
+        id: crypto.randomUUID(),
+        label: label.trim(),
+        time,
+        day: effectiveDay,
+        color,
+      })
+    } else {
+      const lv = parseFloat(annLevel.replace(',', '.'))
+      onAnnotationAdd({
+        id: crypto.randomUUID(),
+        text: label.trim(),
+        time,
+        day: effectiveDay,
+        laeq: Number.isFinite(lv) ? lv : 60,
+        color,
+      })
+    }
+    setLabel('')
+  }
+
+  function handlePlaceOnChart() {
+    if (!label.trim()) return
+    onPendingAnnotationChange(label.trim())
     setLabel('')
   }
 
@@ -127,10 +157,48 @@ export default function EventsPanel({
 
           {/* Formulaire d'ajout */}
           <div className="space-y-2 bg-gray-800/50 rounded-md p-2">
+            {/* Type tabs */}
+            <div className="flex gap-1">
+              <button
+                onClick={() => setType('event')}
+                className={`flex-1 text-[10px] uppercase tracking-wider font-semibold py-1 rounded transition-colors ${
+                  type === 'event'
+                    ? 'bg-gray-700 text-emerald-300'
+                    : 'bg-gray-800 text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                Événement
+              </button>
+              <button
+                onClick={() => setType('annotation')}
+                className={`flex-1 text-[10px] uppercase tracking-wider font-semibold py-1 rounded transition-colors ${
+                  type === 'annotation'
+                    ? 'bg-gray-700 text-emerald-300'
+                    : 'bg-gray-800 text-gray-500 hover:text-gray-300'
+                }`}
+              >
+                Annotation
+              </button>
+            </div>
+
+            {pendingAnnotationText && (
+              <div className="flex items-center gap-1.5 text-[10px] text-emerald-300 bg-emerald-950/40
+                              border border-emerald-800/50 rounded px-2 py-1">
+                <MousePointerClick size={10} />
+                <span className="flex-1 truncate">Cliquez sur le graphique pour placer « {pendingAnnotationText} »</span>
+                <button
+                  onClick={() => onPendingAnnotationChange(null)}
+                  className="text-emerald-400 hover:text-emerald-200"
+                >
+                  <X size={10} />
+                </button>
+              </div>
+            )}
+
             {/* Label */}
             <input
               type="text"
-              placeholder="Libellé (ex: Passage camion)"
+              placeholder={type === 'event' ? 'Libellé (ex: Passage camion)' : 'Texte de l\'annotation'}
               value={label}
               onChange={(e) => setLabel(e.target.value)}
               onKeyDown={handleKeyDown}
@@ -139,7 +207,7 @@ export default function EventsPanel({
                          focus:outline-none focus:ring-1 focus:ring-emerald-500"
             />
 
-            {/* Heure + Jour */}
+            {/* Heure + Jour (et niveau dB pour annotation) */}
             <div className="flex gap-2">
               <input
                 type="time"
@@ -166,6 +234,21 @@ export default function EventsPanel({
               )}
             </div>
 
+            {type === 'annotation' && (
+              <div className="flex items-center gap-2">
+                <label className="text-xs text-gray-500">Niveau</label>
+                <input
+                  type="number"
+                  step="0.1"
+                  value={annLevel}
+                  onChange={(e) => setAnnLevel(e.target.value)}
+                  className="flex-1 text-xs bg-gray-800 text-gray-100 border border-gray-600 rounded
+                             px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                />
+                <span className="text-xs text-gray-500">dB(A)</span>
+              </div>
+            )}
+
             {/* Couleur : nuancier + input libre */}
             <div className="flex items-center gap-2">
               <div className="flex gap-1">
@@ -191,21 +274,35 @@ export default function EventsPanel({
               />
             </div>
 
-            {/* Bouton ajouter */}
-            <button
-              onClick={handleAdd}
-              disabled={!label.trim() || !effectiveDay}
-              className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded
-                         bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed
-                         text-xs font-medium text-gray-200 transition-colors"
-            >
-              <Plus size={12} />
-              Ajouter l'événement
-            </button>
+            {/* Boutons d'ajout */}
+            <div className="flex gap-1">
+              <button
+                onClick={handleAdd}
+                disabled={!label.trim() || !effectiveDay}
+                className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded
+                           bg-gray-700 hover:bg-gray-600 disabled:opacity-40 disabled:cursor-not-allowed
+                           text-xs font-medium text-gray-200 transition-colors"
+              >
+                <Plus size={12} />
+                {type === 'event' ? 'Ajouter l\'événement' : 'Ajouter l\'annotation'}
+              </button>
+              {type === 'annotation' && (
+                <button
+                  onClick={handlePlaceOnChart}
+                  disabled={!label.trim()}
+                  className="flex items-center justify-center gap-1 px-2 py-1.5 rounded
+                             bg-emerald-800/40 hover:bg-emerald-800/60 border border-emerald-800/60
+                             disabled:opacity-30 text-xs font-medium text-emerald-300 transition-colors"
+                  title="Place l'annotation à l'endroit du prochain clic sur le graphique"
+                >
+                  <MousePointerClick size={12} />
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Liste des événements */}
-          {events.length === 0 ? (
+          {events.length === 0 && annotations.length === 0 ? (
             <div className="text-center text-gray-600 text-xs py-3">
               <Clock size={20} className="mx-auto mb-1 opacity-40" />
               Aucun événement
@@ -217,21 +314,67 @@ export default function EventsPanel({
                   key={ev.id}
                   className="flex items-center gap-2 bg-gray-800 rounded px-2 py-1.5"
                 >
-                  {/* Pastille colorée */}
                   <span
                     className="w-2.5 h-2.5 rounded-full shrink-0"
                     style={{ backgroundColor: ev.color }}
                   />
-                  {/* Infos */}
                   <div className="flex-1 min-w-0">
                     <p className="text-xs text-gray-200 truncate">{ev.label}</p>
                     <p className="text-xs text-gray-500">
                       {ev.day} · {ev.time}
                     </p>
                   </div>
-                  {/* Supprimer */}
                   <button
                     onClick={() => onRemove(ev.id)}
+                    className="text-gray-600 hover:text-red-400 shrink-0 transition-colors"
+                    title="Supprimer"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </li>
+              ))}
+              {annotations.map((a) => (
+                <li
+                  key={a.id}
+                  className="flex items-center gap-2 bg-gray-800 rounded px-2 py-1.5"
+                >
+                  <MessageSquare size={11} className="shrink-0" style={{ color: a.color ?? '#9ca3af' }} />
+                  <div className="flex-1 min-w-0">
+                    {editingId === a.id ? (
+                      <input
+                        autoFocus
+                        value={editingText}
+                        onChange={(e) => setEditingText(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') {
+                            onAnnotationUpdate(a.id, editingText.trim() || a.text)
+                            setEditingId(null)
+                          } else if (e.key === 'Escape') {
+                            setEditingId(null)
+                          }
+                        }}
+                        onBlur={() => {
+                          onAnnotationUpdate(a.id, editingText.trim() || a.text)
+                          setEditingId(null)
+                        }}
+                        className="w-full text-xs bg-gray-900 text-gray-100 border border-gray-600 rounded
+                                   px-1 py-0 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                    ) : (
+                      <p
+                        className="text-xs text-gray-200 truncate cursor-text"
+                        onDoubleClick={() => { setEditingId(a.id); setEditingText(a.text) }}
+                        title="Double-clic pour éditer"
+                      >
+                        {a.text}
+                      </p>
+                    )}
+                    <p className="text-xs text-gray-500">
+                      {a.day} · {a.time} · {a.laeq.toFixed(1)} dB
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => onAnnotationRemove(a.id)}
                     className="text-gray-600 hover:text-red-400 shrink-0 transition-colors"
                     title="Supprimer"
                   >

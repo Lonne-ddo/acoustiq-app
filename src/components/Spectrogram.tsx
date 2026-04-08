@@ -71,10 +71,41 @@ function freqLabel(hz: number): string {
 }
 
 /**
- * Agrège les spectres par buckets de `aggSec` secondes (moyenne énergétique par bande).
+ * Mode d'agrégation du spectrogramme.
+ * - 'moyen'      : moyenne énergétique par bande sur chaque bucket (lissé, par défaut)
+ * - 'instantane' : valeur maximale (pic) par bande sur chaque bucket — met en
+ *                  évidence les événements transitoires sans moyennage
+ */
+export type SpectroMode = 'moyen' | 'instantane'
+
+/**
+ * Agrège les spectres par buckets de `aggSec` secondes selon le mode choisi.
  * La clé du bucket est en minutes (float) pour rester compatible avec l'axe X.
  */
-function aggregateSpectra(data: DataPoint[], aggSec: number): Map<number, number[]> {
+function aggregateSpectra(
+  data: DataPoint[],
+  aggSec: number,
+  mode: SpectroMode = 'moyen',
+): Map<number, number[]> {
+  if (mode === 'instantane') {
+    // Pic (max) par bande sur chaque bucket
+    const acc = new Map<number, number[]>()
+    for (const dp of data) {
+      if (!dp.spectra?.length) continue
+      const tSec = Math.round(dp.t * 60)
+      const bucketMin = (Math.floor(tSec / aggSec) * aggSec) / 60
+      const cur = acc.get(bucketMin)
+      if (!cur) {
+        acc.set(bucketMin, dp.spectra.slice())
+      } else {
+        for (let i = 0; i < dp.spectra.length; i++) {
+          if (dp.spectra[i] > cur[i]) cur[i] = dp.spectra[i]
+        }
+      }
+    }
+    return acc
+  }
+  // Mode 'moyen' : moyenne énergétique
   const acc = new Map<number, { pow: number[]; n: number }>()
   for (const dp of data) {
     if (!dp.spectra?.length) continue
@@ -410,6 +441,7 @@ export default function Spectrogram({
 }: Props) {
   const [minDb, setMinDb] = useState(30)
   const [maxDb, setMaxDb] = useState(90)
+  const [mode, setMode] = useState<SpectroMode>('moyen')
   const [hoverTime, setHoverTime] = useState<number | null>(null)
 
   // Fichiers actifs pour la journée sélectionnée, groupés par point
@@ -430,10 +462,10 @@ export default function Spectrogram({
   const spectraByPoint = useMemo(() => {
     const m = new Map<string, Map<number, number[]>>()
     for (const [pt, fs] of filesByPoint) {
-      m.set(pt, aggregateSpectra(fs.flatMap((f) => f.data), aggregationSeconds))
+      m.set(pt, aggregateSpectra(fs.flatMap((f) => f.data), aggregationSeconds, mode))
     }
     return m
-  }, [filesByPoint, aggregationSeconds])
+  }, [filesByPoint, aggregationSeconds, mode])
 
   // Plage temporelle globale et nombre de bandes
   const { tMin, tMax, nBands } = useMemo(() => {
@@ -466,9 +498,9 @@ export default function Spectrogram({
     [events, selectedDate],
   )
 
-  // Hauteur par canvas : compactée si embedded, sinon valeur par défaut
+  // Hauteur par canvas : compactée si embedded (− header + axe X), sinon valeur par défaut
   const perCanvasHeight = compact
-    ? Math.max(40, Math.floor(((height ?? 200) - 30) / Math.max(1, pointNames.length)))
+    ? Math.max(40, Math.floor(((height ?? 200) - 60) / Math.max(1, pointNames.length)))
     : DEFAULT_CANVAS_HEIGHT
 
   // États vides
@@ -487,10 +519,60 @@ export default function Spectrogram({
     )
   }
 
+  // Barre d'outils commune : toggle Moyen/Instantané + min/max dB
+  const headerControls = (
+    <div className="flex items-center gap-3 flex-wrap">
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] text-gray-500 mr-1">Mode</span>
+        <button
+          onClick={() => setMode('moyen')}
+          className={`text-[10px] px-2 py-0.5 rounded transition-colors ${
+            mode === 'moyen' ? 'bg-emerald-700 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+          }`}
+          title="Moyenne énergétique par bucket d'agrégation"
+        >
+          Moyen
+        </button>
+        <button
+          onClick={() => setMode('instantane')}
+          className={`text-[10px] px-2 py-0.5 rounded transition-colors ${
+            mode === 'instantane' ? 'bg-emerald-700 text-white' : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+          }`}
+          title="Pic (max) par bande sur chaque bucket — sans moyennage"
+        >
+          Instantané
+        </button>
+      </div>
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] text-gray-500">Échelle dB</span>
+        <input
+          type="number"
+          value={minDb}
+          onChange={(e) => setMinDb(Number(e.target.value))}
+          className="w-12 text-[10px] text-center bg-gray-800 text-gray-100 border border-gray-600
+                     rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+          aria-label="Min dB"
+        />
+        <span className="text-[10px] text-gray-600">–</span>
+        <input
+          type="number"
+          value={maxDb}
+          onChange={(e) => setMaxDb(Number(e.target.value))}
+          className="w-12 text-[10px] text-center bg-gray-800 text-gray-100 border border-gray-600
+                     rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+          aria-label="Max dB"
+        />
+      </div>
+    </div>
+  )
+
   // ── Mode compact (embarqué sous le graphique) ────────────────────────────
   if (compact) {
     return (
-      <div className="flex flex-col h-full" style={{ height }}>
+      <div data-acoustiq-spectrogram="compact" className="flex flex-col h-full" style={{ height }}>
+        <div className="flex items-center justify-end px-4 py-1 border-b border-gray-800/60 shrink-0">
+          {headerControls}
+        </div>
         <div className="flex-1 overflow-y-auto px-4 py-2">
           <div className="flex gap-0">
             <div className="flex-1 min-w-0">
@@ -544,25 +626,7 @@ export default function Spectrogram({
           <span className="text-xs text-gray-500">{selectedDate}</span>
         )}
 
-        <div className="flex items-center gap-1.5 ml-auto">
-          <span className="text-xs text-gray-500">Plage dB :</span>
-          <input
-            type="number"
-            value={minDb}
-            onChange={(e) => setMinDb(Number(e.target.value))}
-            className="w-14 text-xs text-center bg-gray-800 text-gray-100 border border-gray-600
-                       rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-          />
-          <span className="text-xs text-gray-600">–</span>
-          <input
-            type="number"
-            value={maxDb}
-            onChange={(e) => setMaxDb(Number(e.target.value))}
-            className="w-14 text-xs text-center bg-gray-800 text-gray-100 border border-gray-600
-                       rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-          />
-          <span className="text-xs text-gray-500">dB</span>
-        </div>
+        <div className="ml-auto">{headerControls}</div>
       </div>
 
       {/* Zone scrollable : spectrogrammes empilés */}

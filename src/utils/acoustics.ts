@@ -152,9 +152,10 @@ export function extractBp(ba: number, br: number): number | null {
 }
 
 /**
- * Centres des bandes de tiers d'octave (Hz), à partir de 6.3 Hz.
- * Aligné sur l'ordre des spectres LZeq fournis par les sonomètres
- * SoundAdvisor 831C / SoundExpert 821SE.
+ * Centres des bandes de tiers d'octave (Hz) — alignement complet 6.3 Hz → 20 kHz.
+ * L'export 831C fournit les colonnes 41–67 = 27 bandes commençant à 50 Hz
+ * (sous-ensemble des 27 dernières bandes de cette table). On conserve cette
+ * constante pour l'affichage du spectrogramme uniquement.
  */
 export const THIRD_OCTAVE_CENTERS: number[] = [
   6.3, 8, 10, 12.5, 16, 20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250,
@@ -163,87 +164,170 @@ export const THIRD_OCTAVE_CENTERS: number[] = [
 ]
 
 /**
- * Seuil d'émergence tonale (dB) appliqué à une bande donnée selon sa fréquence.
- * Tableau extrait des Lignes directrices MELCCFP 2026 (méthode 1/3 d'octave).
+ * Bandes 1/3 d'octave utilisées pour l'analyse tonale Kt — Lignes directrices
+ * MELCCFP 2026, Tableau 2 (50 Hz → 10 kHz, 24 bandes). Les bandes au-dessus de
+ * 10 kHz sont exclues par la méthode et ignorées même si présentes dans le
+ * spectre brut.
+ *
+ * L'index 0 correspond exactement au premier élément du `spectra[]` parsé
+ * depuis le 831C (col 41 du Time History).
  */
-function tonalThresholdForCenter(fc: number): number {
+export const KT_BAND_FREQS: number[] = [
+  50, 63, 80, 100, 125, 160, 200, 250, 315, 400,
+  500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000,
+  5000, 6300, 8000, 10000,
+]
+
+/**
+ * Pondération A (dB) — décalages à appliquer aux niveaux LZeq pour obtenir
+ * les niveaux LAeq par bande. Référence ANSI S1.4 / IEC 61672.
+ */
+export const A_WEIGHT: Record<number, number> = {
+  50: -30.2, 63: -26.2, 80: -22.5, 100: -19.1, 125: -16.1,
+  160: -13.4, 200: -10.9, 250: -8.6, 315: -6.6, 400: -4.8,
+  500: -3.2, 630: -1.9, 800: -0.8, 1000: 0.0, 1250: 0.6,
+  1600: 1.0, 2000: 1.2, 2500: 1.3, 3150: 1.2, 4000: 1.0,
+  5000: 0.5, 6300: -0.1, 8000: -1.1, 10000: -2.5,
+}
+
+/**
+ * Seuil d'émergence tonale Kt (dB) appliqué selon le centre de bande.
+ * Tableau 2 — Lignes directrices MELCCFP 2026, Section 3.7.4.
+ */
+function ktThreshold(fc: number): number {
   if (fc <= 125) return 15
   if (fc <= 400) return 8
   return 5
 }
 
-/**
- * Résultat détaillé de la détection tonale Kt — utilisé par l'UI pour afficher
- * la bande qui a déclenché la correction et son émergence.
- */
-export interface KtDetection {
-  /** Correction tonale en dB (0 ou 5) */
+/** Détail d'analyse tonale par bande 1/3 d'octave (pour affichage UI). */
+export interface KtBandRow {
+  /** Fréquence centrale (Hz) */
+  freq: number
+  /** Niveau LZeq de la bande (dB) */
+  lzeq: number
+  /** Niveau LAeq équivalent de la bande (dB(A)) = LZeq + A-weight */
+  laeqBand: number
+  /** Δ avec la bande précédente (dB) — null si bande de bord (i = 0) */
+  diffPrev: number | null
+  /** Δ avec la bande suivante (dB) — null si bande de bord (i = dernière) */
+  diffNext: number | null
+  /** Seuil d'émergence applicable (dB) */
+  threshold: number
+  /** Vrai si bande de bord (Δ non calculable) */
+  isBoundary: boolean
+  /** Vrai si la bande est exclue par l'exception (LAeq global − LAeq_band ≥ 15 dB) */
+  excluded: boolean
+  /** Vrai si la bande déclenche la correction Kt = 5 dB */
+  isTonal: boolean
+}
+
+/** Résultat complet de l'analyse spectrale Kt. */
+export interface KtAnalysis {
+  /** Une ligne par bande analysée (24 bandes au maximum) */
+  bands: KtBandRow[]
+  /** Correction tonale finale (0 ou 5 dB) */
   kt: number
-  /** Vrai si une composante tonale a été détectée */
-  detected: boolean
-  /** Index de la bande tonale dans le spectre fourni (null si rien) */
-  bandIndex: number | null
-  /** Fréquence centrale de la bande tonale (Hz, null si rien) */
-  fc: number | null
-  /** Émergence (dB) au-dessus de la plus haute des deux bandes adjacentes */
-  emergence: number | null
-  /** Seuil appliqué pour la bande déclenchante (dB) */
-  threshold: number | null
+  /** Index dans `bands` de la première bande tonale, ou null */
+  triggeringIndex: number | null
 }
 
 /**
- * Détermine si une composante tonale est présente dans un spectre 1/3 d'octave
- * (LZeq, dB) et retourne un descripteur de détection complet.
+ * Analyse complète de la composante tonale Kt — Lignes directrices MELCCFP
+ * 2026, Section 3.7.4 et Tableau 2 (méthode 1/3 d'octave). Travaille sur 24
+ * bandes 1/3 d'octave de 50 Hz à 10 kHz.
  *
- * Critère MELCCFP 2026 (Tableau 2) : une bande est tonale lorsqu'elle dépasse
- * ses DEUX bandes adjacentes d'au moins :
- *   - 15 dB pour fc ≤ 125 Hz
- *   - 8  dB pour 160 Hz ≤ fc ≤ 400 Hz
- *   - 5  dB pour fc ≥ 500 Hz
+ * Algorithme par bande :
+ *   diffPrev = LZeq[i] − LZeq[i−1]   (null si i = 0)
+ *   diffNext = LZeq[i] − LZeq[i+1]   (null si i = dernière bande)
+ *   isBoundary = diffPrev === null OR diffNext === null
+ *   LAeq_band = LZeq + A_WEIGHT[freq]
+ *   excluded  = (LAeq_global − LAeq_band) ≥ 15 dB
+ *   isTonal   = !isBoundary && diffPrev ≥ seuil && diffNext ≥ seuil && !excluded
  *
- * Exception : aucune correction n'est appliquée si le niveau de la bande
- * tonale est ≥ 15 dB en-dessous du niveau global pondéré A (laeqA).
+ * Résultat : Kt = 5 dB si AU MOINS UNE bande est tonale, sinon Kt = 0.
  *
- * @param spectrum - niveaux LZeq par bande de tiers d'octave (dB)
- * @param laeqA    - niveau global A-pondéré sur la même période (optionnel —
- *                   nécessaire pour appliquer l'exception « tonal masqué »)
+ * @param spectrum    spectres LZeq par bande 1/3 d'octave (dB), aligné sur
+ *                    `KT_BAND_FREQS` (le spectre 831C démarre à 50 Hz).
+ *                    Les valeurs au-delà de 10 kHz sont ignorées.
+ * @param globalLAeq  niveau global pondéré A de la période (dB(A)), pour
+ *                    appliquer l'exception « bande masquée ».
  */
+export function analyzeKt(spectrum: number[], globalLAeq: number): KtAnalysis {
+  const bands: KtBandRow[] = []
+  if (!spectrum || spectrum.length === 0) {
+    return { bands, kt: 0, triggeringIndex: null }
+  }
+  const N = Math.min(KT_BAND_FREQS.length, spectrum.length)
+
+  for (let i = 0; i < N; i++) {
+    const freq = KT_BAND_FREQS[i]
+    const lzeq = spectrum[i]
+    const aw = A_WEIGHT[freq] ?? 0
+    const laeqBand = lzeq + aw
+    const threshold = ktThreshold(freq)
+    const diffPrev = i === 0 ? null : lzeq - spectrum[i - 1]
+    const diffNext = i === N - 1 ? null : lzeq - spectrum[i + 1]
+    const isBoundary = diffPrev === null || diffNext === null
+    const excluded =
+      Number.isFinite(globalLAeq) && globalLAeq - laeqBand >= 15
+    const isTonal =
+      !isBoundary &&
+      (diffPrev as number) >= threshold &&
+      (diffNext as number) >= threshold &&
+      !excluded
+
+    bands.push({
+      freq, lzeq, laeqBand, diffPrev, diffNext, threshold,
+      isBoundary, excluded, isTonal,
+    })
+  }
+
+  const triggering = bands.findIndex((b) => b.isTonal)
+  return {
+    bands,
+    kt: triggering >= 0 ? 5 : 0,
+    triggeringIndex: triggering >= 0 ? triggering : null,
+  }
+}
+
+/**
+ * Détection compacte de Kt — première bande tonale, fréquence et émergence.
+ * Wrapper sur `analyzeKt` pour les cas où on veut juste un résumé d'une ligne.
+ */
+export interface KtDetection {
+  kt: number
+  detected: boolean
+  bandIndex: number | null
+  fc: number | null
+  /** Plus petite des deux émergences (Δ préc., Δ suiv.) en dB */
+  emergence: number | null
+  threshold: number | null
+}
+
 export function detectKt(spectrum: number[], laeqA?: number | null): KtDetection {
   const empty: KtDetection = {
     kt: 0, detected: false, bandIndex: null, fc: null, emergence: null, threshold: null,
   }
-  if (!spectrum || spectrum.length < 3) return empty
-
-  let best: KtDetection | null = null
-
-  for (let i = 1; i < spectrum.length - 1; i++) {
-    const fc = THIRD_OCTAVE_CENTERS[i]
-    if (fc === undefined) continue
-    const threshold = tonalThresholdForCenter(fc)
-    const lvl = spectrum[i]
-    const left = spectrum[i - 1]
-    const right = spectrum[i + 1]
-    const minDelta = Math.min(lvl - left, lvl - right)
-    if (minDelta < threshold) continue
-
-    // Exception : bande tonale ≥ 15 dB sous le LAeq global → pas de correction
-    if (typeof laeqA === 'number' && Number.isFinite(laeqA) && laeqA - lvl >= 15) {
-      continue
-    }
-
-    // Garde la plus saillante (plus grande émergence relative au seuil)
-    const emergence = minDelta
-    if (!best || emergence - threshold > (best.emergence! - best.threshold!)) {
-      best = { kt: 5, detected: true, bandIndex: i, fc, emergence, threshold }
-    }
+  if (!spectrum || spectrum.length === 0) return empty
+  const analysis = analyzeKt(
+    spectrum,
+    typeof laeqA === 'number' && Number.isFinite(laeqA) ? laeqA : -Infinity,
+  )
+  if (analysis.triggeringIndex === null) return empty
+  const b = analysis.bands[analysis.triggeringIndex]
+  const emergence = Math.min(b.diffPrev as number, b.diffNext as number)
+  return {
+    kt: 5,
+    detected: true,
+    bandIndex: analysis.triggeringIndex,
+    fc: b.freq,
+    emergence,
+    threshold: b.threshold,
   }
-  return best ?? empty
 }
 
-/**
- * Variante historique : retourne uniquement la valeur Kt (0 ou 5).
- * Conservée pour la compatibilité ascendante.
- */
+/** Variante historique : ne retourne que la valeur Kt (0 ou 5). */
 export function computeKt(spectrum: number[], laeqA?: number | null): number {
   return detectKt(spectrum, laeqA).kt
 }

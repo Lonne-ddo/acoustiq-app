@@ -48,7 +48,11 @@ import { DEFAULT_METEO } from './types'
 import ChecklistModal, { DEFAULT_CHECKLIST } from './components/ChecklistModal'
 import HistoryTab from './components/HistoryTab'
 import RegulationTab from './components/RegulationTab'
+import CarrierePage from './pages/CarrierePage'
+import EcmePage from './pages/EcmePage'
+import YamnetClassifier from './components/audio/YamnetClassifier'
 import WorkflowGuide from './components/WorkflowGuide'
+import type { ClassifiedSegment } from './utils/yamnetProcessor'
 import {
   detectRisingEvents,
   laeqAvg,
@@ -161,7 +165,7 @@ function saveRecent(projects: RecentProject[]) {
   localStorage.setItem(RECENT_KEY, JSON.stringify(projects.slice(0, MAX_RECENT)))
 }
 
-type Tab = 'chart' | 'map' | 'lw' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation'
+type Tab = 'chart' | 'map' | 'lw' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation' | 'carriere' | 'yamnet' | 'ecme'
 
 /**
  * Regroupement des onglets en 4 catégories principales pour réduire le bruit
@@ -180,6 +184,9 @@ const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
   map: 'outils',
   regulation: 'outils',
   history: 'outils',
+  carriere: 'outils',
+  yamnet: 'outils',
+  ecme: 'outils',
 }
 
 const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
@@ -191,6 +198,9 @@ const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
     { id: 'concordance', label: 'Concordance' },
   ],
   outils: [
+    { id: 'carriere', label: 'Carrière / Sablière' },
+    { id: 'yamnet', label: 'Audio IA' },
+    { id: 'ecme', label: 'Parc ECME' },
     { id: 'map', label: 'Carte' },
     { id: 'regulation', label: 'Réglementation' },
     { id: 'history', label: 'Historique' },
@@ -788,6 +798,9 @@ interface MainPanelProps {
   onConformiteReceptorChange: (r: 'I' | 'II' | 'III' | 'IV') => void
   onConformitePeriodChange: (p: 'jour' | 'nuit') => void
   meteo: MeteoData
+  audioFile: AudioFile | null
+  audioSegments: ClassifiedSegment[]
+  onAudioSegmentsChange: (segs: ClassifiedSegment[]) => void
   presentationMode: boolean
   onPresentationToggle: () => void
   onDateChange: (date: string) => void
@@ -816,7 +829,8 @@ function MainPanel({
   onAnnotationAdd, onPendingAnnotationChange,
   conformiteReceptor, conformitePeriod,
   onConformiteReceptorChange, onConformitePeriodChange,
-  meteo, presentationMode, onPresentationToggle,
+  meteo, audioFile, audioSegments, onAudioSegmentsChange,
+  presentationMode, onPresentationToggle,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
@@ -1011,6 +1025,8 @@ function MainPanel({
                   onPresentationToggle={onPresentationToggle}
                   projectName={projectName}
                   meteo={meteo}
+                  audioSegments={audioSegments}
+                  audioOffsetMin={audioFile?.startOffsetMin ?? 0}
                 />
               </div>
 
@@ -1121,6 +1137,28 @@ function MainPanel({
       {effectiveTab === 'regulation' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           <RegulationTab />
+        </div>
+      )}
+
+      {effectiveTab === 'carriere' && (
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+          <CarrierePage />
+        </div>
+      )}
+
+      {effectiveTab === 'yamnet' && (
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+          <YamnetClassifier
+            audioFile={audioFile}
+            segments={audioSegments}
+            onSegmentsChange={onAudioSegmentsChange}
+          />
+        </div>
+      )}
+
+      {effectiveTab === 'ecme' && (
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+          <EcmePage />
         </div>
       )}
 
@@ -1237,6 +1275,9 @@ export default function App() {
   // Checklist terrain (sauvegardée avec le projet)
   const [checklist, setChecklist] = useState<ChecklistState>(DEFAULT_CHECKLIST)
   const [checklistOpen, setChecklistOpen] = useState(false)
+
+  // Segments audio classifiés par YAMNet (overlay sur le graphique principal)
+  const [audioSegments, setAudioSegments] = useState<ClassifiedSegment[]>([])
 
   // Mode présentation : masque sidebar + barre d'onglets
   const [presentationMode, setPresentationMode] = useState(false)
@@ -1846,6 +1887,9 @@ export default function App() {
         onConformiteReceptorChange={setConformiteReceptor}
         onConformitePeriodChange={setConformitePeriod}
         meteo={meteo}
+        audioFile={audioFile}
+        audioSegments={audioSegments}
+        onAudioSegmentsChange={setAudioSegments}
         presentationMode={presentationMode}
         onPresentationToggle={() => setPresentationMode((v) => !v)}
         onDateChange={setSelectedDate}

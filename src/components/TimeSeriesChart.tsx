@@ -28,6 +28,7 @@ import { drawQrBadge } from '../utils/qrBadge'
 import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind } from 'lucide-react'
 import { ReferenceDot } from 'recharts'
 import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData } from '../types'
+import type { ClassifiedSegment } from '../utils/yamnetProcessor'
 import { laeqAvg, computeL90 } from '../utils/acoustics'
 
 // Palette de couleurs par point de mesure
@@ -208,6 +209,10 @@ interface Props {
   projectName?: string
   /** Conditions météo (pour overlay vent invalide + courbe vent) */
   meteo?: MeteoData
+  /** Segments audio classifiés YAMNet — surimpression colorée */
+  audioSegments?: ClassifiedSegment[]
+  /** Décalage de l'audio en minutes depuis minuit (pour positionner les segments) */
+  audioOffsetMin?: number
 }
 
 /** Format court d'une date ISO en français : "2026-03-09" → "09 mars" */
@@ -246,6 +251,8 @@ export default function TimeSeriesChart({
   onPresentationToggle,
   projectName,
   meteo,
+  audioSegments,
+  audioOffsetMin = 0,
 }: Props) {
   // Affichage des données météo (vent) sur le graphique
   const [showWind, setShowWind] = useState(false)
@@ -1402,6 +1409,15 @@ export default function TimeSeriesChart({
           </ResponsiveContainer>
         </div>
 
+        {/* Overlay : barre des segments audio classifiés (YAMNet) */}
+        {audioSegments && audioSegments.length > 0 && (
+          <AudioSegmentsBar
+            segments={audioSegments}
+            offsetMin={audioOffsetMin}
+            effectiveRange={effectiveRange}
+          />
+        )}
+
         {/* Overlay : étiquettes "collantes" des points (haut-droite) */}
         <div className="pointer-events-none absolute top-2 right-8 flex flex-col items-end gap-0.5">
           {lineSpecs.filter((spec) => !hiddenLines.has(spec.key)).map((spec) => {
@@ -1555,6 +1571,119 @@ export default function TimeSeriesChart({
           off={compOff}
           onClose={resetComparison}
         />
+      )}
+    </div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// AudioSegmentsBar — bandeau coloré YAMNet sous la courbe
+// ────────────────────────────────────────────────────────────────────────────
+
+function AudioSegmentsBar({
+  segments,
+  offsetMin,
+  effectiveRange,
+}: {
+  segments: ClassifiedSegment[]
+  offsetMin: number
+  effectiveRange: ZoomRange
+}) {
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+  const [width, setWidth] = useState(0)
+  const [hover, setHover] = useState<{ seg: ClassifiedSegment; x: number } | null>(null)
+
+  // Suivre la largeur du conteneur
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const obs = new ResizeObserver(() => setWidth(Math.floor(el.clientWidth)))
+    obs.observe(el)
+    setWidth(Math.floor(el.clientWidth))
+    return () => obs.disconnect()
+  }, [])
+
+  // Dessiner les segments
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || width === 0) return
+    const dpr = window.devicePixelRatio || 1
+    const H = 14
+    canvas.width = Math.max(1, width * dpr)
+    canvas.height = H * dpr
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, width, H)
+
+    const PAD_LEFT = 64
+    const PAD_RIGHT = 24
+    const usable = Math.max(1, width - PAD_LEFT - PAD_RIGHT)
+    const span = Math.max(0.0001, effectiveRange.endMin - effectiveRange.startMin)
+
+    for (const seg of segments) {
+      const segStartMin = offsetMin + seg.timeStart / 60
+      const segEndMin = offsetMin + seg.timeEnd / 60
+      if (segEndMin < effectiveRange.startMin || segStartMin > effectiveRange.endMin) continue
+      const x0 = PAD_LEFT + ((segStartMin - effectiveRange.startMin) / span) * usable
+      const x1 = PAD_LEFT + ((segEndMin - effectiveRange.startMin) / span) * usable
+      ctx.fillStyle = seg.color
+      ctx.fillRect(Math.max(PAD_LEFT, x0), 1, Math.max(1, x1 - x0), H - 2)
+    }
+    // Cadre
+    ctx.strokeStyle = 'rgba(75, 85, 99, 0.6)'
+    ctx.strokeRect(PAD_LEFT - 0.5, 0.5, usable + 1, H - 1)
+  }, [segments, offsetMin, effectiveRange, width])
+
+  // Tooltip au survol
+  function handleMouseMove(e: React.MouseEvent<HTMLDivElement>) {
+    const rect = e.currentTarget.getBoundingClientRect()
+    const px = e.clientX - rect.left
+    const PAD_LEFT = 64
+    const PAD_RIGHT = 24
+    const usable = Math.max(1, rect.width - PAD_LEFT - PAD_RIGHT)
+    const span = Math.max(0.0001, effectiveRange.endMin - effectiveRange.startMin)
+    const frac = (px - PAD_LEFT) / usable
+    if (frac < 0 || frac > 1) {
+      setHover(null)
+      return
+    }
+    const tMin = effectiveRange.startMin + frac * span
+    // Trouver le segment correspondant
+    for (const seg of segments) {
+      const segStart = offsetMin + seg.timeStart / 60
+      const segEnd = offsetMin + seg.timeEnd / 60
+      if (tMin >= segStart && tMin <= segEnd) {
+        setHover({ seg, x: px })
+        return
+      }
+    }
+    setHover(null)
+  }
+
+  return (
+    <div
+      ref={containerRef}
+      className="pointer-events-auto absolute left-0 right-0 bottom-7"
+      onMouseMove={handleMouseMove}
+      onMouseLeave={() => setHover(null)}
+    >
+      <canvas ref={canvasRef} className="block w-full" style={{ height: 14 }} />
+      {hover && (
+        <div
+          className="pointer-events-none absolute -top-7 px-1.5 py-0.5 rounded
+                     bg-gray-900/95 border border-gray-700 text-[10px] text-gray-100
+                     whitespace-nowrap shadow-lg"
+          style={{ left: Math.min(Math.max(hover.x - 60, 4), (containerRef.current?.clientWidth ?? 200) - 140) }}
+        >
+          <span className="font-semibold" style={{ color: hover.seg.color }}>
+            {hover.seg.category}
+          </span>
+          <span className="text-gray-500 ml-1.5">
+            {(hover.seg.score * 100).toFixed(0)} %
+          </span>
+        </div>
       )}
     </div>
   )

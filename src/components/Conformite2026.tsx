@@ -37,12 +37,12 @@ import {
   laeqAvg,
   computeL90,
   extractBp,
-  detectKt,
+  analyzeKt,
   computeKb,
   computeKi,
   computeLar1h,
 } from '../utils/acoustics'
-import type { KtDetection } from '../utils/acoustics'
+import type { KtAnalysis } from '../utils/acoustics'
 
 // ────────────────────────────────────────────────────────────────────────────
 // Référentiel : Tableau 1 — Lignes directrices MELCCFP 2026
@@ -97,7 +97,7 @@ interface PointResult {
   bpReason: 'ok' | 'insufficient' | 'noBr' | 'noData'
   kt: number
   ktAuto: boolean
-  ktDetection: KtDetection | null
+  ktAnalysis: KtAnalysis | null
   ki: number
   kiAuto: boolean
   kb: number
@@ -247,7 +247,7 @@ export default function Conformite2026({
           bpReason: 'noData',
           kt: 0,
           ktAuto: false,
-          ktDetection: null,
+          ktAnalysis: null,
           ki: 0,
           kiAuto: false,
           kb: 0,
@@ -276,10 +276,10 @@ export default function Conformite2026({
         if (bp === null) bpReason = 'insufficient'
       }
 
-      // Kt — auto sur spectre moyen, sinon override manuel
+      // Kt — auto sur spectre moyen (Tableau 2 MELCCFP 2026), sinon override manuel
       let kt = 0
       let ktAuto = false
-      let ktDetection: KtDetection | null = null
+      let ktAnalysis: KtAnalysis | null = null
       const manualKt = ktManual[pt]
       if (manualKt !== undefined && manualKt !== null) {
         kt = manualKt
@@ -291,8 +291,8 @@ export default function Conformite2026({
             const vals = specs.map((s) => s[i]).filter((v) => typeof v === 'number')
             return laeqAvg(vals)
           })
-          ktDetection = detectKt(avgSpec, ba)
-          kt = ktDetection.kt
+          ktAnalysis = analyzeKt(avgSpec, ba)
+          kt = ktAnalysis.kt
           ktAuto = true
         }
       }
@@ -343,7 +343,7 @@ export default function Conformite2026({
         bpReason,
         kt,
         ktAuto,
-        ktDetection,
+        ktAnalysis,
         ki,
         kiAuto,
         kb,
@@ -786,22 +786,30 @@ export default function Conformite2026({
                             }
                             hasOverride={ktManual[r.point] !== undefined}
                           />
-                          {r.ktAuto && ktManual[r.point] === undefined && r.ktDetection && (
-                            <div
-                              className={`mt-0.5 text-[9px] leading-tight ${
-                                r.ktDetection.detected ? 'text-orange-400' : 'text-emerald-500'
-                              }`}
-                              title={
-                                r.ktDetection.detected
-                                  ? `Composante tonale détectée à ${r.ktDetection.fc} Hz — émergence ${r.ktDetection.emergence?.toFixed(1)} dB (seuil ${r.ktDetection.threshold} dB)`
-                                  : 'Aucune composante tonale détectée selon Tableau 2 MELCCFP 2026'
-                              }
-                            >
-                              {r.ktDetection.detected
-                                ? `Auto — détecté · ${r.ktDetection.fc} Hz · +${r.ktDetection.emergence?.toFixed(1)} dB`
-                                : 'Auto — non détecté'}
-                            </div>
-                          )}
+                          {r.ktAuto && ktManual[r.point] === undefined && r.ktAnalysis && (() => {
+                            const a = r.ktAnalysis
+                            const detected = a.kt > 0 && a.triggeringIndex !== null
+                            const trig = detected ? a.bands[a.triggeringIndex as number] : null
+                            const emergence = trig
+                              ? Math.min(trig.diffPrev as number, trig.diffNext as number)
+                              : null
+                            return (
+                              <div
+                                className={`mt-0.5 text-[9px] leading-tight ${
+                                  detected ? 'text-orange-400' : 'text-emerald-500'
+                                }`}
+                                title={
+                                  detected && trig
+                                    ? `Composante tonale détectée à ${trig.freq} Hz — émergence min. ${emergence?.toFixed(1)} dB (seuil ${trig.threshold} dB)`
+                                    : 'Aucune composante tonale détectée selon Tableau 2 MELCCFP 2026'
+                                }
+                              >
+                                {detected && trig
+                                  ? `Auto — détecté · ${trig.freq} Hz · +${emergence?.toFixed(1)} dB`
+                                  : 'Auto — non détecté'}
+                              </div>
+                            )
+                          })()}
                         </td>
                         {/* Ki */}
                         <td className="px-3 py-2 text-center">
@@ -968,6 +976,9 @@ export default function Conformite2026({
               </p>
             </section>
 
+            {/* H · Analyse spectrale Kt — Tableau 2 MELCCFP 2026 */}
+            <KtSpectrumSection results={results} />
+
             {/* Références réglementaires (collapsible) */}
             <ReferencesSection />
 
@@ -992,6 +1003,130 @@ export default function Conformite2026({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// H · Analyse spectrale Kt — table par bande (Tableau 2 MELCCFP 2026)
+// ────────────────────────────────────────────────────────────────────────────
+
+function KtSpectrumSection({ results }: { results: PointResult[] }) {
+  const withSpectrum = results.filter((r) => r.ktAnalysis && r.ktAnalysis.bands.length > 0)
+  if (withSpectrum.length === 0) return null
+  return (
+    <section className="border border-gray-800 rounded-lg bg-gray-900/30">
+      <div className="px-4 py-2 border-b border-gray-800/70 flex items-center gap-2">
+        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+          H · Analyse spectrale Kt — Tableau 2 MELCCFP 2026
+        </span>
+        <span className="text-[10px] text-gray-600">
+          24 bandes 1/3 d'octave (50 Hz – 10 kHz) · LZeq → LAeq pondéré A
+        </span>
+      </div>
+      <div className="p-3 space-y-3">
+        {withSpectrum.map((r) => (
+          <KtSpectrumCard key={r.point} pointName={r.point} analysis={r.ktAnalysis as KtAnalysis} />
+        ))}
+      </div>
+    </section>
+  )
+}
+
+function KtSpectrumCard({
+  pointName,
+  analysis,
+}: {
+  pointName: string
+  analysis: KtAnalysis
+}) {
+  const [open, setOpen] = useState(false)
+  const detected = analysis.kt > 0
+  const trig = analysis.triggeringIndex !== null ? analysis.bands[analysis.triggeringIndex] : null
+  return (
+    <div className="border border-gray-800 rounded overflow-hidden">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="w-full flex items-center gap-2 px-3 py-2 text-left
+                   hover:bg-gray-800/50 transition-colors"
+      >
+        <span className="text-xs font-semibold text-gray-200">{pointName}</span>
+        <span
+          className={`px-1.5 py-0.5 text-[9px] font-semibold rounded border ${
+            detected
+              ? 'bg-orange-900/40 text-orange-300 border-orange-800/60'
+              : 'bg-emerald-900/40 text-emerald-300 border-emerald-800/60'
+          }`}
+        >
+          Kt = {analysis.kt} dB
+        </span>
+        {detected && trig && (
+          <span className="text-[10px] text-orange-400">
+            {trig.freq} Hz · Δ préc. {(trig.diffPrev as number).toFixed(1)} ·
+            Δ suiv. {(trig.diffNext as number).toFixed(1)} (seuil {trig.threshold} dB)
+          </span>
+        )}
+        <span className="ml-auto text-[10px] text-gray-600">
+          {open ? '▾' : '▸'}
+        </span>
+      </button>
+      {open && (
+        <div className="overflow-x-auto">
+          <table className="w-full text-[11px] tabular-nums">
+            <thead>
+              <tr className="text-gray-500 bg-gray-900/40 border-y border-gray-800/70">
+                <th className="text-right px-2 py-1 font-medium">Fréq. (Hz)</th>
+                <th className="text-right px-2 py-1 font-medium">LZeq (dB)</th>
+                <th className="text-right px-2 py-1 font-medium">LAeq (dB(A))</th>
+                <th className="text-right px-2 py-1 font-medium">Δ préc.</th>
+                <th className="text-right px-2 py-1 font-medium">Δ suiv.</th>
+                <th className="text-right px-2 py-1 font-medium">Seuil</th>
+                <th className="text-left px-3 py-1 font-medium">Résultat</th>
+              </tr>
+            </thead>
+            <tbody>
+              {analysis.bands.map((b, i) => {
+                const rowCls = b.isTonal
+                  ? 'bg-amber-950/40'
+                  : i % 2 === 0
+                  ? 'bg-gray-900/20'
+                  : ''
+                const fmt1 = (n: number | null) => (n === null ? 'N.D.' : n.toFixed(1))
+                let resultText = '—'
+                let resultCls = 'text-gray-500'
+                if (b.isBoundary) {
+                  resultText = 'N.D. (bord)'
+                  resultCls = 'text-gray-600'
+                } else if (b.excluded) {
+                  resultText = 'Exclu (−15 dB)'
+                  resultCls = 'text-gray-500'
+                } else if (b.isTonal) {
+                  resultText = '⚠ Tonal'
+                  resultCls = 'text-amber-300 font-semibold'
+                } else {
+                  resultText = 'Non tonal'
+                  resultCls = 'text-gray-400'
+                }
+                return (
+                  <tr key={b.freq} className={`${rowCls} border-b border-gray-800/30`}>
+                    <td className="px-2 py-0.5 text-right text-gray-300">{b.freq}</td>
+                    <td className="px-2 py-0.5 text-right text-gray-200">{b.lzeq.toFixed(1)}</td>
+                    <td className="px-2 py-0.5 text-right text-gray-400">{b.laeqBand.toFixed(1)}</td>
+                    <td className="px-2 py-0.5 text-right text-gray-400">{fmt1(b.diffPrev)}</td>
+                    <td className="px-2 py-0.5 text-right text-gray-400">{fmt1(b.diffNext)}</td>
+                    <td className="px-2 py-0.5 text-right text-gray-500">{b.threshold}</td>
+                    <td className={`px-3 py-0.5 ${resultCls}`}>{resultText}</td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+          <div className="px-3 py-1.5 text-[9px] text-gray-600 italic border-t border-gray-800/50">
+            Méthode 1/3 d'octave — Section 3.7.4 et Tableau 2. Une bande est tonale si elle dépasse
+            ses deux voisines d'au moins le seuil. Exception : bande masquée (LAeq global − LAeq bande ≥ 15 dB).
+          </div>
+        </div>
+      )}
     </div>
   )
 }

@@ -49,24 +49,29 @@ export function detectRisingEvents(
 }
 
 /**
- * Calcule la moyenne énergétique (LAeq) d'un tableau de niveaux en dB
+ * Calcule la moyenne énergétique (LAeq) d'un tableau de niveaux en dB.
+ * Filtre les valeurs NaN/null/Infinity en amont (robustesse parsing).
  */
 export function laeqAvg(values: number[]): number {
-  if (values.length === 0) return 0
-  const sum = values.reduce((acc, v) => acc + Math.pow(10, v / 10), 0)
-  return 10 * Math.log10(sum / values.length)
+  const valid = values.filter((v) => Number.isFinite(v))
+  if (valid.length === 0) return 0
+  const sum = valid.reduce((acc, v) => acc + Math.pow(10, v / 10), 0)
+  return 10 * Math.log10(sum / valid.length)
 }
 
 /**
- * Calcule le percentile Lx à partir d'un tableau de niveaux en dB
+ * Calcule le percentile Lx à partir d'un tableau de niveaux en dB.
+ * Filtre les valeurs NaN/null/Infinity en amont.
+ *
  * @param values - tableau de niveaux dB
  * @param percentile - percentile souhaité (ex: 90 pour L90)
  */
 function computePercentile(values: number[], percentile: number): number {
-  if (values.length === 0) return 0
+  const valid = values.filter((v) => Number.isFinite(v))
+  if (valid.length === 0) return 0
   // Tri croissant : L90 = niveau dépassé 90% du temps (bruit de fond, valeur basse)
   // L10 = niveau dépassé 10% du temps (pointes, valeur haute)
-  const sorted = [...values].sort((a, b) => a - b)
+  const sorted = [...valid].sort((a, b) => a - b)
   const index = Math.round((percentile / 100) * (sorted.length - 1))
   return sorted[index]
 }
@@ -103,19 +108,21 @@ export function attenuationFreeField(lp: number, d: number): number {
 }
 
 /**
- * Retourne le niveau maximum instantané (LAFmax)
+ * Retourne le niveau maximum instantané (LAFmax). Filtre NaN/null/Infinity.
  */
 export function computeLAFmax(values: number[]): number {
-  if (values.length === 0) return 0
-  return Math.max(...values)
+  const valid = values.filter((v) => Number.isFinite(v))
+  if (valid.length === 0) return 0
+  return Math.max(...valid)
 }
 
 /**
- * Retourne le niveau minimum instantané (LAFmin)
+ * Retourne le niveau minimum instantané (LAFmin). Filtre NaN/null/Infinity.
  */
 export function computeLAFmin(values: number[]): number {
-  if (values.length === 0) return 0
-  return Math.min(...values)
+  const valid = values.filter((v) => Number.isFinite(v))
+  if (valid.length === 0) return 0
+  return Math.min(...valid)
 }
 
 /**

@@ -74,6 +74,12 @@ export default function EcmePage({ state, setState }: Props) {
     return { total, dispo }
   }, [availability])
 
+  // Date d'aujourd'hui dans la plage couverte par le fichier ?
+  const dateInRange = useMemo(() => {
+    if (!data || !data.dateRange.start || !data.dateRange.end) return false
+    return today >= data.dateRange.start && today <= data.dateRange.end
+  }, [data, today])
+
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
       {/* ─── Header ──────────────────────────────────────────────────────── */}
@@ -161,12 +167,28 @@ export default function EcmePage({ state, setState }: Props) {
                   2 · Disponibilité aujourd'hui
                 </span>
                 <span className="text-[10px] text-gray-600">— {formatFrLong(today)}</span>
-                <span className="ml-auto px-2 py-0.5 rounded text-[11px] font-bold tabular-nums
-                                 bg-emerald-900/40 text-emerald-300 border border-emerald-800/60">
-                  {dispoStats.dispo} / {dispoStats.total} disponibles
-                </span>
+                {dateInRange ? (
+                  <span className="ml-auto px-2 py-0.5 rounded text-[11px] font-bold tabular-nums
+                                   bg-emerald-900/40 text-emerald-300 border border-emerald-800/60">
+                    {dispoStats.dispo} / {dispoStats.total} disponibles
+                  </span>
+                ) : (
+                  <span className="ml-auto px-2 py-0.5 rounded text-[11px] font-semibold
+                                   bg-amber-900/40 text-amber-300 border border-amber-800/60">
+                    Date hors plage du fichier
+                  </span>
+                )}
               </div>
-              <AvailabilityTable rows={availability} />
+              {dateInRange ? (
+                <AvailabilityTable rows={availability} />
+              ) : (
+                <div className="px-3 py-3 rounded border border-amber-800/50 bg-amber-950/20
+                                text-xs text-amber-200">
+                  La date d'aujourd'hui ({today}) n'est pas couverte par le calendrier de ce
+                  fichier (plage : {data.dateRange.start ?? '—'} → {data.dateRange.end ?? '—'}).
+                  Les statuts du jour ne peuvent pas être affichés.
+                </div>
+              )}
             </section>
 
             {/* Section 3 : Taux d'utilisation */}

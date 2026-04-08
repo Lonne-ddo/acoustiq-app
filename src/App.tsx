@@ -2,7 +2,7 @@
  * Composant racine d'AcoustiQ
  * Multi-projet, paramètres, raccourcis clavier, sidebar rétractable, états de chargement
  */
-import { useState, useMemo, useRef, useCallback, useEffect } from 'react'
+import { useState, useMemo, useRef, useCallback, useEffect, lazy, Suspense } from 'react'
 import {
   FileAudio,
   BarChart2,
@@ -48,9 +48,12 @@ import { DEFAULT_METEO } from './types'
 import ChecklistModal, { DEFAULT_CHECKLIST } from './components/ChecklistModal'
 import HistoryTab from './components/HistoryTab'
 import RegulationTab from './components/RegulationTab'
-import CarrierePage from './pages/CarrierePage'
-import EcmePage from './pages/EcmePage'
-import YamnetClassifier from './components/audio/YamnetClassifier'
+// Modules lourds en lazy-load : sortis du bundle initial.
+// - YamnetClassifier importe TFJS (~1 Mo) → chargé seulement à l'ouverture du tab
+// - CarrierePage / EcmePage : ~50 kB chacun, code-splittés pour cohérence
+const CarrierePage = lazy(() => import('./pages/CarrierePage'))
+const EcmePage = lazy(() => import('./pages/EcmePage'))
+const YamnetClassifier = lazy(() => import('./components/audio/YamnetClassifier'))
 import { EMPTY_CARRIERE_STATE, type CarrierePageState } from './utils/carriereParser'
 import { EMPTY_ECME_STATE, type EcmePageState } from './utils/ecmeParser'
 import WorkflowGuide from './components/WorkflowGuide'
@@ -1149,23 +1152,29 @@ function MainPanel({
 
       {effectiveTab === 'carriere' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
-          <CarrierePage state={carriereState} setState={setCarriereState} />
+          <Suspense fallback={<LazyTabFallback label="Carrière" />}>
+            <CarrierePage state={carriereState} setState={setCarriereState} />
+          </Suspense>
         </div>
       )}
 
       {effectiveTab === 'yamnet' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
-          <YamnetClassifier
-            audioFile={audioFile}
-            segments={audioSegments}
-            onSegmentsChange={onAudioSegmentsChange}
-          />
+          <Suspense fallback={<LazyTabFallback label="Audio IA" />}>
+            <YamnetClassifier
+              audioFile={audioFile}
+              segments={audioSegments}
+              onSegmentsChange={onAudioSegmentsChange}
+            />
+          </Suspense>
         </div>
       )}
 
       {effectiveTab === 'ecme' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
-          <EcmePage state={ecmeState} setState={setEcmeState} />
+          <Suspense fallback={<LazyTabFallback label="ECME" />}>
+            <EcmePage state={ecmeState} setState={setEcmeState} />
+          </Suspense>
         </div>
       )}
 
@@ -1191,6 +1200,16 @@ function MainPanel({
         </div>
       )}
     </main>
+  )
+}
+
+/** Fallback minimaliste pour les modules lazy-loaded. */
+function LazyTabFallback({ label }: { label: string }) {
+  return (
+    <div className="flex-1 flex flex-col items-center justify-center text-gray-500 gap-2">
+      <Loader2 size={18} className="animate-spin text-emerald-400" />
+      <span className="text-xs">Chargement du module {label}…</span>
+    </div>
   )
 }
 

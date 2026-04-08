@@ -383,16 +383,19 @@ export function parseMeteoSheet(buffer: ArrayBuffer): MeteoHourRow[] {
 }
 
 // ─── Calculs acoustiques ────────────────────────────────────────────────────
+/** Moyenne énergétique. Filtre NaN/null/Infinity en amont. */
 function energyMean(values: number[]): number {
-  if (values.length === 0) return 0
-  const sum = values.reduce((a, v) => a + Math.pow(10, v / 10), 0)
-  return 10 * Math.log10(sum / values.length)
+  const valid = values.filter((v) => Number.isFinite(v))
+  if (valid.length === 0) return 0
+  const sum = valid.reduce((a, v) => a + Math.pow(10, v / 10), 0)
+  return 10 * Math.log10(sum / valid.length)
 }
 
 /** L_x = niveau dépassé x % du temps → percentile (100 - x) en tri ascendant. */
 function lxLevel(values: number[], x: number): number {
-  if (values.length === 0) return 0
-  const sorted = [...values].sort((a, b) => a - b)
+  const valid = values.filter((v) => Number.isFinite(v))
+  if (valid.length === 0) return 0
+  const sorted = [...valid].sort((a, b) => a - b)
   const idx = Math.round(((100 - x) / 100) * (sorted.length - 1))
   return sorted[Math.max(0, Math.min(sorted.length - 1, idx))]
 }
@@ -571,7 +574,33 @@ function csvCell(s: string | number): string {
   return str
 }
 
-export function hoursToCSV(hours: HourlyResult[]): string {
+/**
+ * Résumé global "live" calculé sur les heures incluses (toutes périodes confondues).
+ * Sert au footer du tableau de filtrage qui doit se mettre à jour à chaque
+ * toggle A/R utilisateur.
+ */
+export interface LiveBpSummary {
+  hoursIncluded: number
+  laeqAmb: number | null
+  laeqRes: number | null
+  bp: number | null
+}
+
+export function computeLiveBpSummary(hours: HourlyResult[]): LiveBpSummary {
+  const incl = hours.filter((h) => h.included)
+  const ambVals = incl.filter((h) => h.activity === 'A').map((h) => h.laeq1h)
+  const resVals = incl.filter((h) => h.activity === 'R').map((h) => h.laeq1h)
+  const laeqAmb = ambVals.length > 0 ? energyMean(ambVals) : null
+  const laeqRes = resVals.length > 0 ? energyMean(resVals) : null
+  let bp: number | null = null
+  if (laeqAmb !== null && laeqRes !== null && laeqAmb > laeqRes) {
+    const diff = Math.pow(10, laeqAmb / 10) - Math.pow(10, laeqRes / 10)
+    if (diff > 0) bp = 10 * Math.log10(diff)
+  }
+  return { hoursIncluded: incl.length, laeqAmb, laeqRes, bp }
+}
+
+export function hoursToCSV(hours: HourlyResult[], periodes?: BpPeriode[]): string {
   const headers = [
     'Date',
     'Heure',
@@ -606,6 +635,32 @@ export function hoursToCSV(hours: HourlyResult[]): string {
         .map(csvCell)
         .join(';'),
     )
+  }
+
+  // Pied de page : Bp par période + résumé global
+  if (periodes && periodes.length > 0) {
+    lines.push('')
+    lines.push(['', 'Bp par période (Lignes directrices MELCCFP 2026)'].map(csvCell).join(';'))
+    lines.push(
+      ['Période', 'Plage', 'LAeq amb. dB(A)', 'LAeq rés. dB(A)', 'Bp dB(A)', 'Heures A', 'Heures R']
+        .map(csvCell)
+        .join(';'),
+    )
+    const f = (n: number | null) => (n === null ? '' : n.toFixed(1))
+    for (const p of periodes) {
+      lines.push(
+        [p.label, p.rangeLabel, f(p.laeqAmb), f(p.laeqRes), f(p.bp), p.hoursA, p.hoursR]
+          .map(csvCell)
+          .join(';'),
+      )
+    }
+    const live = computeLiveBpSummary(hours)
+    lines.push('')
+    lines.push(['', 'Résumé global (heures incluses)'].map(csvCell).join(';'))
+    lines.push(['Heures incluses', live.hoursIncluded].map(csvCell).join(';'))
+    lines.push(['LAeq ambiant (énerg.)', f(live.laeqAmb)].map(csvCell).join(';'))
+    lines.push(['LAeq résiduel (énerg.)', f(live.laeqRes)].map(csvCell).join(';'))
+    lines.push(['Bp global', f(live.bp)].map(csvCell).join(';'))
   }
   // BOM UTF-8 pour Excel français
   return '\uFEFF' + lines.join('\n')

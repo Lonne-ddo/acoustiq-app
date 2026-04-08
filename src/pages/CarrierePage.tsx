@@ -10,7 +10,7 @@
  *   4. Tableau interactif (toggle A/R manuel) + cartes Bp + exports.
  */
 import { useState, useMemo } from 'react'
-import { Hammer, Play, Download, FileText, AlertCircle } from 'lucide-react'
+import { Hammer, Play, Download, FileText, AlertCircle, RotateCcw } from 'lucide-react'
 import FileUploadStep from '../components/carriere/FileUploadStep'
 import FilteringTable from '../components/carriere/FilteringTable'
 import BpSummary from '../components/carriere/BpSummary'
@@ -20,6 +20,7 @@ import {
   parseMeteoSheet,
   runCarriereAnalysis,
   computeBpAllPeriodes,
+  computeLiveBpSummary,
   hoursToCSV,
   type CarrierePageState,
   type FileSlot,
@@ -127,6 +128,13 @@ export default function CarrierePage({ state, setState }: Props) {
     setState((s) => ({ ...s, result: { hours: nextHours, ...bp } }))
   }
 
+  // ── Réinitialise les A/R aux valeurs auto-détectées depuis le registre ───
+  function handleResetActivity() {
+    if (!timeHistory.data || !camionnage.data || !meteo.data) return
+    const fresh = runCarriereAnalysis(timeHistory.data, camionnage.data, meteo.data, params)
+    setState((s) => ({ ...s, result: fresh }))
+  }
+
   function setParams(updater: (p: typeof params) => typeof params) {
     setState((s) => ({ ...s, params: updater(s.params) }))
   }
@@ -138,7 +146,8 @@ export default function CarrierePage({ state, setState }: Props) {
   // ── Exports ──────────────────────────────────────────────────────────────
   function handleExportCSV() {
     if (!result) return
-    const csv = hoursToCSV(result.hours)
+    const periodes = [result.bpJour, result.bpSoir, result.bpNuit]
+    const csv = hoursToCSV(result.hours, periodes)
     const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
     const url = URL.createObjectURL(blob)
     const link = document.createElement('a')
@@ -180,6 +189,12 @@ export default function CarrierePage({ state, setState }: Props) {
   const periodes = useMemo(() => {
     if (!result) return []
     return [result.bpJour, result.bpSoir, result.bpNuit]
+  }, [result])
+
+  // Résumé global live (mis à jour à chaque toggle A/R)
+  const liveSummary = useMemo(() => {
+    if (!result) return null
+    return computeLiveBpSummary(result.hours)
   }, [result])
 
   return (
@@ -298,14 +313,50 @@ export default function CarrierePage({ state, setState }: Props) {
         {/* ─── Section 4 : Tableau de filtrage ────────────────────────────── */}
         {result && (
           <section>
-            <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2">
-              3 · Filtrage horaire
-              <span className="ml-2 text-[10px] text-gray-600 normal-case font-normal">
+            <div className="flex items-baseline gap-2 mb-2 flex-wrap">
+              <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+                3 · Filtrage horaire
+              </h3>
+              <span className="text-[10px] text-gray-600 normal-case font-normal">
                 {result.hours.filter((h) => h.included).length} / {result.hours.length} heures incluses ·
                 cliquez sur le badge A/R pour basculer
               </span>
-            </h3>
+              <button
+                onClick={handleResetActivity}
+                className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded text-[10px] font-medium
+                           bg-gray-800 text-gray-400 hover:text-gray-100 hover:bg-gray-700
+                           border border-gray-700 transition-colors"
+                title="Réinitialise les A/R aux valeurs auto-détectées depuis le registre camionnage"
+              >
+                <RotateCcw size={10} />
+                Réinitialiser A/R
+              </button>
+            </div>
             <FilteringTable hours={result.hours} onToggleActivity={toggleActivity} />
+            {/* Footer live : recalculé à chaque toggle A/R */}
+            {liveSummary && (
+              <div className="mt-2 px-3 py-2 rounded border border-gray-800 bg-gray-900/40
+                              flex items-center gap-4 flex-wrap text-xs tabular-nums">
+                <span className="text-[10px] text-gray-500 uppercase tracking-wider">
+                  Résumé global ({liveSummary.hoursIncluded} h incluses)
+                </span>
+                <span className="text-gray-400">
+                  LAeq amb. <span className="text-gray-100 font-semibold">
+                    {liveSummary.laeqAmb !== null ? liveSummary.laeqAmb.toFixed(1) : '—'} dB(A)
+                  </span>
+                </span>
+                <span className="text-gray-400">
+                  LAeq rés. <span className="text-gray-100 font-semibold">
+                    {liveSummary.laeqRes !== null ? liveSummary.laeqRes.toFixed(1) : '—'} dB(A)
+                  </span>
+                </span>
+                <span className="text-gray-400">
+                  Bp <span className="text-emerald-300 font-bold">
+                    {liveSummary.bp !== null ? liveSummary.bp.toFixed(1) : '—'} dB(A)
+                  </span>
+                </span>
+              </div>
+            )}
           </section>
         )}
 

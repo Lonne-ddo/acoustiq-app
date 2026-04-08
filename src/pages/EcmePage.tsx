@@ -11,7 +11,8 @@ import {
   parseEcmeFile,
   computeCalibrationAlerts,
   computeAvailability,
-  type EcmeData,
+  computeLastUsedDays,
+  type EcmePageState,
 } from '../utils/ecmeParser'
 import { todayISO, formatFrLong } from '../utils/dateUtils'
 import CalibrationAlerts from '../components/ecme/CalibrationAlerts'
@@ -19,9 +20,13 @@ import AvailabilityTable from '../components/ecme/AvailabilityTable'
 import OccupationChart from '../components/ecme/OccupationChart'
 import InventoryTable from '../components/ecme/InventoryTable'
 
-export default function EcmePage() {
-  const [data, setData] = useState<EcmeData | null>(null)
-  const [fileName, setFileName] = useState<string | null>(null)
+interface Props {
+  state: EcmePageState
+  setState: React.Dispatch<React.SetStateAction<EcmePageState>>
+}
+
+export default function EcmePage({ state, setState }: Props) {
+  const { data, fileName } = state
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [dragOver, setDragOver] = useState(false)
@@ -34,11 +39,10 @@ export default function EcmePage() {
     setError(null)
     try {
       const parsed = await parseEcmeFile(file)
-      setData(parsed)
-      setFileName(file.name)
+      setState({ data: parsed, fileName: file.name })
     } catch (err) {
-      setError(String(err instanceof Error ? err.message : err))
-      setData(null)
+      setError(err instanceof Error ? err.message : String(err))
+      setState({ data: null, fileName: null })
     } finally {
       setLoading(false)
     }
@@ -59,6 +63,16 @@ export default function EcmePage() {
     () => (data ? computeAvailability(data.occupation, today) : []),
     [data, today],
   )
+  const lastUsed = useMemo(
+    () => (data ? computeLastUsedDays(data.occupation, today) : {}),
+    [data, today],
+  )
+  // Indicateur global "X / Y disponibles aujourd'hui"
+  const dispoStats = useMemo(() => {
+    const total = availability.length
+    const dispo = availability.filter((r) => r.status === 'Disponible').length
+    return { total, dispo }
+  }, [availability])
 
   return (
     <div className="min-h-screen bg-gray-950 text-gray-100">
@@ -142,11 +156,16 @@ export default function EcmePage() {
 
             {/* Section 2 : Disponibilité du jour */}
             <section>
-              <SectionTitle
-                index="2"
-                title="Disponibilité aujourd'hui"
-                hint={formatFrLong(today)}
-              />
+              <div className="flex items-baseline gap-2 mb-3 flex-wrap">
+                <span className="text-[11px] font-semibold text-emerald-500 uppercase tracking-wider">
+                  2 · Disponibilité aujourd'hui
+                </span>
+                <span className="text-[10px] text-gray-600">— {formatFrLong(today)}</span>
+                <span className="ml-auto px-2 py-0.5 rounded text-[11px] font-bold tabular-nums
+                                 bg-emerald-900/40 text-emerald-300 border border-emerald-800/60">
+                  {dispoStats.dispo} / {dispoStats.total} disponibles
+                </span>
+              </div>
               <AvailabilityTable rows={availability} />
             </section>
 
@@ -167,7 +186,7 @@ export default function EcmePage() {
                 title="Inventaire complet"
                 hint={`Onglet « Table_ecme » · ${data.inventory.length} équipement(s)`}
               />
-              <InventoryTable inventory={data.inventory} />
+              <InventoryTable inventory={data.inventory} lastUsedDays={lastUsed} />
             </section>
 
             <footer className="pt-6 border-t border-gray-800/70 text-[10px] text-gray-600">

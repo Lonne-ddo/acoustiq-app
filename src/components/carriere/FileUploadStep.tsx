@@ -2,14 +2,16 @@
  * Bloc d'upload pour un fichier Excel donné (Time History / Camionnage / Météo).
  * Drag & drop ou clic ; affiche le nom et un état de validation.
  */
-import { useState, useRef } from 'react'
-import { Upload, CheckCircle2, AlertCircle, X } from 'lucide-react'
+import { useState } from 'react'
+import { Upload, CheckCircle2, AlertCircle, X, Info } from 'lucide-react'
 
 interface Props {
   label: string
   hint: string
   fileName: string | null
   error: string | null
+  /** Texte multi-ligne décrivant la structure attendue (affiché en tooltip via icône info) */
+  exampleHelp?: string
   onFile: (file: File) => void
   onClear: () => void
 }
@@ -19,11 +21,12 @@ export default function FileUploadStep({
   hint,
   fileName,
   error,
+  exampleHelp,
   onFile,
   onClear,
 }: Props) {
-  const inputRef = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
+  const [showHelp, setShowHelp] = useState(false)
 
   function handleDrop(e: React.DragEvent) {
     e.preventDefault(); e.stopPropagation()
@@ -52,7 +55,6 @@ export default function FileUploadStep({
                   }`}
     >
       <input
-        ref={inputRef}
         type="file"
         accept=".xlsx,.xls"
         className="hidden"
@@ -62,6 +64,27 @@ export default function FileUploadStep({
           e.target.value = ''
         }}
       />
+      {exampleHelp && (
+        <button
+          type="button"
+          onClick={(e) => { e.preventDefault(); e.stopPropagation(); setShowHelp((v) => !v) }}
+          onBlur={() => setTimeout(() => setShowHelp(false), 150)}
+          className="absolute top-1 left-1 p-0.5 text-gray-500 hover:text-emerald-400"
+          aria-label="Structure attendue"
+          title="Voir la structure attendue"
+        >
+          <Info size={12} />
+        </button>
+      )}
+      {showHelp && exampleHelp && (
+        <div
+          className="absolute top-6 left-1 right-1 z-10 px-2 py-1.5 rounded
+                     bg-gray-900 border border-emerald-700/60 text-[10px] text-gray-200
+                     text-left whitespace-pre-line shadow-lg pointer-events-none"
+        >
+          {exampleHelp}
+        </div>
+      )}
       {hasFile && !hasError ? (
         <>
           <CheckCircle2 size={20} className="text-emerald-400" />

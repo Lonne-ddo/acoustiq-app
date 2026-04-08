@@ -108,6 +108,33 @@ export interface CarriereResult {
   bpNuit: BpPeriode
 }
 
+/**
+ * Slot d'upload typé pour un fichier Excel donné — utilisé par la page
+ * Carrière et lifté dans App pour conserver l'état au switch d'onglet.
+ */
+export interface FileSlot<T> {
+  name: string | null
+  data: T | null
+  error: string | null
+}
+
+/** État persistant de la page Carrière (lifté dans App). */
+export interface CarrierePageState {
+  timeHistory: FileSlot<RawTimeHistoryRow[]>
+  camionnage: FileSlot<CamionEvent[]>
+  meteo: FileSlot<MeteoHourRow[]>
+  params: CarriereParams
+  result: CarriereResult | null
+}
+
+export const EMPTY_CARRIERE_STATE: CarrierePageState = {
+  timeHistory: { name: null, data: null, error: null },
+  camionnage: { name: null, data: null, error: null },
+  meteo: { name: null, data: null, error: null },
+  params: DEFAULT_CARRIERE_PARAMS,
+  result: null,
+}
+
 // ─── Helpers d'extraction ───────────────────────────────────────────────────
 function getHeaderIndex(headers: string[], needles: string[]): number {
   const lower = headers.map((h) => h.toLowerCase())

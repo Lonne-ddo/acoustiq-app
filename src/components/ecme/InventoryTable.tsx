@@ -2,17 +2,20 @@
  * Inventaire complet (onglet `Table_ecme`) — paginé + recherche.
  */
 import { useState, useMemo } from 'react'
-import { Search } from 'lucide-react'
+import { Search, Download } from 'lucide-react'
 import type { InventoryEntry } from '../../utils/ecmeParser'
+import { inventoryToCSV } from '../../utils/ecmeParser'
 import { formatFrShort } from '../../utils/dateUtils'
 
 const PAGE_SIZE = 25
 
 interface Props {
   inventory: InventoryEntry[]
+  /** Map Réf. BV → nb de jours depuis la dernière utilisation (calculé par EcmePage) */
+  lastUsedDays?: Record<string, number | null>
 }
 
-export default function InventoryTable({ inventory }: Props) {
+export default function InventoryTable({ inventory, lastUsedDays = {} }: Props) {
   const [query, setQuery] = useState('')
   const [page, setPage] = useState(0)
 
@@ -33,7 +36,7 @@ export default function InventoryTable({ inventory }: Props) {
 
   return (
     <div className="space-y-3">
-      {/* Recherche */}
+      {/* Recherche + export */}
       <div className="flex items-center gap-2">
         <div className="flex items-center gap-1.5 flex-1 max-w-md">
           <Search size={13} className="text-gray-500" />
@@ -46,7 +49,26 @@ export default function InventoryTable({ inventory }: Props) {
                        rounded px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
           />
         </div>
-        <span className="text-[11px] text-gray-600 ml-auto">
+        <button
+          onClick={() => {
+            const csv = inventoryToCSV(inventory, lastUsedDays)
+            const blob = new Blob([csv], { type: 'text/csv;charset=utf-8' })
+            const url = URL.createObjectURL(blob)
+            const link = document.createElement('a')
+            link.download = 'acoustiq_ecme_inventaire.csv'
+            link.href = url
+            link.click()
+            URL.revokeObjectURL(url)
+          }}
+          className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
+                     bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
+                     border border-gray-600 transition-colors"
+          title="Exporter l'inventaire en CSV"
+        >
+          <Download size={11} />
+          CSV
+        </button>
+        <span className="text-[11px] text-gray-600">
           {filtered.length} équipement(s)
         </span>
       </div>
@@ -62,12 +84,15 @@ export default function InventoryTable({ inventory }: Props) {
               <th className="text-left  px-3 py-1.5 font-medium">N° série</th>
               <th className="text-left  px-3 py-1.5 font-medium">Type</th>
               <th className="text-left  px-3 py-1.5 font-medium">Calibration</th>
+              <th className="text-right px-3 py-1.5 font-medium" title="Jours écoulés depuis la dernière utilisation (statut I ou S)">
+                Dern. usage
+              </th>
             </tr>
           </thead>
           <tbody>
             {visible.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-3 py-4 text-center text-gray-600 italic">
+                <td colSpan={7} className="px-3 py-4 text-center text-gray-600 italic">
                   Aucun équipement ne correspond à la recherche.
                 </td>
               </tr>
@@ -81,6 +106,24 @@ export default function InventoryTable({ inventory }: Props) {
                 const calibColor = e.calibrationFlag
                   ? 'text-rose-400'
                   : 'text-gray-400'
+                const days = lastUsedDays[e.refBv]
+                let daysLabel: string
+                let daysColor = 'text-gray-500'
+                if (days === undefined || days === null) {
+                  daysLabel = '—'
+                } else if (days === 0) {
+                  daysLabel = "aujourd'hui"
+                  daysColor = 'text-emerald-400'
+                } else if (days < 30) {
+                  daysLabel = `il y a ${days} j`
+                  daysColor = 'text-gray-300'
+                } else if (days < 180) {
+                  daysLabel = `il y a ${days} j`
+                  daysColor = 'text-amber-400'
+                } else {
+                  daysLabel = `il y a ${days} j`
+                  daysColor = 'text-rose-400'
+                }
                 return (
                   <tr
                     key={e.refBv + i}
@@ -92,6 +135,7 @@ export default function InventoryTable({ inventory }: Props) {
                     <td className="px-3 py-1 text-gray-400 tabular-nums">{e.numeroSerie || '—'}</td>
                     <td className="px-3 py-1 text-gray-500">{e.type || '—'}</td>
                     <td className={`px-3 py-1 tabular-nums ${calibColor}`}>{calibLabel}</td>
+                    <td className={`px-3 py-1 text-right tabular-nums ${daysColor}`}>{daysLabel}</td>
                   </tr>
                 )
               })

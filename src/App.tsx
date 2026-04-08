@@ -51,6 +51,8 @@ import RegulationTab from './components/RegulationTab'
 import CarrierePage from './pages/CarrierePage'
 import EcmePage from './pages/EcmePage'
 import YamnetClassifier from './components/audio/YamnetClassifier'
+import { EMPTY_CARRIERE_STATE, type CarrierePageState } from './utils/carriereParser'
+import { EMPTY_ECME_STATE, type EcmePageState } from './utils/ecmeParser'
 import WorkflowGuide from './components/WorkflowGuide'
 import type { ClassifiedSegment } from './utils/yamnetProcessor'
 import {
@@ -801,6 +803,10 @@ interface MainPanelProps {
   audioFile: AudioFile | null
   audioSegments: ClassifiedSegment[]
   onAudioSegmentsChange: (segs: ClassifiedSegment[]) => void
+  carriereState: CarrierePageState
+  setCarriereState: React.Dispatch<React.SetStateAction<CarrierePageState>>
+  ecmeState: EcmePageState
+  setEcmeState: React.Dispatch<React.SetStateAction<EcmePageState>>
   presentationMode: boolean
   onPresentationToggle: () => void
   onDateChange: (date: string) => void
@@ -830,6 +836,7 @@ function MainPanel({
   conformiteReceptor, conformitePeriod,
   onConformiteReceptorChange, onConformitePeriodChange,
   meteo, audioFile, audioSegments, onAudioSegmentsChange,
+  carriereState, setCarriereState, ecmeState, setEcmeState,
   presentationMode, onPresentationToggle,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
@@ -1142,7 +1149,7 @@ function MainPanel({
 
       {effectiveTab === 'carriere' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
-          <CarrierePage />
+          <CarrierePage state={carriereState} setState={setCarriereState} />
         </div>
       )}
 
@@ -1158,7 +1165,7 @@ function MainPanel({
 
       {effectiveTab === 'ecme' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
-          <EcmePage />
+          <EcmePage state={ecmeState} setState={setEcmeState} />
         </div>
       )}
 
@@ -1278,6 +1285,11 @@ export default function App() {
 
   // Segments audio classifiés par YAMNet (overlay sur le graphique principal)
   const [audioSegments, setAudioSegments] = useState<ClassifiedSegment[]>([])
+
+  // États persistants des sous-onglets de Outils — préservent les uploads
+  // et résultats quand l'utilisateur change d'onglet et revient.
+  const [carriereState, setCarriereState] = useState<CarrierePageState>(EMPTY_CARRIERE_STATE)
+  const [ecmeState, setEcmeState] = useState<EcmePageState>(EMPTY_ECME_STATE)
 
   // Mode présentation : masque sidebar + barre d'onglets
   const [presentationMode, setPresentationMode] = useState(false)
@@ -1890,6 +1902,10 @@ export default function App() {
         audioFile={audioFile}
         audioSegments={audioSegments}
         onAudioSegmentsChange={setAudioSegments}
+        carriereState={carriereState}
+        setCarriereState={setCarriereState}
+        ecmeState={ecmeState}
+        setEcmeState={setEcmeState}
         presentationMode={presentationMode}
         onPresentationToggle={() => setPresentationMode((v) => !v)}
         onDateChange={setSelectedDate}

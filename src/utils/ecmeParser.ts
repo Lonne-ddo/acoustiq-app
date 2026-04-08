@@ -345,6 +345,73 @@ export interface OccupationRate {
 }
 
 /**
+ * Pour chaque équipement (clé = Réf. BV), retourne le nombre de jours
+ * écoulés depuis sa dernière utilisation (`I` ou `S`). Renvoie `null` si
+ * l'équipement n'a jamais été utilisé dans la plage du calendrier.
+ */
+export function computeLastUsedDays(
+  occupation: OccupationEntry[],
+  today: string = todayISO(),
+): Record<string, number | null> {
+  const out: Record<string, number | null> = {}
+  for (const e of occupation) {
+    let lastIso: string | null = null
+    for (const [iso, val] of Object.entries(e.occupation)) {
+      if ((val === 'I' || val === 'S') && iso <= today) {
+        if (!lastIso || iso > lastIso) lastIso = iso
+      }
+    }
+    out[e.refBv] = lastIso ? diffDays(lastIso, today) : null
+  }
+  return out
+}
+
+/** Export CSV de l'inventaire ECME (BOM UTF-8 + séparateur ;). */
+export function inventoryToCSV(
+  inventory: InventoryEntry[],
+  lastUsedDays: Record<string, number | null> = {},
+): string {
+  const headers = [
+    'Réf. BV',
+    'Marque',
+    'Modèle',
+    'N° série',
+    'Type',
+    'Calibration',
+    'Jours depuis dernière utilisation',
+    'Commentaires',
+  ]
+  const cell = (s: string | number): string => {
+    const str = String(s)
+    if (/[",;\n]/.test(str)) return `"${str.replace(/"/g, '""')}"`
+    return str
+  }
+  const lines = [headers.join(';')]
+  for (const e of inventory) {
+    const calib = e.calibrationFlag ?? e.prochaineCalibration ?? ''
+    const days = lastUsedDays[e.refBv]
+    const daysStr = days === null || days === undefined ? '' : String(days)
+    lines.push(
+      [e.refBv, e.marque, e.modele, e.numeroSerie, e.type, calib, daysStr, e.commentaires]
+        .map(cell)
+        .join(';'),
+    )
+  }
+  return '\uFEFF' + lines.join('\n')
+}
+
+/** État persistant de la page ECME (lifté dans App). */
+export interface EcmePageState {
+  data: EcmeData | null
+  fileName: string | null
+}
+
+export const EMPTY_ECME_STATE: EcmePageState = {
+  data: null,
+  fileName: null,
+}
+
+/**
  * Taux d'occupation moyen par modèle sur la plage [start, end].
  * Pour chaque équipement on compte les jours où la valeur est "I" ou "S",
  * puis on moyenne par modèle.

@@ -21,31 +21,48 @@ import {
   runCarriereAnalysis,
   computeBpAllPeriodes,
   hoursToCSV,
-  DEFAULT_CARRIERE_PARAMS,
-  type CarriereParams,
-  type CarriereResult,
+  type CarrierePageState,
+  type FileSlot,
   type HourlyResult,
   type RawTimeHistoryRow,
   type CamionEvent,
   type MeteoHourRow,
 } from '../utils/carriereParser'
 
-interface FileSlot<T> {
-  name: string | null
-  data: T | null
-  error: string | null
+const TIME_HISTORY_HELP =
+  'Onglet : DATA_Time History_1\n' +
+  'Colonnes attendues :\n' +
+  '• Date/Time\n' +
+  '• LAeq (obligatoire)\n' +
+  '• LASmax / LAFmax (optionnel)\n' +
+  '• LAF 10 / 50 / 90 (optionnel)'
+
+const CAMIONNAGE_HELP =
+  'Onglet : A\n' +
+  'Colonnes attendues :\n' +
+  '• Arrivée (date) | Heure\n' +
+  '• Départ (date) | Heure  ← obligatoire\n' +
+  '• À enlever (x = exclure)\n' +
+  '• Départ seul (1 = camion à vide)'
+
+const METEO_HELP =
+  'Onglet : Données météo (format Environnement Canada)\n' +
+  'Colonnes attendues :\n' +
+  '• HEURE\n' +
+  '• Vitesse du vent (km/h)\n' +
+  '• Hauteur précipitation (mm)'
+
+interface Props {
+  state: CarrierePageState
+  setState: React.Dispatch<React.SetStateAction<CarrierePageState>>
 }
 
-function emptySlot<T>(): FileSlot<T> {
-  return { name: null, data: null, error: null }
+function emptySlotFor<T>(name: string | null = null, error: string | null = null): FileSlot<T> {
+  return { name, data: null, error }
 }
 
-export default function CarrierePage() {
-  const [timeHistory, setTimeHistory] = useState<FileSlot<RawTimeHistoryRow[]>>(emptySlot())
-  const [camionnage, setCamionnage] = useState<FileSlot<CamionEvent[]>>(emptySlot())
-  const [meteo, setMeteo] = useState<FileSlot<MeteoHourRow[]>>(emptySlot())
-  const [params, setParams] = useState<CarriereParams>(DEFAULT_CARRIERE_PARAMS)
-  const [result, setResult] = useState<CarriereResult | null>(null)
+export default function CarrierePage({ state, setState }: Props) {
+  const { timeHistory, camionnage, meteo, params, result } = state
   const [analyzing, setAnalyzing] = useState(false)
   const [globalError, setGlobalError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
@@ -55,27 +72,30 @@ export default function CarrierePage() {
     try {
       const buf = await file.arrayBuffer()
       const data = parseTimeHistorySheet(buf)
-      setTimeHistory({ name: file.name, data, error: null })
+      setState((s) => ({ ...s, timeHistory: { name: file.name, data, error: null } }))
     } catch (err) {
-      setTimeHistory({ name: file.name, data: null, error: String(err instanceof Error ? err.message : err) })
+      const msg = err instanceof Error ? err.message : String(err)
+      setState((s) => ({ ...s, timeHistory: emptySlotFor<RawTimeHistoryRow[]>(file.name, msg) }))
     }
   }
   async function handleCamionnage(file: File) {
     try {
       const buf = await file.arrayBuffer()
       const data = parseCamionnageSheet(buf, params.delaiCamionnageMin)
-      setCamionnage({ name: file.name, data, error: null })
+      setState((s) => ({ ...s, camionnage: { name: file.name, data, error: null } }))
     } catch (err) {
-      setCamionnage({ name: file.name, data: null, error: String(err instanceof Error ? err.message : err) })
+      const msg = err instanceof Error ? err.message : String(err)
+      setState((s) => ({ ...s, camionnage: emptySlotFor<CamionEvent[]>(file.name, msg) }))
     }
   }
   async function handleMeteo(file: File) {
     try {
       const buf = await file.arrayBuffer()
       const data = parseMeteoSheet(buf)
-      setMeteo({ name: file.name, data, error: null })
+      setState((s) => ({ ...s, meteo: { name: file.name, data, error: null } }))
     } catch (err) {
-      setMeteo({ name: file.name, data: null, error: String(err instanceof Error ? err.message : err) })
+      const msg = err instanceof Error ? err.message : String(err)
+      setState((s) => ({ ...s, meteo: emptySlotFor<MeteoHourRow[]>(file.name, msg) }))
     }
   }
 
@@ -89,9 +109,9 @@ export default function CarrierePage() {
     setAnalyzing(true)
     try {
       const r = runCarriereAnalysis(timeHistory.data, camionnage.data, meteo.data, params)
-      setResult(r)
+      setState((s) => ({ ...s, result: r }))
     } catch (err) {
-      setGlobalError(String(err instanceof Error ? err.message : err))
+      setGlobalError(err instanceof Error ? err.message : String(err))
     } finally {
       setAnalyzing(false)
     }
@@ -103,9 +123,16 @@ export default function CarrierePage() {
     const nextHours: HourlyResult[] = result.hours.map((h) =>
       h.hourKey === hourKey ? { ...h, activity: h.activity === 'A' ? 'R' : 'A' } : h,
     )
-    // Recalcul des Bp avec les overrides
     const bp = computeBpAllPeriodes(nextHours, params)
-    setResult({ hours: nextHours, ...bp })
+    setState((s) => ({ ...s, result: { hours: nextHours, ...bp } }))
+  }
+
+  function setParams(updater: (p: typeof params) => typeof params) {
+    setState((s) => ({ ...s, params: updater(s.params) }))
+  }
+
+  function clearSlot(slot: 'timeHistory' | 'camionnage' | 'meteo') {
+    setState((s) => ({ ...s, [slot]: emptySlotFor(), result: null }))
   }
 
   // ── Exports ──────────────────────────────────────────────────────────────
@@ -178,26 +205,29 @@ export default function CarrierePage() {
             <FileUploadStep
               label="Time History 821SE"
               hint="Onglet « DATA_Time History_1 » · données 1 s"
+              exampleHelp={TIME_HISTORY_HELP}
               fileName={timeHistory.name}
               error={timeHistory.error}
               onFile={handleTimeHistory}
-              onClear={() => setTimeHistory(emptySlot())}
+              onClear={() => clearSlot('timeHistory')}
             />
             <FileUploadStep
               label="Registre camionnage"
               hint="Onglet « A » · départ + heure"
+              exampleHelp={CAMIONNAGE_HELP}
               fileName={camionnage.name}
               error={camionnage.error}
               onFile={handleCamionnage}
-              onClear={() => setCamionnage(emptySlot())}
+              onClear={() => clearSlot('camionnage')}
             />
             <FileUploadStep
               label="Données météo"
               hint="Onglet « Données météo » Environnement Canada"
+              exampleHelp={METEO_HELP}
               fileName={meteo.name}
               error={meteo.error}
               onFile={handleMeteo}
-              onClear={() => setMeteo(emptySlot())}
+              onClear={() => clearSlot('meteo')}
             />
           </div>
         </section>
@@ -212,34 +242,34 @@ export default function CarrierePage() {
               label="Délai camionnage"
               suffix="min"
               value={params.delaiCamionnageMin}
-              onChange={(v) => setParams({ ...params, delaiCamionnageMin: v })}
+              onChange={(v) => setParams((p) => ({ ...p, delaiCamionnageMin: v }))}
             />
             <ParamField
               label="Vent max"
               suffix="km/h"
               value={params.ventMaxKmh}
-              onChange={(v) => setParams({ ...params, ventMaxKmh: v })}
+              onChange={(v) => setParams((p) => ({ ...p, ventMaxKmh: v }))}
             />
             <ParamRange
               label="Jour"
               start={params.jourStartH}
               end={params.jourEndH}
-              onStart={(v) => setParams({ ...params, jourStartH: v })}
-              onEnd={(v) => setParams({ ...params, jourEndH: v })}
+              onStart={(v) => setParams((p) => ({ ...p, jourStartH: v }))}
+              onEnd={(v) => setParams((p) => ({ ...p, jourEndH: v }))}
             />
             <ParamRange
               label="Soir"
               start={params.soirStartH}
               end={params.soirEndH}
-              onStart={(v) => setParams({ ...params, soirStartH: v })}
-              onEnd={(v) => setParams({ ...params, soirEndH: v })}
+              onStart={(v) => setParams((p) => ({ ...p, soirStartH: v }))}
+              onEnd={(v) => setParams((p) => ({ ...p, soirEndH: v }))}
             />
             <ParamRange
               label="Nuit"
               start={params.nuitStartH}
               end={params.nuitEndH}
-              onStart={(v) => setParams({ ...params, nuitStartH: v })}
-              onEnd={(v) => setParams({ ...params, nuitEndH: v })}
+              onStart={(v) => setParams((p) => ({ ...p, nuitStartH: v }))}
+              onEnd={(v) => setParams((p) => ({ ...p, nuitEndH: v }))}
             />
           </div>
         </section>

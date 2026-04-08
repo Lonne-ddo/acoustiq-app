@@ -12,7 +12,7 @@
  * Les segments classifiés sont publiés vers `App` via `onSegmentsChange`
  * pour être affichés en overlay coloré sur `TimeSeriesChart`.
  */
-import { useState, useRef, useMemo } from 'react'
+import { useState, useRef, useMemo, useEffect } from 'react'
 import {
   Brain,
   Upload,
@@ -60,6 +60,9 @@ export default function YamnetClassifier({
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
   const abortRef = useRef<AbortController | null>(null)
+  // Pour le calcul d'ETA pendant l'analyse
+  const startTimeRef = useRef<number>(0)
+  const [etaSec, setEtaSec] = useState<number | null>(null)
 
   // Le buffer effectif vient soit du fichier projet, soit du fichier local
   const buffer: AudioBuffer | null = localBuffer ?? audioFile?.buffer ?? null
@@ -67,6 +70,12 @@ export default function YamnetClassifier({
     localName ?? audioFile?.name ?? null
   const duration = buffer?.duration ?? 0
   const tooLong = duration > MAX_SECONDS_FREE_RUN
+
+  // Auto-active l'option « Analyser une plage » pour les fichiers > 30 min
+  useEffect(() => {
+    if (tooLong && !useRange) setUseRange(true)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tooLong])
 
   async function handleLocalFile(file: File) {
     setError(null)
@@ -88,11 +97,26 @@ export default function YamnetClassifier({
     return parseInt(m[1], 10) * 3600 + parseInt(m[2], 10) * 60
   }
 
+  /** Format secondes → "mm:ss" (ou "h:mm:ss" si > 1 h) */
+  function formatMmSs(seconds: number): string {
+    const s = Math.max(0, Math.round(seconds))
+    if (s < 3600) {
+      const m = Math.floor(s / 60)
+      const r = s % 60
+      return `${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`
+    }
+    const h = Math.floor(s / 3600)
+    const m = Math.floor((s % 3600) / 60)
+    const r = s % 60
+    return `${h}:${String(m).padStart(2, '0')}:${String(r).padStart(2, '0')}`
+  }
+
   async function handleRun() {
     if (!buffer) return
     setError(null)
     setPhase('loading-model')
     setProgress(0)
+    setEtaSec(null)
 
     const controller = new AbortController()
     abortRef.current = controller
@@ -111,13 +135,25 @@ export default function YamnetClassifier({
         rangeDurationSec,
         signal: controller.signal,
         onModelLoading: () => setPhase('loading-model'),
-        onModelReady: () => setPhase('classifying'),
-        onProgress: (p) => setProgress(p),
+        onModelReady: () => {
+          setPhase('classifying')
+          startTimeRef.current = performance.now()
+        },
+        onProgress: (p) => {
+          setProgress(p)
+          // Estimation du temps restant : (elapsed / progress) * (1 - progress)
+          if (p > 0.02 && startTimeRef.current > 0) {
+            const elapsedMs = performance.now() - startTimeRef.current
+            const remainingMs = (elapsedMs / p) * (1 - p)
+            setEtaSec(Math.max(0, Math.round(remainingMs / 1000)))
+          }
+        },
       })
       onSegmentsChange(result)
       setPhase('done')
+      setEtaSec(null)
     } catch (err) {
-      setError(String(err instanceof Error ? err.message : err))
+      setError(err instanceof Error ? err.message : String(err))
       setPhase('error')
     } finally {
       abortRef.current = null
@@ -341,9 +377,21 @@ export default function YamnetClassifier({
               <div className="mt-3">
                 <div className="flex items-center gap-2 text-xs text-gray-400 mb-1">
                   <Loader2 size={12} className="animate-spin text-emerald-400" />
-                  {phase === 'loading-model'
-                    ? 'Chargement du modèle YAMNet… (~5 s, mis en cache ensuite)'
-                    : `Analyse en cours… ${(progress * 100).toFixed(0)} %`}
+                  {phase === 'loading-model' ? (
+                    <span>
+                      Chargement du modèle IA, première utilisation ~10 s
+                      <span className="text-gray-600"> (mis en cache navigateur ensuite)</span>
+                    </span>
+                  ) : (
+                    <span>
+                      Analyse en cours… <span className="text-gray-200 tabular-nums">{(progress * 100).toFixed(0)} %</span>
+                      {etaSec !== null && etaSec > 0 && (
+                        <span className="text-gray-600 ml-2">
+                          · temps restant ~{formatMmSs(etaSec)}
+                        </span>
+                      )}
+                    </span>
+                  )}
                 </div>
                 <div className="w-full bg-gray-800 rounded-full h-1.5 overflow-hidden">
                   <div
@@ -411,7 +459,10 @@ export default function YamnetClassifier({
                           />
                           {s.category}
                         </td>
-                        <td className="px-3 py-1 text-right text-gray-300">{s.seconds.toFixed(0)} s</td>
+                        <td className="px-3 py-1 text-right text-gray-300">
+                          {formatMmSs(s.seconds)}
+                          <span className="text-gray-600 text-[10px] ml-1">({s.seconds.toFixed(0)} s)</span>
+                        </td>
                         <td className="px-3 py-1 text-right text-gray-300">
                           {(s.fraction * 100).toFixed(1)} %
                         </td>

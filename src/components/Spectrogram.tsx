@@ -5,6 +5,7 @@
  */
 import { useRef, useEffect, useMemo, useState } from 'react'
 import type { MeasurementFile, SourceEvent, DataPoint, ZoomRange } from '../types'
+import { A_WEIGHT } from '../utils/acoustics'
 
 const DEFAULT_CANVAS_HEIGHT = 160  // hauteur affichée en px par spectrogramme (mode plein)
 const Y_AXIS_W = 48                // largeur réservée aux étiquettes de fréquence
@@ -458,14 +459,43 @@ export default function Spectrogram({
 
   const pointNames = [...filesByPoint.keys()].sort()
 
-  // Agrégation des spectres pour chaque point
+  // Fréquences réelles des bandes spectrales — issues du parser via
+  // file.spectraFreqs (831C : 27 bandes 50 Hz–20 kHz · 821SE : 26 bandes
+  // 31.5 Hz–10 kHz). Fallback héritage si absent.
+  const freqBandsFromFile = useMemo(() => {
+    for (const fs of filesByPoint.values()) {
+      for (const f of fs) {
+        if (f.spectraFreqs && f.spectraFreqs.length > 0) return f.spectraFreqs
+      }
+    }
+    return null
+  }, [filesByPoint])
+
+  // Vecteur d'A-pondération par bande (LZeq → LAeq) appliqué à l'affichage.
+  const aWeightVector = useMemo(() => {
+    if (!freqBandsFromFile) return null
+    return freqBandsFromFile.map((f) => A_WEIGHT[f] ?? 0)
+  }, [freqBandsFromFile])
+
+  // Agrégation des spectres pour chaque point — applique l'A-weighting in-line
+  // pour que tous les calculs aval (couleurs, légende dB, min/max) soient en
+  // dB(A) cohérents entre 831C et 821SE.
   const spectraByPoint = useMemo(() => {
     const m = new Map<string, Map<number, number[]>>()
     for (const [pt, fs] of filesByPoint) {
-      m.set(pt, aggregateSpectra(fs.flatMap((f) => f.data), aggregationSeconds, mode))
+      const raw = aggregateSpectra(fs.flatMap((f) => f.data), aggregationSeconds, mode)
+      if (!aWeightVector) {
+        m.set(pt, raw)
+        continue
+      }
+      const weighted = new Map<number, number[]>()
+      for (const [t, sp] of raw) {
+        weighted.set(t, sp.map((v, i) => v + (aWeightVector[i] ?? 0)))
+      }
+      m.set(pt, weighted)
     }
     return m
-  }, [filesByPoint, aggregationSeconds, mode])
+  }, [filesByPoint, aggregationSeconds, mode, aWeightVector])
 
   // Plage temporelle globale et nombre de bandes
   const { tMin, tMax, nBands } = useMemo(() => {
@@ -485,12 +515,13 @@ export default function Spectrogram({
     }
   }, [spectraByPoint, zoomRange])
 
-  // Sous-ensemble des fréquences correspondant au nombre de bandes dans les données
-  // Les bandes hautes sont toujours présentes → on prend les N dernières
-  const freqBands = useMemo(
-    () => FREQ_BANDS_ALL.slice(-Math.max(nBands, 1)),
-    [nBands],
-  )
+  // Liste des fréquences à afficher sur l'axe Y. Priorité au parser ; sinon
+  // fallback historique sur les N dernières bandes de FREQ_BANDS_ALL.
+  const freqBands = useMemo(() => {
+    if (freqBandsFromFile && freqBandsFromFile.length === nBands) return freqBandsFromFile
+    if (freqBandsFromFile) return freqBandsFromFile.slice(0, nBands)
+    return FREQ_BANDS_ALL.slice(-Math.max(nBands, 1))
+  }, [freqBandsFromFile, nBands])
 
   // Événements du jour sélectionné
   const activeEvents = useMemo(

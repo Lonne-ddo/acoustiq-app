@@ -11,6 +11,14 @@ export interface MeasurementFile {
   point: string | null
   data: DataPoint[]
   rowCount: number
+  /**
+   * Fréquences centrales des bandes 1/3 d'octave présentes dans `data[i].spectra`,
+   * dans le même ordre. Permet à la couche d'affichage (Spectrogram, analyseKt)
+   * d'aligner correctement les bandes entre 831C (50 Hz – 20 kHz, 27 bandes)
+   * et 821SE (31.5 Hz – 10 kHz, 26 bandes).
+   * Si absent : ancien comportement (les N dernières bandes de FREQ_BANDS_ALL).
+   */
+  spectraFreqs?: number[]
 }
 
 export interface DataPoint {

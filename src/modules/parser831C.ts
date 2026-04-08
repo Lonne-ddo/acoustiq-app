@@ -5,6 +5,16 @@ import * as XLSX from 'xlsx'
 import type { MeasurementFile, DataPoint } from '../types'
 
 /**
+ * Bandes 1/3 d'octave émises par le 831C dans les colonnes 41-67 (27 bandes
+ * 50 Hz → 20 kHz, Z-pondéré). Utilisé pour aligner les spectres downstream.
+ */
+export const SE831C_FREQ_BANDS: number[] = [
+  50, 63, 80, 100, 125, 160, 200, 250, 315, 400,
+  500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000,
+  5000, 6300, 8000, 10000, 12500, 16000, 20000,
+]
+
+/**
  * Convertit une heure au format "HH:MM:SS" ou fraction Excel en minutes depuis minuit
  */
 function timeToMinutes(value: unknown): number {
@@ -136,6 +146,13 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
     throw new Error(`Aucune donnée LAeq valide trouvée dans "${fileName}" (831C)`)
   }
 
+  // Bandes 1/3 d'octave 831C : cols 41-67 = 27 bandes 50 Hz → 20 kHz (LZeq)
+  const nBands = data.find((d) => d.spectra)?.spectra?.length ?? 0
+  const spectraFreqs =
+    nBands === SE831C_FREQ_BANDS.length
+      ? SE831C_FREQ_BANDS
+      : SE831C_FREQ_BANDS.slice(0, nBands)
+
   return {
     id: crypto.randomUUID(),
     name: fileName,
@@ -147,5 +164,6 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
     point: null,
     data,
     rowCount: data.length,
+    ...(nBands > 0 ? { spectraFreqs } : {}),
   }
 }

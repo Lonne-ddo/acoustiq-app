@@ -190,6 +190,7 @@ export const KT_BAND_FREQS: number[] = [
  * les niveaux LAeq par bande. Référence ANSI S1.4 / IEC 61672.
  */
 export const A_WEIGHT: Record<number, number> = {
+  31.5: -39.4, 40: -34.6,
   50: -30.2, 63: -26.2, 80: -22.5, 100: -19.1, 125: -16.1,
   160: -13.4, 200: -10.9, 250: -8.6, 315: -6.6, 400: -4.8,
   500: -3.2, 630: -1.9, 800: -0.8, 1000: 0.0, 1250: 0.6,

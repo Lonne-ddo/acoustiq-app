@@ -9,13 +9,35 @@ import type { MeasurementFile } from '../types'
 // pour éviter les problèmes d'import circulaire
 
 function timeToMinutes(value: unknown): number {
-  if (typeof value === 'number') return value * 24 * 60
+  if (value instanceof Date) {
+    return value.getHours() * 60 + value.getMinutes() + value.getSeconds() / 60
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value * 24 * 60
+  }
   if (typeof value === 'string') {
-    const parts = value.split(':').map(Number)
-    return parts[0] * 60 + (parts[1] ?? 0) + (parts[2] ?? 0) / 60
+    const m = value.match(/(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/)
+    if (m) {
+      return (
+        parseInt(m[1], 10) * 60 +
+        parseInt(m[2], 10) +
+        parseInt(m[3] ?? '0', 10) / 60
+      )
+    }
   }
   return 0
 }
+
+const SE831C_FREQS = [
+  50, 63, 80, 100, 125, 160, 200, 250, 315, 400,
+  500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000,
+  5000, 6300, 8000, 10000, 12500, 16000, 20000,
+]
+const SE821_FREQS = [
+  31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250,
+  315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500,
+  3150, 4000, 5000, 6300, 8000, 10000,
+]
 
 function cellValue(sheet: XLSX.WorkSheet, row: number, col: number): string {
   const addr = XLSX.utils.encode_cell({ r: row, c: col })
@@ -26,6 +48,8 @@ function cellValue(sheet: XLSX.WorkSheet, row: number, col: number): string {
 function detect821SE(workbook: XLSX.WorkBook): boolean {
   const summary = workbook.Sheets['Summary']
   if (!summary) return false
+  const a1 = cellValue(summary, 0, 0)
+  if (/soundexpert\s*821/i.test(a1)) return true
   for (let r = 0; r < 10; r++) {
     for (let c = 0; c < 5; c++) {
       const v = cellValue(summary, r, c).toLowerCase()
@@ -72,9 +96,22 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
   const [startDate, startTimePart] = startRaw.split(' ')
   const [, stopTimePart] = stopRaw.split(' ')
 
+  // Défauts dépendant du modèle
+  let timeCol: number
+  let laeqCol: number
+  let recordTypeCol: number
+  let spectraStart: number
+  let spectraEnd: number
+  if (is821) {
+    timeCol = 1; laeqCol = 2; recordTypeCol = -1
+    spectraStart = 37; spectraEnd = 62
+  } else {
+    timeCol = 2; laeqCol = 4; recordTypeCol = 1
+    spectraStart = 41; spectraEnd = 67
+  }
+
   // Trouver la feuille d'historique
   let historySheet = workbook.Sheets['Time History']
-  let timeCol = 2, laeqCol = 4, recordTypeCol = 1, spectraStart = 41, spectraEnd = 67
 
   if (!historySheet) {
     // Recherche heuristique
@@ -118,15 +155,17 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     const row = rows[i]
     if (!row) continue
 
-    const recordType = row[recordTypeCol]
-    if (recordType !== null && recordType !== '' && recordType !== undefined) continue
+    if (recordTypeCol >= 0) {
+      const recordType = row[recordTypeCol]
+      if (recordType !== null && recordType !== '' && recordType !== undefined) continue
+    }
 
     const timeVal = row[timeCol]
     const tVal = timeToMinutes(timeVal) % 1440 // Ramener au cycle 24h
 
     const laeqVal = row[laeqCol]
     const laeq = typeof laeqVal === 'number' ? laeqVal : parseFloat(String(laeqVal))
-    if (isNaN(laeq)) continue
+    if (!Number.isFinite(laeq)) continue
 
     // Spectres
     const spectra: number[] = []
@@ -156,6 +195,12 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     throw new Error(`Aucune donnée LAeq valide trouvée dans "${fileName}"`)
   }
 
+  // Bandes 1/3 d'octave selon le modèle
+  const nBands = data.find((d) => d.spectra)?.spectra?.length ?? 0
+  const sourceFreqs = is821 ? SE821_FREQS : SE831C_FREQS
+  const spectraFreqs =
+    nBands === sourceFreqs.length ? sourceFreqs : sourceFreqs.slice(0, nBands)
+
   return {
     id: crypto.randomUUID(),
     name: fileName,
@@ -167,6 +212,7 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     point: null,
     data,
     rowCount: data.length,
+    ...(nBands > 0 ? { spectraFreqs } : {}),
   }
 }
 

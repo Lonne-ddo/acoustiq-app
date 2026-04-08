@@ -1,20 +1,52 @@
 /**
- * Parser pour fichiers XLSX du sonomètre 821SE / SoundExpert (Larson Davis)
- * Structure similaire au 831C mais avec des noms de feuilles différents
+ * Parser pour fichiers XLSX du sonomètre 821SE / SoundExpert (Larson Davis).
+ *
+ * Structure réelle (vérifiée 2026-04-08) :
+ * - Onglet `Summary` cellule A1 = "SoundExpert 821 Summary" (signature)
+ * - Onglet Time History (nom variable) :
+ *     ligne 0 = en-têtes  ·  données à partir de la ligne 1 (1 entrée/seconde)
+ *     col 1  = Date/Time  (datetime complet "YYYY-MM-DD HH:MM:SS")
+ *     col 2  = LAeq  (déjà A-pondéré, dB(A))
+ *     cols 37-62 = LZeq 1/3 d'octave 31.5 Hz → 10 kHz (26 bandes, Z-pondéré)
  */
 import * as XLSX from 'xlsx'
 import type { MeasurementFile, DataPoint } from '../types'
 
 /**
- * Convertit une heure au format "HH:MM:SS" ou fraction Excel en minutes depuis minuit
+ * Bandes 1/3 d'octave émises par le 821SE (cols 37 à 62, 26 bandes).
+ * Z-pondérées au parsing — l'A-weighting est appliqué à l'affichage par
+ * `Spectrogram.tsx` pour la cohérence visuelle.
+ */
+export const SE821_FREQ_BANDS: number[] = [
+  31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250,
+  315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500,
+  3150, 4000, 5000, 6300, 8000, 10000,
+]
+
+/**
+ * Convertit une heure / datetime en minutes depuis minuit.
+ *  - number (sériel Excel) → fraction de jour × 1440
+ *  - string "HH:MM:SS"     → simple parse
+ *  - string "YYYY-MM-DD HH:MM:SS" → extrait la partie heure via regex
+ *  - Date                  → composantes locales
  */
 function timeToMinutes(value: unknown): number {
-  if (typeof value === 'number') {
+  if (value instanceof Date) {
+    return value.getHours() * 60 + value.getMinutes() + value.getSeconds() / 60
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
     return value * 24 * 60
   }
   if (typeof value === 'string') {
-    const parts = value.split(':').map(Number)
-    return parts[0] * 60 + (parts[1] ?? 0) + (parts[2] ?? 0) / 60
+    // Match HH:MM[:SS] anywhere — gère "09:01:13" comme "2026-03-09 09:01:13"
+    const m = value.match(/(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/)
+    if (m) {
+      return (
+        parseInt(m[1], 10) * 60 +
+        parseInt(m[2], 10) +
+        parseInt(m[3] ?? '0', 10) / 60
+      )
+    }
   }
   return 0
 }
@@ -46,12 +78,17 @@ function cellValue(sheet: XLSX.WorkSheet, row: number, col: number): string {
 }
 
 /**
- * Détecte si un fichier XLSX provient d'un 821SE / SoundExpert
+ * Détecte si un fichier XLSX provient d'un 821SE / SoundExpert.
+ * Critère : onglet `Summary` existe ET cellule A1 contient
+ * "SoundExpert 821 Summary".
  */
 export function detect821SE(workbook: XLSX.WorkBook): boolean {
   const summary = workbook.Sheets['Summary']
   if (!summary) return false
-  // Parcourir les premières lignes pour détecter le modèle
+  const a1 = cellValue(summary, 0, 0)
+  if (/soundexpert\s*821/i.test(a1)) return true
+  // Tolérance : ancienne signature "821SE" / "SoundExpert" ailleurs dans
+  // les premières cellules — utile pour les exports plus anciens.
   for (let r = 0; r < 10; r++) {
     for (let c = 0; c < 5; c++) {
       const v = cellValue(summary, r, c).toLowerCase()
@@ -123,30 +160,27 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
     defval: null,
   }) as unknown[][]
 
-  // Détecter dynamiquement les colonnes temps et LAeq
-  const headerRow = rows[0] as unknown[] | undefined
-  let timeCol = 2  // par défaut comme le 831C
-  let laeqCol = 4
-  let recordTypeCol = 1
-  let spectraStart = 41
-  let spectraEnd = 67
+  // Défauts 821SE — structure réelle vérifiée 2026-04-08 :
+  // col 1 = Date/Time · col 2 = LAeq · cols 37-62 = LZeq 26 bandes
+  let timeCol = 1
+  let laeqCol = 2
+  let recordTypeCol = -1  // pas de colonne Record Type sur 821SE
+  let spectraStart = 37
+  let spectraEnd = 62
 
+  // Affinage par les en-têtes si présents et explicites
+  const headerRow = rows[0] as unknown[] | undefined
   if (headerRow) {
     const headers = headerRow.map((h) => String(h ?? '').toLowerCase())
-    // Recherche de la colonne temps
     const tIdx = headers.findIndex((h) => h.includes('time') || h.includes('date') || h.includes('heure'))
     if (tIdx >= 0) timeCol = tIdx
-    // Recherche de la colonne LAeq
-    const lIdx = headers.findIndex((h) => h.includes('laeq') || h.includes('la eq') || h.includes('leq'))
+    const lIdx = headers.findIndex((h) => h === 'laeq' || h.includes('la eq') || (h.includes('leq') && !h.includes('lzeq') && !h.includes('lceq')))
     if (lIdx >= 0) laeqCol = lIdx
-    // Recherche de la colonne Record Type
     const rIdx = headers.findIndex((h) => h.includes('record') || h.includes('type'))
     if (rIdx >= 0) recordTypeCol = rIdx
-    // Recherche des colonnes de spectre (LZeq)
     const specStart = headers.findIndex((h) => h.includes('lzeq') || h.includes('lz eq'))
     if (specStart >= 0) {
       spectraStart = specStart
-      // Trouver la fin des colonnes spectrales consécutives
       let end = specStart
       for (let c = specStart + 1; c < headers.length; c++) {
         if (headers[c].includes('lzeq') || headers[c].includes('lz eq')) {
@@ -165,10 +199,13 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
     const row = rows[i]
     if (!row) continue
 
-    // Ignorer les lignes avec un Record Type non vide
-    const recordType = row[recordTypeCol]
-    if (recordType !== null && recordType !== '' && recordType !== undefined) {
-      continue
+    // 821SE n'a pas de colonne Record Type — n'appliquer le filtre que si
+    // explicitement détectée par les en-têtes.
+    if (recordTypeCol >= 0) {
+      const recordType = row[recordTypeCol]
+      if (recordType !== null && recordType !== '' && recordType !== undefined) {
+        continue
+      }
     }
 
     const timeVal = row[timeCol]
@@ -176,9 +213,10 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
 
     const laeqVal = row[laeqCol]
     const laeq = typeof laeqVal === 'number' ? laeqVal : parseFloat(String(laeqVal))
-    if (isNaN(laeq)) continue
+    if (!Number.isFinite(laeq)) continue
 
-    // Spectres 1/3 octave si disponibles
+    // Spectres 1/3 octave LZeq (Z-pondéré). L'A-pondération est appliquée
+    // par le composant Spectrogram à l'affichage uniquement.
     const spectra: number[] = []
     for (let c = spectraStart; c <= spectraEnd && c < row.length; c++) {
       const v = row[c]
@@ -194,8 +232,18 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
   }
 
   if (data.length === 0) {
-    throw new Error(`Aucune donnée LAeq valide trouvée dans "${fileName}" (821SE)`)
+    throw new Error(
+      `Aucune donnée LAeq valide trouvée dans "${fileName}" (821SE). ` +
+      `Vérifiez les colonnes Date/Time (col 1) et LAeq (col 2) dans l'onglet Time History.`,
+    )
   }
+
+  // Aligner spectraFreqs sur le nombre réel de bandes lues (26 si défauts).
+  const nBands = data.find((d) => d.spectra)?.spectra?.length ?? 0
+  const spectraFreqs =
+    nBands === SE821_FREQ_BANDS.length
+      ? SE821_FREQ_BANDS
+      : SE821_FREQ_BANDS.slice(0, nBands)
 
   return {
     id: crypto.randomUUID(),
@@ -208,5 +256,6 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
     point: null,
     data,
     rowCount: data.length,
+    ...(nBands > 0 ? { spectraFreqs } : {}),
   }
 }

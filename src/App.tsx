@@ -136,7 +136,7 @@ function parseFile(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     return parse821SE(buffer, fileName)
   } catch (e) {
     const err821SE = e instanceof Error ? e.message : String(e)
-    throw new Error(`Échec de lecture de "${fileName}" :\n  831C : ${err831C}\n  821SE : ${err821SE}`)
+    throw new Error(`Échec de lecture de "${fileName}" :\n  Format A : ${err831C}\n  Format B : ${err821SE}`)
   }
 }
 
@@ -1080,7 +1080,7 @@ function MainPanel({
           ) : (
             <EmptyState
               icon={<BarChart2 size={40} />}
-              text="Importez un fichier 831C pour commencer."
+              text="Importez un fichier de mesure pour commencer."
               hint={
                 files.length > 0
                   ? `${files.length} fichier${files.length > 1 ? 's' : ''} chargé${files.length > 1 ? 's' : ''} — ${t('general.waitingAssign')}`

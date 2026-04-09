@@ -8,7 +8,7 @@ const translations: Record<string, Record<string, string>> = {
   'sidebar.subtitle': { fr: 'Analyse acoustique environnementale', en: 'Environmental acoustic analysis' },
   'sidebar.import': { fr: 'Importer des fichiers', en: 'Import files' },
   'sidebar.loading': { fr: 'Chargement…', en: 'Loading…' },
-  'sidebar.importHint': { fr: 'XLSX 831C / 821SE', en: 'XLSX 831C / 821SE' },
+  'sidebar.importHint': { fr: 'Fichiers XLSX de mesure', en: 'XLSX measurement files' },
   'sidebar.save': { fr: 'Sauvegarder', en: 'Save' },
   'sidebar.open': { fr: 'Ouvrir', en: 'Open' },
   'sidebar.files': { fr: 'Fichiers de mesure', en: 'Measurement files' },

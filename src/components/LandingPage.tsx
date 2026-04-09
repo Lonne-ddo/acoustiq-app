@@ -51,7 +51,7 @@ export default function LandingPage({ onEnter, version }: Props) {
             Analyse acoustique environnementale
           </h1>
           <p className="text-lg text-gray-400 leading-relaxed">
-            SoundAdvisor 831C &amp; SoundExpert 821SE
+            Sonomètres &amp; vibromètres — multi-instruments
           </p>
           <p className="text-sm text-gray-500 max-w-lg mx-auto leading-relaxed">
             Importez vos fichiers XLSX, visualisez les niveaux sonores, calculez les indices

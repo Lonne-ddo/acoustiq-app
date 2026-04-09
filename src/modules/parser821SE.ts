@@ -138,10 +138,10 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
   // --- Feuille Summary ---
   const summarySheet = workbook.Sheets['Summary']
   if (!summarySheet) {
-    throw new Error('Feuille "Summary" introuvable dans le fichier 821SE')
+    throw new Error('Feuille "Summary" introuvable dans le fichier de mesure')
   }
 
-  const model = cellValue(summarySheet, 1, 1) || '821SE'
+  const model = cellValue(summarySheet, 1, 1) || 'Sonomètre'
   const serial = cellValue(summarySheet, 2, 1)
   const startRaw = cellValue(summarySheet, 3, 1)
   const stopRaw = cellValue(summarySheet, 4, 1)
@@ -152,7 +152,7 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
   // --- Feuille d'historique ---
   const history = findHistorySheet(workbook)
   if (!history) {
-    throw new Error('Aucune feuille d\'historique temporel trouvée dans le fichier 821SE')
+    throw new Error('Aucune feuille d\'historique temporel trouvée dans le fichier de mesure')
   }
 
   const rows: unknown[][] = XLSX.utils.sheet_to_json(history.sheet, {
@@ -233,8 +233,8 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
 
   if (data.length === 0) {
     throw new Error(
-      `Aucune donnée LAeq valide trouvée dans "${fileName}" (821SE). ` +
-      `Vérifiez les colonnes Date/Time (col 1) et LAeq (col 2) dans l'onglet Time History.`,
+      `Aucune donnée LAeq valide trouvée dans "${fileName}". ` +
+      `Vérifiez les colonnes Date/Time et LAeq dans l'onglet Time History.`,
     )
   }
 
@@ -248,7 +248,7 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
   return {
     id: crypto.randomUUID(),
     name: fileName,
-    model: model.includes('821') || model.toLowerCase().includes('soundexpert') ? model : '821SE',
+    model: model || 'Sonomètre',
     serial,
     date: startDate ?? excelDateToISO(null),
     startTime: startTimePart?.slice(0, 5) ?? '00:00',

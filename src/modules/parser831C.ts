@@ -15,34 +15,63 @@ export const SE831C_FREQ_BANDS: number[] = [
 ]
 
 /**
- * Convertit une heure au format "HH:MM:SS" ou fraction Excel en minutes depuis minuit
+ * Convertit une heure / datetime en minutes depuis minuit. Robuste à tous
+ * les formats : Date JS, sériel Excel, datetime "YYYY-MM-DD HH:MM:SS",
+ * heure pure "HH:MM:SS". Retourne NaN si impossible (la ligne sera sautée).
  */
 function timeToMinutes(value: unknown): number {
-  if (typeof value === 'number') {
-    // fraction Excel : 1.0 = 24h
+  if (value instanceof Date) {
+    return value.getHours() * 60 + value.getMinutes() + value.getSeconds() / 60
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
     return value * 24 * 60
   }
   if (typeof value === 'string') {
-    const parts = value.split(':').map(Number)
-    return parts[0] * 60 + (parts[1] ?? 0) + (parts[2] ?? 0) / 60
+    const m = value.match(/(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/)
+    if (m) {
+      return (
+        parseInt(m[1], 10) * 60 +
+        parseInt(m[2], 10) +
+        parseInt(m[3] ?? '0', 10) / 60
+      )
+    }
   }
-  return 0
+  return NaN
 }
 
 /**
- * Formate une fraction Excel de date en "YYYY-MM-DD"
+ * Formate une valeur cellule (sériel Excel, datetime string, Date JS) en
+ * date ISO "YYYY-MM-DD". Retourne "" si impossible.
  */
 function excelDateToISO(value: unknown): string {
-  if (typeof value === 'number') {
+  if (value instanceof Date) {
+    const y = value.getFullYear()
+    const m = String(value.getMonth() + 1).padStart(2, '0')
+    const d = String(value.getDate()).padStart(2, '0')
+    return `${y}-${m}-${d}`
+  }
+  if (typeof value === 'number' && Number.isFinite(value)) {
     const date = XLSX.SSF.parse_date_code(value)
+    if (!date) return ''
     const y = date.y
     const m = String(date.m).padStart(2, '0')
     const d = String(date.d).padStart(2, '0')
     return `${y}-${m}-${d}`
   }
   if (typeof value === 'string') {
-    // supposé déjà au format lisible, on retourne tel quel
-    return value
+    const trimmed = value.trim()
+    // Already ISO ?
+    const iso = trimmed.match(/^(\d{4})-(\d{2})-(\d{2})/)
+    if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
+    // Sériel sous forme de string ?
+    const num = parseFloat(trimmed)
+    if (!isNaN(num) && /^[\d.]+$/.test(trimmed)) {
+      return excelDateToISO(num)
+    }
+    // dd/mm/yyyy
+    const fr = trimmed.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+    if (fr) return `${fr[3]}-${fr[2].padStart(2, '0')}-${fr[1].padStart(2, '0')}`
+    return trimmed
   }
   return ''
 }
@@ -56,6 +85,13 @@ function summaryCell(sheet: XLSX.WorkSheet, row: number, col: number): string {
   return cell ? String(cell.v) : ''
 }
 
+/** Extrait la valeur brute (number, Date, string) d'une cellule Summary. */
+function summaryCellRaw(sheet: XLSX.WorkSheet, row: number, col: number): unknown {
+  const addr = XLSX.utils.encode_cell({ r: row, c: col })
+  const cell = sheet[addr]
+  return cell ? cell.v : undefined
+}
+
 /**
  * Lit un fichier XLSX 831C et retourne un objet MeasurementFile
  * @param buffer - contenu binaire du fichier
@@ -67,23 +103,29 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
   // --- Feuille Summary ---
   const summarySheet = workbook.Sheets['Summary']
   if (!summarySheet) {
-    throw new Error('Feuille "Summary" introuvable dans le fichier 831C')
+    throw new Error('Feuille "Summary" introuvable dans le fichier de mesure')
   }
 
   // Lecture des métadonnées (positions à adapter selon la version du firmware)
   const model = summaryCell(summarySheet, 1, 1)
   const serial = summaryCell(summarySheet, 2, 1)
-  const startRaw = summaryCell(summarySheet, 3, 1)
-  const stopRaw = summaryCell(summarySheet, 4, 1)
+  const startRawValue = summaryCellRaw(summarySheet, 3, 1)
+  const stopRawValue = summaryCellRaw(summarySheet, 4, 1)
 
-  // Séparation date / heure (format attendu : "YYYY-MM-DD HH:MM:SS")
-  const [startDate, startTimePart] = startRaw.split(' ')
-  const [, stopTimePart] = stopRaw.split(' ')
+  // Date au format ISO via excelDateToISO (gère sériel Excel, datetime
+  // string, Date JS). Heure extraite séparément si la cellule est une string.
+  const startDate = excelDateToISO(startRawValue)
+  const startStr = typeof startRawValue === 'string' ? startRawValue : ''
+  const stopStr = typeof stopRawValue === 'string' ? stopRawValue : ''
+  const startTimeMatch = startStr.match(/(\d{1,2}:\d{1,2}(?::\d{1,2})?)/)
+  const stopTimeMatch = stopStr.match(/(\d{1,2}:\d{1,2}(?::\d{1,2})?)/)
+  const startTimePart = startTimeMatch ? startTimeMatch[1] : '00:00:00'
+  const stopTimePart = stopTimeMatch ? stopTimeMatch[1] : '00:00:00'
 
   // --- Feuille Time History ---
   const historySheet = workbook.Sheets['Time History']
   if (!historySheet) {
-    throw new Error('Feuille "Time History" introuvable dans le fichier 831C')
+    throw new Error('Feuille "Time History" introuvable dans le fichier de mesure')
   }
 
   const rows: unknown[][] = XLSX.utils.sheet_to_json(historySheet, {
@@ -105,12 +147,14 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
 
     // Colonne index 2 : Date/heure → conversion en minutes depuis minuit
     const timeVal = row[2]
-    const t = timeToMinutes(timeVal) % 1440 // Ramener au cycle 24h
+    const tRaw = timeToMinutes(timeVal)
+    if (!Number.isFinite(tRaw)) continue
+    const t = tRaw % 1440 // Ramener au cycle 24h
 
     // Colonne index 4 : LAeq
     const laeqVal = row[4]
     const laeq = typeof laeqVal === 'number' ? laeqVal : parseFloat(String(laeqVal))
-    if (isNaN(laeq)) continue
+    if (!Number.isFinite(laeq)) continue
 
     // Colonne index 9 : LCeq (pondération C) — utilisé pour la correction Kb
     // selon les Lignes directrices MELCCFP 2026
@@ -143,7 +187,7 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
   }
 
   if (data.length === 0) {
-    throw new Error(`Aucune donnée LAeq valide trouvée dans "${fileName}" (831C)`)
+    throw new Error(`Aucune donnée LAeq valide trouvée dans "${fileName}"`)
   }
 
   // Bandes 1/3 d'octave 831C : cols 41-67 = 27 bandes 50 Hz → 20 kHz (LZeq)
@@ -156,9 +200,9 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
   return {
     id: crypto.randomUUID(),
     name: fileName,
-    model: model || '831C',
+    model: model || 'Sonomètre',
     serial,
-    date: startDate ?? excelDateToISO(null),
+    date: startDate || excelDateToISO(startRawValue),
     startTime: startTimePart?.slice(0, 5) ?? '00:00',
     stopTime: stopTimePart?.slice(0, 5) ?? '00:00',
     point: null,

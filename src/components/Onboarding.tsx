@@ -33,8 +33,8 @@ const STEPS: Step[] = [
     icon: <Upload size={28} className="text-emerald-400" />,
     titleFr: 'Importer vos fichiers',
     titleEn: 'Import your files',
-    descFr: 'Cliquez sur le bouton "Importer des fichiers" dans la barre latérale pour charger vos mesures XLSX (831C ou 821SE).',
-    descEn: 'Click the "Import files" button in the sidebar to load your XLSX measurements (831C or 821SE).',
+    descFr: 'Cliquez sur le bouton "Importer des fichiers" dans la barre latérale pour charger vos fichiers de mesure XLSX.',
+    descEn: 'Click the "Import files" button in the sidebar to load your XLSX measurement files.',
   },
   {
     icon: <List size={28} className="text-blue-400" />,

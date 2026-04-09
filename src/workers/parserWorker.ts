@@ -25,7 +25,7 @@ function timeToMinutes(value: unknown): number {
       )
     }
   }
-  return 0
+  return NaN
 }
 
 const SE831C_FREQS = [
@@ -86,10 +86,10 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
 
   const summarySheet = workbook.Sheets['Summary']
   if (!summarySheet) {
-    throw new Error('Feuille "Summary" introuvable')
+    throw new Error('Feuille "Summary" introuvable dans le fichier de mesure')
   }
 
-  const model = cellValue(summarySheet, 1, 1) || (is821 ? '821SE' : '831C')
+  const model = cellValue(summarySheet, 1, 1) || 'Sonomètre'
   const serial = cellValue(summarySheet, 2, 1)
   const startRaw = cellValue(summarySheet, 3, 1)
   const stopRaw = cellValue(summarySheet, 4, 1)
@@ -161,7 +161,9 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     }
 
     const timeVal = row[timeCol]
-    const tVal = timeToMinutes(timeVal) % 1440 // Ramener au cycle 24h
+    const tRaw = timeToMinutes(timeVal)
+    if (!Number.isFinite(tRaw)) continue
+    const tVal = tRaw % 1440 // Ramener au cycle 24h
 
     const laeqVal = row[laeqCol]
     const laeq = typeof laeqVal === 'number' ? laeqVal : parseFloat(String(laeqVal))

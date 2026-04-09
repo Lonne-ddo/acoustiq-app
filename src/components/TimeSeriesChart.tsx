@@ -497,6 +497,8 @@ export default function TimeSeriesChart({
       const fs = filesByPointDate.get(`${spec.pt}|${spec.date}`) ?? []
       for (const f of fs) {
         for (const dp of f.data) {
+          // Garde défensive : ignorer les datapoints sans temps ou laeq valides
+          if (!Number.isFinite(dp.t) || !Number.isFinite(dp.laeq)) continue
           const tSec = Math.round(dp.t * 60)
           const bucketSec = Math.floor(tSec / aggSec) * aggSec
           if (!buckets.has(bucketSec)) buckets.set(bucketSec, new Map())

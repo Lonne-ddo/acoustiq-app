@@ -217,7 +217,7 @@ export function parseTimeHistorySheet(buffer: ArrayBuffer): RawTimeHistoryRow[] 
   const sheet = findSheet(wb, 'DATA_Time History_1', ['time history', 'time_history'])
   if (!sheet) {
     throw new Error(
-      'Onglet "DATA_Time History_1" introuvable dans le fichier 821SE. Vérifiez l\'export SoundAdvisor.',
+      'Onglet "DATA_Time History_1" introuvable dans le fichier sonomètre. Vérifiez l\'export.',
     )
   }
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }) as unknown[][]

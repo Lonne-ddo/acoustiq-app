@@ -161,7 +161,7 @@ export default function CarrierePage({ state, setState }: Props) {
     if (!result) return
     const lines: string[] = []
     lines.push('Étude acoustique — Carrière / Sablière')
-    lines.push('Méthode : agrégation horaire 821SE + filtrage météo + tagging activité (registre camionnage)')
+    lines.push('Méthode : agrégation horaire des données 1 s + filtrage météo + tagging activité (registre camionnage)')
     lines.push('')
     lines.push('Bp par période (Lignes directrices MELCCFP 2026)')
     for (const p of [result.bpJour, result.bpSoir, result.bpNuit]) {
@@ -206,7 +206,7 @@ export default function CarrierePage({ state, setState }: Props) {
           Carrière / Sablière
         </span>
         <span className="text-[10px] text-gray-600">
-          Analyse REAFIE — Time History 821SE + camionnage + météo
+          Analyse REAFIE — Time History sonomètre + camionnage + météo
         </span>
       </div>
 
@@ -218,7 +218,7 @@ export default function CarrierePage({ state, setState }: Props) {
           </h3>
           <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <FileUploadStep
-              label="Time History 821SE"
+              label="Time History sonomètre"
               hint="Onglet « DATA_Time History_1 » · données 1 s"
               exampleHelp={TIME_HISTORY_HELP}
               fileName={timeHistory.name}

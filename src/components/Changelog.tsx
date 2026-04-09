@@ -46,7 +46,7 @@ const ENTRIES = [
     version: '0.1.0',
     date: '2026-04-06',
     changes: [
-      'Parser 831C et 821SE avec détection automatique',
+      'Parser de fichiers de mesure (deux formats) avec détection automatique',
       'Graphique temporel multi-points avec zoom/pan',
       'Spectrogramme 1/3 octave synchronisé',
       'Indices acoustiques : LAeq, L10, L50, L90, LAFmax, LAFmin',

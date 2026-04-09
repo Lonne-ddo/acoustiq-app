@@ -21,7 +21,7 @@ export default function WorkflowGuide({
   if (hasFiles && allAssigned && hasChart) return null
 
   const steps = [
-    { done: hasFiles,    label: 'Importer un fichier 831C' },
+    { done: hasFiles,    label: 'Importer un fichier de mesure' },
     { done: allAssigned && hasFiles, label: 'Assigner les points BV' },
     { done: hasChart,    label: 'Analyser' },
   ]

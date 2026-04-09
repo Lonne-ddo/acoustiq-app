@@ -153,8 +153,8 @@ export default function ReportGenerator({
     function method(): string {
       return (
         `Les mesures acoustiques ont été réalisées à l'aide de sonomètres intégrateurs ` +
-        `de classe 1 — Larson Davis 831C et 821SE SoundExpert — conformément aux normes ` +
-        `NF S 31-010 et NF S 31-110. Les appareils ont été positionnés à 1,50 m du sol, ` +
+        `de classe 1 conformément aux normes NF S 31-010 et NF S 31-110. ` +
+        `Les appareils ont été positionnés à 1,50 m du sol, ` +
         `à au moins 2 m de toute surface réfléchissante. Les niveaux LAeq ont été ` +
         `enregistrés au pas de 1 seconde puis agrégés par paliers de 5 minutes pour ` +
         `l'affichage et l'analyse statistique. Les indices L10, L50, L90 ainsi que les ` +

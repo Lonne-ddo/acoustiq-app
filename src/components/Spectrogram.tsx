@@ -600,7 +600,7 @@ export default function Spectrogram({
   // ── Mode compact (embarqué sous le graphique) ────────────────────────────
   if (compact) {
     return (
-      <div data-acoustiq-spectrogram="compact" className="flex flex-col h-full" style={{ height }}>
+      <div data-acoustiq-spectrogram="compact" className="flex flex-col h-full" style={height ? { height } : undefined}>
         <div className="flex items-center justify-end px-4 py-1 border-b border-gray-800/60 shrink-0">
           {headerControls}
         </div>

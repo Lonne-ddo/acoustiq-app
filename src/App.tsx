@@ -215,10 +215,12 @@ const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
 const FILE_LIST_LIMIT = 10
 
 /** Liste de fichiers groupée par date, avec bordure couleur du point */
-function FileList({ files, pointMap, onPointChange, onFileRemove }: {
+function FileList({ files, pointMap, pointLabels, onPointChange, onPointLabelChange, onFileRemove }: {
   files: MeasurementFile[]
   pointMap: Record<string, string>
+  pointLabels: Record<string, string>
   onPointChange: (fileId: string, point: string) => void
+  onPointLabelChange: (point: string, label: string) => void
   onFileRemove: (fileId: string) => void
 }) {
   const [expanded, setExpanded] = useState(false)
@@ -282,7 +284,7 @@ function FileList({ files, pointMap, onPointChange, onFileRemove }: {
                       {f.startTime} → {f.stopTime}
                     </p>
                     <p className="text-xs text-gray-600">{f.rowCount} {t('chart.points')}</p>
-                    <div className="mt-2">
+                    <div className="mt-2 space-y-1">
                       <select
                         value={pointMap[f.id] ?? ''}
                         onChange={(e) => onPointChange(f.id, e.target.value)}
@@ -295,6 +297,22 @@ function FileList({ files, pointMap, onPointChange, onFileRemove }: {
                           <option key={pt} value={pt}>{pt}</option>
                         ))}
                       </select>
+                      {pt && (
+                        <input
+                          type="text"
+                          defaultValue={pointLabels[pt] || pt}
+                          placeholder={pt}
+                          onBlur={(e) => {
+                            const v = e.currentTarget.value.trim()
+                            onPointLabelChange(pt, v === pt ? '' : v)
+                          }}
+                          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                          className="w-full text-xs bg-gray-800 text-emerald-300 border border-gray-700
+                                     rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500
+                                     placeholder:text-gray-600"
+                          title="Renommer ce point (Enter pour valider)"
+                        />
+                      )}
                     </div>
                   </li>
                 )
@@ -355,7 +373,9 @@ interface SidebarProps {
   meteo: MeteoData
   onMeteoChange: (m: MeteoData) => void
   onOpenChecklist: () => void
+  pointLabels: Record<string, string>
   onPointChange: (fileId: string, point: string) => void
+  onPointLabelChange: (point: string, label: string) => void
   onFileRemove: (fileId: string) => void
   onEventAdd: (ev: SourceEvent) => void
   onEventRemove: (id: string) => void
@@ -407,7 +427,7 @@ function SidebarSection({
 
 function Sidebar({
   collapsed, onToggle,
-  files, pointMap, events, availableDates, errors,
+  files, pointMap, pointLabels, events, availableDates, errors,
   audioFile, chartTimeMin, loading, loadProgress, rejectedFiles,
   candidates,
   annotations, pendingAnnotationText,
@@ -417,7 +437,7 @@ function Sidebar({
   onSaveTemplate, onApplyTemplate, onDeleteTemplate,
   meteo, onMeteoChange,
   onOpenChecklist,
-  onPointChange, onFileRemove,
+  onPointChange, onPointLabelChange, onFileRemove,
   onEventAdd, onEventRemove, onClearError,
   onDetectCandidates, onConfirmCandidate, onDismissCandidate,
   onSaveProject, onLoadProject, onParseFiles,
@@ -667,7 +687,9 @@ function Sidebar({
             <FileList
               files={files}
               pointMap={pointMap}
+              pointLabels={pointLabels}
               onPointChange={onPointChange}
+              onPointLabelChange={onPointLabelChange}
               onFileRemove={onFileRemove}
             />
           )}
@@ -770,6 +792,7 @@ function Sidebar({
 interface MainPanelProps {
   files: MeasurementFile[]
   pointMap: Record<string, string>
+  pointLabels: Record<string, string>
   events: SourceEvent[]
   concordance: Record<string, ConcordanceState>
   selectedDate: string
@@ -826,7 +849,7 @@ interface MainPanelProps {
 }
 
 function MainPanel({
-  files, pointMap, events, concordance,
+  files, pointMap, pointLabels, events, concordance,
   selectedDate, availableDates, activeTab, assignedPoints, zoomRange,
   projectName, recentProjects, settings,
   conformiteSummary, onConformiteSummaryChange,
@@ -848,6 +871,31 @@ function MainPanel({
   const chartFiles = files.filter((f) => !!pointMap[f.id])
   const hasChart = chartFiles.length > 0
   const [showRecent, setShowRecent] = useState(false)
+
+  // --- Resize chart / spectrogram split (percentage of container height for chart) ---
+  const [chartPct, setChartPct] = useState(55)
+  const resizeRef = useRef<{ startY: number; startPct: number } | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    resizeRef.current = { startY: e.clientY, startPct: chartPct }
+    const onMove = (ev: MouseEvent) => {
+      if (!resizeRef.current || !containerRef.current) return
+      const containerH = containerRef.current.getBoundingClientRect().height
+      if (containerH <= 0) return
+      const deltaY = ev.clientY - resizeRef.current.startY
+      const deltaPct = (deltaY / containerH) * 100
+      setChartPct(Math.max(20, Math.min(80, resizeRef.current.startPct + deltaPct)))
+    }
+    const onUp = () => {
+      resizeRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [chartPct])
 
   // En mode présentation, on force l'onglet Visualisation
   const effectiveTab: Tab = presentationMode ? 'chart' : activeTab
@@ -1007,10 +1055,10 @@ function MainPanel({
 
       {/* Contenu selon l'onglet */}
       {effectiveTab === 'chart' && (
-        <div className="flex-1 flex flex-col min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+        <div ref={containerRef} className="flex-1 flex flex-col min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           {hasChart ? (
             <>
-              <div className="flex-1 min-h-0">
+              <div style={{ height: `${chartPct}%` }} className="min-h-0 shrink-0">
                 <TimeSeriesChart
                   files={chartFiles}
                   pointMap={pointMap}
@@ -1037,15 +1085,25 @@ function MainPanel({
                   meteo={meteo}
                   audioSegments={audioSegments}
                   audioOffsetMin={audioFile?.startOffsetMin ?? 0}
+                  pointLabels={pointLabels}
                 />
               </div>
 
+              {/* Poignée de redimensionnement */}
+              <div
+                className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
+                onMouseDown={handleResizeStart}
+                title="Glisser pour redimensionner"
+              >
+                <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
+              </div>
+
               {/* Spectrogramme embarqué (collapsible) */}
-              <div className="border-t border-gray-800 bg-gray-900/40 shrink-0">
+              <div className="border-t border-gray-800 bg-gray-900/40 flex-1 min-h-0 flex flex-col">
                 <button
                   onClick={onSpectrogramToggle}
                   className="w-full flex items-center gap-2 px-6 py-1.5 text-xs text-gray-400
-                             hover:text-gray-200 hover:bg-gray-800/60 transition-colors"
+                             hover:text-gray-200 hover:bg-gray-800/60 transition-colors shrink-0"
                   aria-expanded={spectrogramExpanded}
                 >
                   {spectrogramExpanded ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
@@ -1056,7 +1114,7 @@ function MainPanel({
                   </span>
                 </button>
                 {spectrogramExpanded && (
-                  <div style={{ height: 200 }}>
+                  <div className="flex-1 min-h-0">
                     <Spectrogram
                       files={chartFiles}
                       pointMap={pointMap}
@@ -1067,7 +1125,6 @@ function MainPanel({
                       zoomRange={zoomRange}
                       aggregationSeconds={aggregationSeconds}
                       compact
-                      height={200}
                     />
                   </div>
                 )}
@@ -1259,6 +1316,8 @@ function TabButton({ active, onClick, icon, label, ...rest }: {
 export default function App() {
   const [files, setFiles] = useState<MeasurementFile[]>([])
   const [pointMap, setPointMap] = useState<Record<string, string>>({})
+  // Labels personnalisés par point (ex: "BV-94" → "Récepteur Nord")
+  const [pointLabels, setPointLabels] = useState<Record<string, string>>({})
   const [errors, setErrors] = useState<string[]>([])
   const [events, setEvents] = useState<SourceEvent[]>([])
   const [concordance, setConcordance] = useState<Record<string, ConcordanceState>>({})
@@ -1270,11 +1329,8 @@ export default function App() {
   const [conformiteSummary, setConformiteSummary] = useState<ConformiteSummary | null>(null)
 
   // Pas d'agrégation lifté ici pour partage entre chart, spectrogramme embarqué et plein écran
-  const [aggregationSeconds, setAggregationSeconds] = useState<number>(() => {
-    const fromSettings = loadSettings().aggregationInterval
-    // Compatibilité ascendante : fromSettings est en minutes
-    return Math.max(1, Math.round(fromSettings * 60)) || 300
-  })
+  // Défaut : 5 secondes (compromis lisibilité / résolution)
+  const [aggregationSeconds, setAggregationSeconds] = useState<number>(5)
   const [spectrogramExpanded, setSpectrogramExpanded] = useState<boolean>(true)
 
   // Plan de site
@@ -1866,8 +1922,14 @@ export default function App() {
         meteo={meteo}
         onMeteoChange={setMeteo}
         onOpenChecklist={() => setChecklistOpen(true)}
+        pointLabels={pointLabels}
         onParseFiles={handleParseFiles}
         onPointChange={handlePointChange}
+        onPointLabelChange={(pt, label) => setPointLabels((prev) => {
+          const next = { ...prev }
+          if (label) next[pt] = label; else delete next[pt]
+          return next
+        })}
         onFileRemove={handleFileRemove}
         onEventAdd={handleEventAdd}
         onEventRemove={handleEventRemove}
@@ -1885,6 +1947,7 @@ export default function App() {
       <MainPanel
         files={files}
         pointMap={pointMap}
+        pointLabels={pointLabels}
         events={events}
         concordance={concordance}
         selectedDate={effectiveDate}

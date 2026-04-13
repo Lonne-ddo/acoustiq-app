@@ -213,6 +213,8 @@ interface Props {
   audioSegments?: ClassifiedSegment[]
   /** Décalage de l'audio en minutes depuis minuit (pour positionner les segments) */
   audioOffsetMin?: number
+  /** Labels personnalisés par point (ex: { "BV-94": "Récepteur Nord" }) */
+  pointLabels?: Record<string, string>
 }
 
 /** Format court d'une date ISO en français : "2026-03-09" → "09 mars" */
@@ -253,6 +255,7 @@ export default function TimeSeriesChart({
   meteo,
   audioSegments,
   audioOffsetMin = 0,
+  pointLabels = {},
 }: Props) {
   // Affichage des données météo (vent) sur le graphique
   const [showWind, setShowWind] = useState(false)
@@ -440,19 +443,20 @@ export default function TimeSeriesChart({
       for (const d of renderedDates) {
         if (!filesByPointDate.has(`${pt}|${d}`)) continue
         const isOverlay = d !== selectedDate
+        const label = pointLabels[pt] || pt
         out.push({
           key: renderedDates.length > 1 ? `${pt}__${d}` : pt,
           pt,
           date: d,
           isOverlay,
           displayName:
-            renderedDates.length > 1 ? `${pt} (${shortFrDate(d)})` : pt,
+            renderedDates.length > 1 ? `${label} (${shortFrDate(d)})` : label,
           color,
         })
       }
     })
     return out
-  }, [pointNames, renderedDates, filesByPointDate, selectedDate, pointColors])
+  }, [pointNames, renderedDates, filesByPointDate, selectedDate, pointColors, pointLabels])
 
   /** Compatibilité : "filesByPoint" pour la date principale uniquement (utilisé par sélection/comparaison) */
   const filesByPoint = useMemo(() => {
@@ -667,8 +671,9 @@ export default function TimeSeriesChart({
 
   // --- Gestionnaires zoom/pan ---
 
-  // Zoom centré sur la position du curseur
+  // Zoom centré sur la position du curseur (Ctrl + molette uniquement)
   const handleWheel = useCallback((e: React.WheelEvent) => {
+    if (!e.ctrlKey) return  // molette seule = scroll normal de la page
     e.preventDefault()
     const rect = chartAreaRef.current?.getBoundingClientRect()
     if (!rect) return

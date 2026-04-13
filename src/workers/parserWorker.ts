@@ -71,13 +71,15 @@ function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkSheet; nam
   )
 
   const priorities: RegExp[] = [
-    /time\s*history/i,
+    /data[_ ]time\s*history/i,
     /historique\s*temporel/i,
+    /time\s*history/i,
     /\btime\b/i,
     /\bhistorique\b/i,
   ]
   for (const re of priorities) {
     for (const sheetName of workbook.SheetNames) {
+      if (skipNames.has(sheetName.toLowerCase())) continue
       if (re.test(sheetName)) {
         return { sheet: workbook.Sheets[sheetName], name: sheetName }
       }

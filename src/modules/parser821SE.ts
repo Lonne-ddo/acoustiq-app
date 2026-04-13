@@ -103,14 +103,20 @@ export function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkShe
   )
 
   // Pass 1 — match by sheet name patterns (in priority order)
+  // 1. "DATA_Time History" → 831C anglais standard
+  // 2. "Historique temporel" → 821SE français G4
+  // 3. "Time History" → variante générique
+  // 4. "Time" ou "Historique" → fallback large
   const priorities: RegExp[] = [
-    /time\s*history/i,
+    /data[_ ]time\s*history/i,
     /historique\s*temporel/i,
+    /time\s*history/i,
     /\btime\b/i,
     /\bhistorique\b/i,
   ]
   for (const re of priorities) {
     for (const sheetName of workbook.SheetNames) {
+      if (skipNames.has(sheetName.toLowerCase())) continue
       if (re.test(sheetName)) {
         return { sheet: workbook.Sheets[sheetName], name: sheetName }
       }

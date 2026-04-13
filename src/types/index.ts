@@ -213,6 +213,8 @@ export interface Scene3DData {
     z: number
     placed: boolean
   }>
+  /** Bounding box OSM utilisé pour générer le modèle 3D */
+  bbox?: { south: number; west: number; north: number; east: number }
 }
 
 /** Structure d'un projet sauvegardé */

@@ -191,6 +191,30 @@ export interface MarkerPos {
   y: number  // fraction 0..1 — ligne
 }
 
+/** Source Lw résumée (partagée entre l'onglet Calcul Lw et Vue 3D) */
+export interface LwSourceSummary {
+  id: string
+  name: string
+  lw: number        // Lw global (dBA)
+  type: 'roof' | 'ground' | 'parallelepiped'
+}
+
+/** Données de la scène 3D sauvegardées dans le projet */
+export interface Scene3DData {
+  building: {
+    width: number   // largeur en mètres (défaut: 120)
+    depth: number   // profondeur en mètres (défaut: 70)
+    height: number  // hauteur en mètres (défaut: 15)
+  }
+  sources: Array<{
+    id: string      // référence à la source existante
+    x: number
+    y: number
+    z: number
+    placed: boolean
+  }>
+}
+
 /** Structure d'un projet sauvegardé */
 export interface ProjectData {
   version: string
@@ -220,4 +244,6 @@ export interface ProjectData {
   indicesSnapshot?: Record<string, IndicesSnapshot>
   /** Nom du projet (purement informatif, utilisé par la comparaison) */
   projectName?: string
+  /** État de la scène 3D (bâtiment + positions des sources) */
+  scene3D?: Scene3DData
 }

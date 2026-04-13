@@ -10,6 +10,7 @@ import type {
   MarkerPos,
   MeteoData,
   IndicesSnapshot,
+  Scene3DData,
 } from '../types'
 import {
   laeqAvg,
@@ -64,6 +65,7 @@ export function saveProject(
   meteo?: MeteoData,
   projectName?: string,
   checklist?: import('../types').ChecklistState,
+  scene3D?: Scene3DData,
 ): void {
   const project: ProjectData = {
     version: PROJECT_VERSION,
@@ -87,6 +89,7 @@ export function saveProject(
     indicesSnapshot: buildIndicesSnapshot(files, pointMap),
     projectName,
     checklist,
+    scene3D,
   }
 
   const json = JSON.stringify(project, null, 2)

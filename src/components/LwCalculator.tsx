@@ -2,7 +2,7 @@
  * Module de calcul de puissance acoustique Lw
  * Trois méthodes : Toiture Q=1, Sol Q=2, Parallélépipède ISO 3744
  */
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect } from 'react'
 import { Plus, Trash2, Download, ChevronRight } from 'lucide-react'
 import HelpTooltip from './HelpTooltip'
 import {
@@ -480,9 +480,16 @@ const SECTION_LABELS: Record<Section, string> = {
   parallelepiped: 'Mobile ISO 3744',
 }
 
-export default function LwCalculator() {
+export default function LwCalculator({ onSourcesChange }: { onSourcesChange?: (sources: Array<{ id: string; name: string; lw: number; type: 'roof' | 'ground' | 'parallelepiped' }>) => void } = {}) {
   const [sources, setSources] = useState<LwSource[]>([])
   const [section, setSection] = useState<Section>('roof')
+
+  // Notifier le parent quand les sources changent
+  useEffect(() => {
+    if (onSourcesChange) {
+      onSourcesChange(sources.map((s) => ({ id: s.id, name: s.name, lw: computeLw(s), type: s.type })))
+    }
+  }, [sources, onSourcesChange])
 
   function addSource(src: LwSource) {
     setSources((prev) => [...prev, src])

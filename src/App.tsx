@@ -43,6 +43,8 @@ import type {
   MeteoData,
   IndicesSnapshot,
   ChecklistState,
+  LwSourceSummary,
+  Scene3DData,
 } from './types'
 import { DEFAULT_METEO } from './types'
 import ChecklistModal, { DEFAULT_CHECKLIST } from './components/ChecklistModal'
@@ -87,6 +89,7 @@ import EventsPanel from './components/EventsPanel'
 import ConcordanceTable from './components/ConcordanceTable'
 import Spectrogram from './components/Spectrogram'
 import LwCalculator from './components/LwCalculator'
+const Vue3DTab = lazy(() => import('./components/Vue3DTab'))
 import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
 import Conformite2026 from './components/Conformite2026'
@@ -170,7 +173,7 @@ function saveRecent(projects: RecentProject[]) {
   localStorage.setItem(RECENT_KEY, JSON.stringify(projects.slice(0, MAX_RECENT)))
 }
 
-type Tab = 'chart' | 'map' | 'lw' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation' | 'carriere' | 'yamnet' | 'ecme'
+type Tab = 'chart' | 'map' | 'lw' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation' | 'carriere' | 'yamnet' | 'ecme' | 'vue3d'
 
 /**
  * Regroupement des onglets en 4 catégories principales pour réduire le bruit
@@ -192,6 +195,7 @@ const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
   carriere: 'outils',
   yamnet: 'outils',
   ecme: 'outils',
+  vue3d: 'rapport',
 }
 
 const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
@@ -201,6 +205,7 @@ const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
     { id: 'report', label: 'Rapport' },
     { id: 'lw', label: 'Calcul Lw' },
     { id: 'concordance', label: 'Concordance' },
+    { id: 'vue3d', label: 'Vue 3D' },
   ],
   outils: [
     { id: 'carriere', label: 'Carrière / Sablière' },
@@ -902,6 +907,10 @@ interface MainPanelProps {
   setCarriereState: React.Dispatch<React.SetStateAction<CarrierePageState>>
   ecmeState: EcmePageState
   setEcmeState: React.Dispatch<React.SetStateAction<EcmePageState>>
+  lwSources: LwSourceSummary[]
+  onLwSourcesChange: (sources: LwSourceSummary[]) => void
+  scene3D: Scene3DData | undefined
+  onScene3DChange: (data: Scene3DData) => void
   presentationMode: boolean
   onPresentationToggle: () => void
   onDateChange: (date: string) => void
@@ -932,6 +941,7 @@ function MainPanel({
   onConformiteReceptorChange, onConformitePeriodChange,
   meteo, audioFile, audioSegments, onAudioSegmentsChange,
   carriereState, setCarriereState, ecmeState, setEcmeState,
+  lwSources, onLwSourcesChange, scene3D, onScene3DChange,
   presentationMode, onPresentationToggle,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
@@ -1235,12 +1245,20 @@ function MainPanel({
       )}
 
       {effectiveTab === 'lw' && (
-        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]"><LwCalculator /></div>
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]"><LwCalculator onSourcesChange={onLwSourcesChange} /></div>
       )}
 
       {effectiveTab === 'concordance' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           <ConcordanceTable events={events} pointNames={assignedPoints} concordance={concordance} onCellChange={onCellChange} />
+        </div>
+      )}
+
+      {effectiveTab === 'vue3d' && (
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+          <Suspense fallback={<LazyTabFallback label="Vue 3D" />}>
+            <Vue3DTab lwSources={lwSources} scene3D={scene3D} onScene3DChange={onScene3DChange} />
+          </Suspense>
         </div>
       )}
 
@@ -1436,6 +1454,11 @@ export default function App() {
   // et résultats quand l'utilisateur change d'onglet et revient.
   const [carriereState, setCarriereState] = useState<CarrierePageState>(EMPTY_CARRIERE_STATE)
   const [ecmeState, setEcmeState] = useState<EcmePageState>(EMPTY_ECME_STATE)
+
+  // Sources Lw (partagées entre l'onglet Calcul Lw et Vue 3D)
+  const [lwSources, setLwSources] = useState<LwSourceSummary[]>([])
+  // Scène 3D (bâtiment + positions des sources)
+  const [scene3D, setScene3D] = useState<Scene3DData | undefined>(undefined)
 
   // Mode présentation : masque sidebar + barre d'onglets
   const [presentationMode, setPresentationMode] = useState(false)
@@ -1696,7 +1719,7 @@ export default function App() {
 
   // ---- Handlers projet ----
   const handleSaveProject = useCallback(() => {
-    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist)
+    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D)
     // Sauvegarder dans les projets récents
     const state = serializeCurrentState()
     const entry: RecentProject = { id: projectId, name: projectName, savedAt: new Date().toISOString(), state }
@@ -1706,7 +1729,7 @@ export default function App() {
       saveRecent(updated)
       return updated
     })
-  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectId, projectName, checklist, serializeCurrentState])
+  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectId, projectName, checklist, scene3D, serializeCurrentState])
 
   const handleLoadProject = useCallback((json: string) => {
     try {
@@ -1724,6 +1747,7 @@ export default function App() {
       if (project.mapMarkers) setMapMarkers(project.mapMarkers)
       if (project.meteo) setMeteo(project.meteo)
       if (project.checklist) setChecklist(project.checklist)
+      if (project.scene3D) setScene3D(project.scene3D)
       if (missingFiles.length > 0) {
         setErrors((prev) => [...prev, `${t('project.missingFiles')} : ${missingFiles.join(', ')}`])
       }
@@ -2074,6 +2098,10 @@ export default function App() {
         setCarriereState={setCarriereState}
         ecmeState={ecmeState}
         setEcmeState={setEcmeState}
+        lwSources={lwSources}
+        onLwSourcesChange={setLwSources}
+        scene3D={scene3D}
+        onScene3DChange={setScene3D}
         presentationMode={presentationMode}
         onPresentationToggle={() => setPresentationMode((v) => !v)}
         onDateChange={setSelectedDate}

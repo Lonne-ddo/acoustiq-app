@@ -56,20 +56,6 @@ interface BBox {
   east: number
 }
 
-interface OsmNode {
-  type: 'node'
-  id: number
-  lat: number
-  lon: number
-}
-
-interface OsmWay {
-  type: 'way'
-  id: number
-  nodes: number[]
-  tags?: Record<string, string>
-}
-
 interface BuildingFootprint {
   coords: Array<{ x: number; z: number }>  // in local meters
   height: number
@@ -83,13 +69,17 @@ interface Props {
 
 // --- OSM helpers --------------------------------------------------------------
 
-function parseOsmBuildings(
-  data: { elements: Array<OsmNode | OsmWay> },
-  bbox: BBox,
-): BuildingFootprint[] {
-  const nodes = new Map<number, { lat: number; lon: number }>()
-  for (const el of data.elements) {
-    if (el.type === 'node') nodes.set(el.id, { lat: el.lat, lon: el.lon })
+function parseOsmXml(xmlText: string, bbox: BBox): BuildingFootprint[] {
+  const parser = new DOMParser()
+  const xml = parser.parseFromString(xmlText, 'application/xml')
+
+  // Build node lookup: id → {lat, lon}
+  const nodes = new Map<string, { lat: number; lon: number }>()
+  for (const node of xml.querySelectorAll('node')) {
+    const id = node.getAttribute('id')
+    const lat = node.getAttribute('lat')
+    const lon = node.getAttribute('lon')
+    if (id && lat && lon) nodes.set(id, { lat: parseFloat(lat), lon: parseFloat(lon) })
   }
 
   const centerLat = (bbox.south + bbox.north) / 2
@@ -98,31 +88,38 @@ function parseOsmBuildings(
   const mPerDegLon = 111000 * Math.cos((centerLat * Math.PI) / 180)
 
   const buildings: BuildingFootprint[] = []
-  for (const el of data.elements) {
-    if (el.type !== 'way') continue
-    const way = el as OsmWay
-    if (!way.tags?.building) continue
+  for (const way of xml.querySelectorAll('way')) {
+    // Check if this way has a building tag
+    const tags = way.querySelectorAll('tag')
+    let isBuilding = false
+    let heightTag: number | null = null
+    let levelsTag: number | null = null
+    for (const tag of tags) {
+      const k = tag.getAttribute('k')
+      const v = tag.getAttribute('v')
+      if (k === 'building') isBuilding = true
+      if (k === 'height' && v) { const h = parseFloat(v); if (!isNaN(h) && h > 0) heightTag = h }
+      if (k === 'building:levels' && v) { const l = parseInt(v, 10); if (!isNaN(l) && l > 0) levelsTag = l }
+    }
+    if (!isBuilding) continue
 
+    // Reconstruct polygon from nd refs
     const coords: Array<{ x: number; z: number }> = []
-    for (const nid of way.nodes) {
-      const nd = nodes.get(nid)
-      if (!nd) continue
+    for (const nd of way.querySelectorAll('nd')) {
+      const ref = nd.getAttribute('ref')
+      if (!ref) continue
+      const node = nodes.get(ref)
+      if (!node) continue
       coords.push({
-        x: (nd.lon - centerLon) * mPerDegLon,
-        z: -(nd.lat - centerLat) * mPerDegLat,  // flip Z so north is -Z
+        x: (node.lon - centerLon) * mPerDegLon,
+        z: -(node.lat - centerLat) * mPerDegLat,
       })
     }
     if (coords.length < 3) continue
 
     let height = 10
-    if (way.tags['building:levels']) {
-      const levels = parseFloat(way.tags['building:levels'])
-      if (!isNaN(levels) && levels > 0) height = levels * 3
-    }
-    if (way.tags['height']) {
-      const h = parseFloat(way.tags['height'])
-      if (!isNaN(h) && h > 0) height = h
-    }
+    if (levelsTag) height = levelsTag * 3.5
+    if (heightTag) height = heightTag
 
     buildings.push({ coords, height })
   }
@@ -852,7 +849,7 @@ function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selec
         {noOsmBuildings && (
           <div className="px-3 py-2 border-t border-gray-800">
             <p className="text-[10px] text-amber-500/70 leading-tight">
-              Modèle sans bâtiments OSM — ajoutez une image satellite pour le contexte visuel.
+              Aucun bâtiment OSM dans cette zone — ajoutez une image satellite pour le contexte visuel.
             </p>
           </div>
         )}
@@ -911,36 +908,32 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     setLoadError(null)
     setFailedBbox(b)
 
-    const query = `[out:json][timeout:25];(way["building"](${b.south},${b.west},${b.north},${b.east}););out body;>;out skel qt;`
-    const encodedQuery = encodeURIComponent(query)
+    const url = `https://api.openstreetmap.org/api/0.6/map?bbox=${b.west},${b.south},${b.east},${b.north}`
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 20000)
 
-    const urls = [
-      `https://corsproxy.io/?https://overpass-api.de/api/interpreter?data=${encodedQuery}`,
-      `https://corsproxy.io/?https://overpass.kumi.systems/api/interpreter?data=${encodedQuery}`,
-    ]
+    try {
+      const res = await fetch(url, { signal: controller.signal })
+      clearTimeout(timer)
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const text = await res.text()
+      const parsed = parseOsmXml(text, b)
 
-    for (const url of urls) {
-      const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 15000)
-      try {
-        const res = await fetch(url, { signal: controller.signal })
-        clearTimeout(timer)
-        if (!res.ok) continue
-        const data = await res.json()
-        const parsed = parseOsmBuildings(data, b)
-        setBuildings(parsed)
-        setBbox(b)
-        setMode('3d')
-        setLoading(false)
-        setFailedBbox(null)
-        return
-      } catch {
-        clearTimeout(timer)
-      }
+      // Case B: success but 0 buildings — go to 3D with empty array
+      setBuildings(parsed)
+      setBbox(b)
+      setNoOsmMode(parsed.length === 0)
+      setMode('3d')
+      setLoading(false)
+      setFailedBbox(null)
+    } catch (err) {
+      clearTimeout(timer)
+      const msg = err instanceof DOMException && err.name === 'AbortError'
+        ? 'Timeout — l\'API OpenStreetMap n\'a pas répondu dans les 20 secondes.'
+        : `Erreur réseau : ${(err as Error).message}`
+      setLoadError(msg)
+      setLoading(false)
     }
-
-    setLoadError('Impossible de récupérer les données OSM — vérifiez votre connexion ou réduisez la zone.')
-    setLoading(false)
   }
 
   const handleBuild = (b: BBox) => {
@@ -991,6 +984,9 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
             </button>
           )}
         </div>
+        <p className="text-[11px] text-gray-600 text-center max-w-sm leading-relaxed">
+          L'API OpenStreetMap est peut-être temporairement indisponible. Continuez sans bâtiments et ajoutez une image satellite.
+        </p>
       </div>
     )
   }

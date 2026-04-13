@@ -3,6 +3,7 @@
  */
 import * as XLSX from 'xlsx'
 import type { MeasurementFile, DataPoint } from '../types'
+import { findSummarySheet } from './parser821SE'
 
 /**
  * Bandes 1/3 d'octave émises par le 831C dans les colonnes 41-67 (27 bandes
@@ -100,10 +101,10 @@ function summaryCellRaw(sheet: XLSX.WorkSheet, row: number, col: number): unknow
 export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFile {
   const workbook = XLSX.read(buffer, { type: 'array', cellDates: false })
 
-  // --- Feuille Summary ---
-  const summarySheet = workbook.Sheets['Summary']
+  // --- Feuille Summary / Sommaire ---
+  const summarySheet = findSummarySheet(workbook)
   if (!summarySheet) {
-    throw new Error('Feuille "Summary" introuvable dans le fichier de mesure')
+    throw new Error('Feuille "Summary" ou "Sommaire" introuvable dans le fichier de mesure')
   }
 
   // Lecture des métadonnées (positions à adapter selon la version du firmware)
@@ -122,10 +123,16 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
   const startTimePart = startTimeMatch ? startTimeMatch[1] : '00:00:00'
   const stopTimePart = stopTimeMatch ? stopTimeMatch[1] : '00:00:00'
 
-  // --- Feuille Time History ---
-  const historySheet = workbook.Sheets['Time History']
+  // --- Feuille Time History / Historique temporel ---
+  let historySheet: XLSX.WorkSheet | undefined
+  for (const name of workbook.SheetNames) {
+    if (/time\s*history/i.test(name) || /historique\s*temporel/i.test(name)) {
+      historySheet = workbook.Sheets[name]
+      break
+    }
+  }
   if (!historySheet) {
-    throw new Error('Feuille "Time History" introuvable dans le fichier de mesure')
+    throw new Error('Feuille "Time History" ou "Historique temporel" introuvable dans le fichier de mesure')
   }
 
   const rows: unknown[][] = XLSX.utils.sheet_to_json(historySheet, {

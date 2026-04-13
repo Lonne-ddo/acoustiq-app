@@ -45,8 +45,49 @@ function cellValue(sheet: XLSX.WorkSheet, row: number, col: number): string {
   return cell ? String(cell.v) : ''
 }
 
+function findSummarySheet(workbook: XLSX.WorkBook): XLSX.WorkSheet | undefined {
+  if (workbook.Sheets['Summary']) return workbook.Sheets['Summary']
+  if (workbook.Sheets['Sommaire']) return workbook.Sheets['Sommaire']
+  for (const name of workbook.SheetNames) {
+    const lower = name.toLowerCase()
+    if (lower === 'summary' || lower === 'sommaire') return workbook.Sheets[name]
+  }
+  return undefined
+}
+
+function findHistorySheetWorker(workbook: XLSX.WorkBook): XLSX.WorkSheet | null {
+  const summaryNames = ['summary', 'sommaire', 'paramètres', 'parametres',
+    'journal de session', 'session log']
+  const priorities: RegExp[] = [
+    /time\s*history/i,
+    /historique\s*temporel/i,
+    /\btime\b/i,
+    /\bhistorique\b/i,
+  ]
+  for (const re of priorities) {
+    for (const sheetName of workbook.SheetNames) {
+      if (re.test(sheetName)) return workbook.Sheets[sheetName]
+    }
+  }
+  for (const sheetName of workbook.SheetNames) {
+    if (summaryNames.includes(sheetName.toLowerCase())) continue
+    const sheet = workbook.Sheets[sheetName]
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }) as unknown[][]
+    if (rows.length < 2) continue
+    const header = rows[0]
+    if (!header) continue
+    const headers = header.map((h) => String(h ?? '').toLowerCase())
+    const hasTime = headers.some((h) =>
+      h.includes('time') || h.includes('date') || h.includes('heure'))
+    const hasLaeq = headers.some((h) =>
+      h.includes('laeq') || h.includes('la eq') || h.includes('leq'))
+    if (hasTime && hasLaeq) return sheet
+  }
+  return null
+}
+
 function detect821SE(workbook: XLSX.WorkBook): boolean {
-  const summary = workbook.Sheets['Summary']
+  const summary = findSummarySheet(workbook)
   if (!summary) return false
   const a1 = cellValue(summary, 0, 0)
   if (/soundexpert\s*821/i.test(a1)) return true
@@ -84,9 +125,9 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
   // Déterminer le type de sonomètre
   const is821 = detect821SE(workbook)
 
-  const summarySheet = workbook.Sheets['Summary']
+  const summarySheet = findSummarySheet(workbook)
   if (!summarySheet) {
-    throw new Error('Feuille "Summary" introuvable dans le fichier de mesure')
+    throw new Error('Feuille "Summary" ou "Sommaire" introuvable dans le fichier de mesure')
   }
 
   const model = cellValue(summarySheet, 1, 1) || 'Sonomètre'
@@ -110,34 +151,8 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     spectraStart = 41; spectraEnd = 67
   }
 
-  // Trouver la feuille d'historique
-  let historySheet = workbook.Sheets['Time History']
-
-  if (!historySheet) {
-    // Recherche heuristique
-    for (const sheetName of workbook.SheetNames) {
-      if (sheetName === 'Summary') continue
-      const sheet = workbook.Sheets[sheetName]
-      const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }) as unknown[][]
-      if (rows.length < 2) continue
-      const header = rows[0]
-      if (!header) continue
-      const headers = header.map((h) => String(h ?? '').toLowerCase())
-      const hasTime = headers.some((h) => h.includes('time') || h.includes('date'))
-      const hasLaeq = headers.some((h) => h.includes('laeq') || h.includes('leq'))
-      if (hasTime && hasLaeq) {
-        historySheet = sheet
-        // Détecter les colonnes dynamiquement
-        const tIdx = headers.findIndex((h) => h.includes('time') || h.includes('date'))
-        if (tIdx >= 0) timeCol = tIdx
-        const lIdx = headers.findIndex((h) => h.includes('laeq') || h.includes('leq'))
-        if (lIdx >= 0) laeqCol = lIdx
-        const rIdx = headers.findIndex((h) => h.includes('record') || h.includes('type'))
-        if (rIdx >= 0) recordTypeCol = rIdx
-        break
-      }
-    }
-  }
+  // Trouver la feuille d'historique (FR: "Historique temporel", EN: "Time History")
+  const historySheet = findHistorySheetWorker(workbook)
 
   if (!historySheet) {
     throw new Error('Aucune feuille d\'historique temporel trouvée')
@@ -147,6 +162,31 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     header: 1,
     defval: null,
   }) as unknown[][]
+
+  // Affinage dynamique des colonnes par les en-têtes (FR + EN)
+  const headerRow = rows[0] as unknown[] | undefined
+  if (headerRow) {
+    const headers = headerRow.map((h) => String(h ?? '').toLowerCase())
+    const tIdx = headers.findIndex((h) =>
+      h.includes('time') || h.includes('date') || h.includes('heure'))
+    if (tIdx >= 0) timeCol = tIdx
+    const lIdx = headers.findIndex((h) =>
+      h === 'laeq' || h.includes('la eq') || (h.includes('leq') && !h.includes('lzeq') && !h.includes('lceq')))
+    if (lIdx >= 0) laeqCol = lIdx
+    const rIdx = headers.findIndex((h) =>
+      h.includes('record') || h.includes('enregistrement') || h.includes('type'))
+    if (rIdx >= 0) recordTypeCol = rIdx
+    const specStart = headers.findIndex((h) => h.includes('lzeq') || h.includes('lz eq'))
+    if (specStart >= 0) {
+      spectraStart = specStart
+      let end = specStart
+      for (let c = specStart + 1; c < headers.length; c++) {
+        if (headers[c].includes('lzeq') || headers[c].includes('lz eq')) end = c
+        else break
+      }
+      spectraEnd = end
+    }
+  }
 
   const data: MeasurementFile['data'] = []
   const total = rows.length

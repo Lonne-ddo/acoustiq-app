@@ -214,7 +214,7 @@ function findSheet(wb: XLSX.WorkBook, exact: string, fallbackContains: string[])
 // ─── 1. Parsing Time History 821SE ──────────────────────────────────────────
 export function parseTimeHistorySheet(buffer: ArrayBuffer): RawTimeHistoryRow[] {
   const wb = XLSX.read(buffer, { type: 'array', cellDates: true })
-  const sheet = findSheet(wb, 'DATA_Time History_1', ['time history', 'time_history'])
+  const sheet = findSheet(wb, 'DATA_Time History_1', ['time history', 'time_history', 'historique temporel'])
   if (!sheet) {
     throw new Error(
       'Onglet "DATA_Time History_1" introuvable dans le fichier sonomètre. Vérifiez l\'export.',
@@ -227,7 +227,7 @@ export function parseTimeHistorySheet(buffer: ArrayBuffer): RawTimeHistoryRow[] 
   const headerRow = (rows[0] ?? []) as unknown[]
   const headers = headerRow.map((h) => String(h ?? ''))
 
-  const colDate = getHeaderIndex(headers, ['Date/Time', 'datetime', 'date', 'heure', 'time'])
+  const colDate = getHeaderIndex(headers, ['Date/Time', 'Date / heure', 'Date/heure', 'datetime', 'date', 'heure', 'time'])
   const colLAeq = getHeaderIndex(headers, ['LAeq', 'LA eq', 'Leq'])
   if (colDate < 0) throw new Error('Colonne "Date/Time" manquante dans Time History')
   if (colLAeq < 0) throw new Error('Colonne "LAeq" manquante dans Time History')

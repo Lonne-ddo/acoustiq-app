@@ -78,12 +78,28 @@ function cellValue(sheet: XLSX.WorkSheet, row: number, col: number): string {
 }
 
 /**
+ * Trouve l'onglet Summary/Sommaire dans un workbook.
+ * Retourne le sheet ou undefined.
+ */
+export function findSummarySheet(workbook: XLSX.WorkBook): XLSX.WorkSheet | undefined {
+  // Exact match first
+  if (workbook.Sheets['Summary']) return workbook.Sheets['Summary']
+  if (workbook.Sheets['Sommaire']) return workbook.Sheets['Sommaire']
+  // Case-insensitive fallback
+  for (const name of workbook.SheetNames) {
+    const lower = name.toLowerCase()
+    if (lower === 'summary' || lower === 'sommaire') return workbook.Sheets[name]
+  }
+  return undefined
+}
+
+/**
  * Détecte si un fichier XLSX provient d'un 821SE / SoundExpert.
- * Critère : onglet `Summary` existe ET cellule A1 contient
- * "SoundExpert 821 Summary".
+ * Critère : onglet Summary/Sommaire existe ET contient
+ * "SoundExpert 821" dans les premières cellules.
  */
 export function detect821SE(workbook: XLSX.WorkBook): boolean {
-  const summary = workbook.Sheets['Summary']
+  const summary = findSummarySheet(workbook)
   if (!summary) return false
   const a1 = cellValue(summary, 0, 0)
   if (/soundexpert\s*821/i.test(a1)) return true
@@ -99,28 +115,45 @@ export function detect821SE(workbook: XLSX.WorkBook): boolean {
 }
 
 /**
- * Trouve la feuille contenant l'historique temporel
- * Priorité : "Time History" > première feuille avec colonnes temps + LAeq
+ * Trouve la feuille contenant l'historique temporel.
+ * Priorité :
+ *  1. Nom contenant "Time History" (831C anglais)
+ *  2. Nom contenant "Historique temporel" (821SE français G4)
+ *  3. Nom contenant "Time" ou "Historique"
+ *  4. Première feuille avec colonnes temps + LAeq
  */
 function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkSheet; name: string } | null {
-  // Essai direct "Time History"
-  if (workbook.Sheets['Time History']) {
-    return { sheet: workbook.Sheets['Time History'], name: 'Time History' }
+  const summaryNames = ['summary', 'sommaire', 'paramètres', 'parametres',
+    'journal de session', 'session log']
+
+  // 1. Exact / substring match by priority
+  const priorities: RegExp[] = [
+    /time\s*history/i,
+    /historique\s*temporel/i,
+    /\btime\b/i,
+    /\bhistorique\b/i,
+  ]
+  for (const re of priorities) {
+    for (const sheetName of workbook.SheetNames) {
+      if (re.test(sheetName)) {
+        return { sheet: workbook.Sheets[sheetName], name: sheetName }
+      }
+    }
   }
 
-  // Recherche heuristique dans les autres feuilles
+  // 2. Heuristic: first sheet with time + LAeq columns
   for (const sheetName of workbook.SheetNames) {
-    if (sheetName === 'Summary') continue
+    if (summaryNames.includes(sheetName.toLowerCase())) continue
     const sheet = workbook.Sheets[sheetName]
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }) as unknown[][]
     if (rows.length < 2) continue
-
-    // Vérifier si la feuille contient des colonnes temps + LAeq
     const header = rows[0]
     if (!header) continue
     const headerStr = header.map((h) => String(h ?? '').toLowerCase())
-    const hasTime = headerStr.some((h) => h.includes('time') || h.includes('date') || h.includes('heure'))
-    const hasLaeq = headerStr.some((h) => h.includes('laeq') || h.includes('la eq') || h.includes('leq'))
+    const hasTime = headerStr.some((h) =>
+      h.includes('time') || h.includes('date') || h.includes('heure'))
+    const hasLaeq = headerStr.some((h) =>
+      h.includes('laeq') || h.includes('la eq') || h.includes('leq'))
     if (hasTime && hasLaeq) {
       return { sheet, name: sheetName }
     }
@@ -135,10 +168,10 @@ function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkSheet; nam
 export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFile {
   const workbook = XLSX.read(buffer, { type: 'array', cellDates: false })
 
-  // --- Feuille Summary ---
-  const summarySheet = workbook.Sheets['Summary']
+  // --- Feuille Summary / Sommaire ---
+  const summarySheet = findSummarySheet(workbook)
   if (!summarySheet) {
-    throw new Error('Feuille "Summary" introuvable dans le fichier de mesure')
+    throw new Error('Feuille "Summary" ou "Sommaire" introuvable dans le fichier de mesure')
   }
 
   const model = cellValue(summarySheet, 1, 1) || 'Sonomètre'
@@ -169,14 +202,18 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
   let spectraEnd = 62
 
   // Affinage par les en-têtes si présents et explicites
+  // Variantes FR : "Date / heure", "Type d'enregistrement", "Batterie (%)", "Externe (V)", "Surcharge"
   const headerRow = rows[0] as unknown[] | undefined
   if (headerRow) {
     const headers = headerRow.map((h) => String(h ?? '').toLowerCase())
-    const tIdx = headers.findIndex((h) => h.includes('time') || h.includes('date') || h.includes('heure'))
+    const tIdx = headers.findIndex((h) =>
+      h.includes('time') || h.includes('date') || h.includes('heure'))
     if (tIdx >= 0) timeCol = tIdx
-    const lIdx = headers.findIndex((h) => h === 'laeq' || h.includes('la eq') || (h.includes('leq') && !h.includes('lzeq') && !h.includes('lceq')))
+    const lIdx = headers.findIndex((h) =>
+      h === 'laeq' || h.includes('la eq') || (h.includes('leq') && !h.includes('lzeq') && !h.includes('lceq')))
     if (lIdx >= 0) laeqCol = lIdx
-    const rIdx = headers.findIndex((h) => h.includes('record') || h.includes('type'))
+    const rIdx = headers.findIndex((h) =>
+      h.includes('record') || h.includes('enregistrement') || h.includes('type'))
     if (rIdx >= 0) recordTypeCol = rIdx
     const specStart = headers.findIndex((h) => h.includes('lzeq') || h.includes('lz eq'))
     if (specStart >= 0) {

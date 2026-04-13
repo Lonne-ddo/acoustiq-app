@@ -286,7 +286,7 @@ interface SatelliteState {
   opacity: number
 }
 
-function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selectedSourceId, setSelectedSourceId, onBack, satelliteImage, onSatelliteChange }: {
+function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selectedSourceId, setSelectedSourceId, onBack, satelliteImage, onSatelliteChange, noOsmBuildings }: {
   buildings: BuildingFootprint[]
   bbox: BBox
   lwSources: LwSourceSummary[]
@@ -297,6 +297,7 @@ function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selec
   onBack: () => void
   satelliteImage: SatelliteState | null
   onSatelliteChange: (sat: SatelliteState | null) => void
+  noOsmBuildings: boolean
 }) {
   const canvasRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
@@ -766,6 +767,14 @@ function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selec
             </button>
           </div>
         )}
+
+        {noOsmBuildings && (
+          <div className="px-3 py-2 border-t border-gray-800">
+            <p className="text-[10px] text-amber-500/70 leading-tight">
+              Modèle sans bâtiments OSM — ajoutez une image satellite pour le contexte visuel.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   )
@@ -779,7 +788,9 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   const [bbox, setBbox] = useState<BBox | undefined>(scene3D?.bbox)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
+  const [failedBbox, setFailedBbox] = useState<BBox | null>(null)
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
+  const [noOsmMode, setNoOsmMode] = useState(false)
   const [satellite, setSatellite] = useState<SatelliteState | null>(() => {
     if (scene3D?.satelliteImage) return { dataUrl: scene3D.satelliteImage.dataUrl, opacity: scene3D.satelliteImage.opacity }
     return null
@@ -827,26 +838,21 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
 
     setLoading(true)
     setLoadError(null)
-
-    const OVERPASS_ENDPOINTS = [
-      'https://overpass-api.de/api/interpreter',
-      'https://overpass.kumi.systems/api/interpreter',
-      'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
-    ]
+    setFailedBbox(b)
 
     const query = `[out:json][timeout:25];(way["building"](${b.south},${b.west},${b.north},${b.east}););out body;>;out skel qt;`
-    const body = `data=${encodeURIComponent(query)}`
+    const encodedQuery = encodeURIComponent(query)
 
-    for (const endpoint of OVERPASS_ENDPOINTS) {
+    const urls = [
+      `https://corsproxy.io/?https://overpass-api.de/api/interpreter?data=${encodedQuery}`,
+      `https://corsproxy.io/?https://overpass.kumi.systems/api/interpreter?data=${encodedQuery}`,
+    ]
+
+    for (const url of urls) {
       const controller = new AbortController()
-      const timer = setTimeout(() => controller.abort(), 10000)
+      const timer = setTimeout(() => controller.abort(), 15000)
       try {
-        const res = await fetch(endpoint, {
-          method: 'POST',
-          body,
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          signal: controller.signal,
-        })
+        const res = await fetch(url, { signal: controller.signal })
         clearTimeout(timer)
         if (!res.ok) continue
         const data = await res.json()
@@ -855,10 +861,10 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
         setBbox(b)
         setMode('3d')
         setLoading(false)
+        setFailedBbox(null)
         return
-      } catch (err) {
+      } catch {
         clearTimeout(timer)
-        // Continue to next endpoint on timeout or network error
       }
     }
 
@@ -889,13 +895,31 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
       <div className="flex-1 flex flex-col items-center justify-center text-gray-500 gap-4 p-10">
         <Box size={40} className="opacity-40" />
         <p className="text-sm text-center text-red-400 max-w-md leading-relaxed">{loadError}</p>
-        <button
-          onClick={() => { setLoadError(null); setMode('map') }}
-          className="flex items-center gap-1.5 text-sm font-medium text-gray-200 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded px-4 py-2 transition-colors"
-        >
-          <ArrowLeft size={14} />
-          Retour à la carte
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => { setLoadError(null); setFailedBbox(null); setMode('map') }}
+            className="flex items-center gap-1.5 text-sm font-medium text-gray-200 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded px-4 py-2 transition-colors"
+          >
+            <ArrowLeft size={14} />
+            Retour à la carte
+          </button>
+          {failedBbox && (
+            <button
+              onClick={() => {
+                setLoadError(null)
+                setBuildings([])
+                setBbox(failedBbox)
+                setNoOsmMode(true)
+                setMode('3d')
+                setFailedBbox(null)
+              }}
+              className="flex items-center gap-1.5 text-sm font-medium text-gray-400 hover:text-gray-200 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded px-4 py-2 transition-colors"
+            >
+              Continuer sans bâtiments
+              <ArrowLeft size={14} className="rotate-180" />
+            </button>
+          )}
+        </div>
       </div>
     )
   }
@@ -916,6 +940,7 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
       onBack={handleBack}
       satelliteImage={satellite}
       onSatelliteChange={setSatellite}
+      noOsmBuildings={noOsmMode}
     />
   )
 }

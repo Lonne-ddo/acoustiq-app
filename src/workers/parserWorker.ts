@@ -1,12 +1,15 @@
 /**
- * Web Worker pour le parsing de fichiers XLSX en arrière-plan
- * Évite de bloquer le thread principal pour les gros fichiers (28000+ lignes)
+ * Web Worker pour le parsing de fichiers XLSX en arrière-plan.
+ * Évite de bloquer le thread principal pour les gros fichiers (28000+ lignes).
+ *
+ * Supporte 831C (EN) et 821SE (EN + FR G4) sans dépendre d'un onglet Summary.
  */
 import * as XLSX from 'xlsx'
 import type { MeasurementFile } from '../types'
 
-// Reproduire la logique de parsing directement dans le worker
-// pour éviter les problèmes d'import circulaire
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
 
 function timeToMinutes(value: unknown): number {
   if (value instanceof Date) {
@@ -45,6 +48,10 @@ function cellValue(sheet: XLSX.WorkSheet, row: number, col: number): string {
   return cell ? String(cell.v) : ''
 }
 
+// ---------------------------------------------------------------------------
+// Sheet finders (no hard dependency on Summary)
+// ---------------------------------------------------------------------------
+
 function findSummarySheet(workbook: XLSX.WorkBook): XLSX.WorkSheet | undefined {
   if (workbook.Sheets['Summary']) return workbook.Sheets['Summary']
   if (workbook.Sheets['Sommaire']) return workbook.Sheets['Sommaire']
@@ -55,9 +62,14 @@ function findSummarySheet(workbook: XLSX.WorkBook): XLSX.WorkSheet | undefined {
   return undefined
 }
 
-function findHistorySheetWorker(workbook: XLSX.WorkBook): XLSX.WorkSheet | null {
-  const summaryNames = ['summary', 'sommaire', 'paramètres', 'parametres',
-    'journal de session', 'session log']
+function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkSheet; name: string } | null {
+  const skipNames = new Set(
+    ['summary', 'sommaire', 'paramètres', 'parametres', 'parameters',
+     'journal de session', 'session log', 'oba',
+     'historique de mesure', 'measurement log']
+      .map((s) => s.toLowerCase()),
+  )
+
   const priorities: RegExp[] = [
     /time\s*history/i,
     /historique\s*temporel/i,
@@ -66,81 +78,170 @@ function findHistorySheetWorker(workbook: XLSX.WorkBook): XLSX.WorkSheet | null 
   ]
   for (const re of priorities) {
     for (const sheetName of workbook.SheetNames) {
-      if (re.test(sheetName)) return workbook.Sheets[sheetName]
+      if (re.test(sheetName)) {
+        return { sheet: workbook.Sheets[sheetName], name: sheetName }
+      }
     }
   }
+
   for (const sheetName of workbook.SheetNames) {
-    if (summaryNames.includes(sheetName.toLowerCase())) continue
+    if (skipNames.has(sheetName.toLowerCase())) continue
     const sheet = workbook.Sheets[sheetName]
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }) as unknown[][]
     if (rows.length < 2) continue
     const header = rows[0]
     if (!header) continue
-    const headers = header.map((h) => String(h ?? '').toLowerCase())
-    const hasTime = headers.some((h) =>
-      h.includes('time') || h.includes('date') || h.includes('heure'))
-    const hasLaeq = headers.some((h) =>
-      h.includes('laeq') || h.includes('la eq') || h.includes('leq'))
-    if (hasTime && hasLaeq) return sheet
+    const headerStr = header.map((h) => String(h ?? '').toLowerCase())
+    if (headerStr.some((h) => h.includes('laeq') || h.includes('la eq') || h.includes('leq'))) {
+      return { sheet, name: sheetName }
+    }
   }
+
   return null
 }
 
+// ---------------------------------------------------------------------------
+// Instrument detection
+// ---------------------------------------------------------------------------
+
 function detect821SE(workbook: XLSX.WorkBook): boolean {
   const summary = findSummarySheet(workbook)
-  if (!summary) return false
-  const a1 = cellValue(summary, 0, 0)
-  if (/soundexpert\s*821/i.test(a1)) return true
-  for (let r = 0; r < 10; r++) {
-    for (let c = 0; c < 5; c++) {
-      const v = cellValue(summary, r, c).toLowerCase()
-      if (v.includes('821se') || v.includes('soundexpert')) return true
+  if (summary) {
+    for (let r = 0; r < 10; r++) {
+      for (let c = 0; c < 5; c++) {
+        const v = cellValue(summary, r, c).toLowerCase()
+        if (v.includes('soundexpert') || v.includes('821se') || v.includes('821 se')) return true
+      }
     }
   }
+
+  const names = workbook.SheetNames.map((n) => n.toLowerCase())
+  if (names.includes('historique temporel') || names.includes('journal de session')) {
+    return true
+  }
+
+  const history = findHistorySheet(workbook)
+  if (history) {
+    const rows = XLSX.utils.sheet_to_json(history.sheet, { header: 1, defval: null }) as unknown[][]
+    const header = rows[0]
+    if (header) {
+      const h = header.map((v) => String(v ?? '').toLowerCase())
+      if (h.some((x) => x.includes('date / heure') || x.includes('date/heure')) &&
+          h.some((x) => x === 'laeq')) {
+        return true
+      }
+    }
+  }
+
   return false
 }
 
-interface ParseResult {
-  type: 'result'
-  file: MeasurementFile
+// ---------------------------------------------------------------------------
+// Column detection by header name
+// ---------------------------------------------------------------------------
+
+interface ColumnMap {
+  timeCol: number
+  laeqCol: number
+  recordTypeCol: number
+  lceqCol: number
+  spectraStart: number
+  spectraEnd: number
 }
 
-interface ParseError {
-  type: 'error'
-  fileName: string
-  error: string
+function detectColumns(headers: string[]): ColumnMap {
+  const h = headers.map((v) => v.toLowerCase())
+
+  const timeCol = h.findIndex((x) =>
+    x.includes('date / heure') || x.includes('date/heure') ||
+    x.includes('date/time') || x.includes('datetime') ||
+    x === 'time' || x === 'heure')
+
+  const laeqCol = h.findIndex((x) =>
+    x === 'laeq' || x.includes('la eq') ||
+    (x.includes('leq') && !x.includes('lzeq') && !x.includes('lceq')))
+
+  const recordTypeCol = h.findIndex((x) =>
+    x.includes('record type') || x.includes("type d'enregistrement") || x.includes('enregistrement'))
+
+  const lceqCol = h.findIndex((x) => x === 'lceq' || x.includes('lc eq'))
+
+  let spectraStart = -1
+  let spectraEnd = -1
+  const firstLzeq = h.findIndex((x) => x.includes('lzeq') || x.includes('lz eq'))
+  if (firstLzeq >= 0) {
+    spectraStart = firstLzeq
+    spectraEnd = firstLzeq
+    for (let c = firstLzeq + 1; c < h.length; c++) {
+      if (h[c].includes('lzeq') || h[c].includes('lz eq')) spectraEnd = c
+      else break
+    }
+  }
+
+  return { timeCol, laeqCol, recordTypeCol, lceqCol, spectraStart, spectraEnd }
 }
 
-interface ParseProgress {
-  type: 'progress'
-  fileName: string
-  percent: number
+// ---------------------------------------------------------------------------
+// Date extraction from data cell (fallback when no Summary)
+// ---------------------------------------------------------------------------
+
+function extractDateFromValue(value: unknown): string {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    const date = XLSX.SSF.parse_date_code(value)
+    if (date) return `${date.y}-${String(date.m).padStart(2, '0')}-${String(date.d).padStart(2, '0')}`
+  }
+  if (typeof value === 'string') {
+    const iso = value.match(/(\d{4})-(\d{2})-(\d{2})/)
+    if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
+    const fr = value.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+    if (fr) return `${fr[3]}-${fr[2].padStart(2, '0')}-${fr[1].padStart(2, '0')}`
+  }
+  return ''
 }
 
+// ---------------------------------------------------------------------------
+// Worker message types
+// ---------------------------------------------------------------------------
+
+interface ParseResult { type: 'result'; file: MeasurementFile }
+interface ParseError { type: 'error'; fileName: string; error: string }
+interface ParseProgress { type: 'progress'; fileName: string; percent: number }
 type WorkerMessage = ParseResult | ParseError | ParseProgress
+
+// ---------------------------------------------------------------------------
+// Main parse function
+// ---------------------------------------------------------------------------
 
 function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
   const workbook = XLSX.read(buffer, { type: 'array', cellDates: false })
 
-  // Déterminer le type de sonomètre
   const is821 = detect821SE(workbook)
 
+  // --- Métadonnées optionnelles depuis Summary/Sommaire ---
   const summarySheet = findSummarySheet(workbook)
-  if (!summarySheet) {
-    throw new Error('Feuille "Summary" ou "Sommaire" introuvable dans le fichier de mesure')
+  let model = 'Sonomètre'
+  let serial = ''
+  let metaStartDate = ''
+  let metaStartTime = '00:00'
+  let metaStopTime = '00:00'
+
+  if (summarySheet) {
+    model = cellValue(summarySheet, 1, 1) || cellValue(summarySheet, 0, 1) || 'Sonomètre'
+    serial = cellValue(summarySheet, 2, 1)
+    const startRaw = cellValue(summarySheet, 3, 1)
+    const stopRaw = cellValue(summarySheet, 4, 1)
+    const [sd, st] = startRaw.split(' ')
+    const [, stt] = stopRaw.split(' ')
+    metaStartDate = sd ?? ''
+    metaStartTime = st?.slice(0, 5) ?? '00:00'
+    metaStopTime = stt?.slice(0, 5) ?? '00:00'
   }
 
-  const model = cellValue(summarySheet, 1, 1) || 'Sonomètre'
-  const serial = cellValue(summarySheet, 2, 1)
-  const startRaw = cellValue(summarySheet, 3, 1)
-  const stopRaw = cellValue(summarySheet, 4, 1)
-  const [startDate, startTimePart] = startRaw.split(' ')
-  const [, stopTimePart] = stopRaw.split(' ')
-
-  // Défauts dépendant du modèle
+  // --- Default column positions by model ---
   let timeCol: number
   let laeqCol: number
   let recordTypeCol: number
+  let lceqCol = -1
   let spectraStart: number
   let spectraEnd: number
   if (is821) {
@@ -151,45 +252,36 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     spectraStart = 41; spectraEnd = 67
   }
 
-  // Trouver la feuille d'historique (FR: "Historique temporel", EN: "Time History")
-  const historySheet = findHistorySheetWorker(workbook)
-
-  if (!historySheet) {
-    throw new Error('Aucune feuille d\'historique temporel trouvée')
+  // --- Find history sheet ---
+  const history = findHistorySheet(workbook)
+  if (!history) {
+    throw new Error(`Aucune feuille de données temporelles trouvée dans "${fileName}"`)
   }
 
-  const rows: unknown[][] = XLSX.utils.sheet_to_json(historySheet, {
+  const rows: unknown[][] = XLSX.utils.sheet_to_json(history.sheet, {
     header: 1,
     defval: null,
   }) as unknown[][]
 
-  // Affinage dynamique des colonnes par les en-têtes (FR + EN)
+  // --- Detect columns by header name ---
   const headerRow = rows[0] as unknown[] | undefined
   if (headerRow) {
-    const headers = headerRow.map((h) => String(h ?? '').toLowerCase())
-    const tIdx = headers.findIndex((h) =>
-      h.includes('time') || h.includes('date') || h.includes('heure'))
-    if (tIdx >= 0) timeCol = tIdx
-    const lIdx = headers.findIndex((h) =>
-      h === 'laeq' || h.includes('la eq') || (h.includes('leq') && !h.includes('lzeq') && !h.includes('lceq')))
-    if (lIdx >= 0) laeqCol = lIdx
-    const rIdx = headers.findIndex((h) =>
-      h.includes('record') || h.includes('enregistrement') || h.includes('type'))
-    if (rIdx >= 0) recordTypeCol = rIdx
-    const specStart = headers.findIndex((h) => h.includes('lzeq') || h.includes('lz eq'))
-    if (specStart >= 0) {
-      spectraStart = specStart
-      let end = specStart
-      for (let c = specStart + 1; c < headers.length; c++) {
-        if (headers[c].includes('lzeq') || headers[c].includes('lz eq')) end = c
-        else break
-      }
-      spectraEnd = end
+    const headers = headerRow.map((h) => String(h ?? ''))
+    const cols = detectColumns(headers)
+    if (cols.timeCol >= 0) timeCol = cols.timeCol
+    if (cols.laeqCol >= 0) laeqCol = cols.laeqCol
+    if (cols.recordTypeCol >= 0) recordTypeCol = cols.recordTypeCol
+    if (cols.lceqCol >= 0) lceqCol = cols.lceqCol
+    if (cols.spectraStart >= 0) {
+      spectraStart = cols.spectraStart
+      spectraEnd = cols.spectraEnd
     }
   }
 
+  // --- Parse data rows ---
   const data: MeasurementFile['data'] = []
   const total = rows.length
+  let firstDate = ''
 
   for (let i = 1; i < total; i++) {
     const row = rows[i]
@@ -203,27 +295,41 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     const timeVal = row[timeCol]
     const tRaw = timeToMinutes(timeVal)
     if (!Number.isFinite(tRaw)) continue
-    const tVal = tRaw % 1440 // Ramener au cycle 24h
+    const tVal = tRaw % 1440
 
     const laeqVal = row[laeqCol]
     const laeq = typeof laeqVal === 'number' ? laeqVal : parseFloat(String(laeqVal))
     if (!Number.isFinite(laeq)) continue
 
+    if (!firstDate && timeVal != null) {
+      firstDate = extractDateFromValue(timeVal)
+    }
+
+    // LCeq optionnel
+    let lceqNum: number | undefined
+    if (lceqCol >= 0) {
+      const v = row[lceqCol]
+      const n = typeof v === 'number' ? v : parseFloat(String(v))
+      if (Number.isFinite(n)) lceqNum = n
+    }
+
     // Spectres
     const spectra: number[] = []
-    for (let c = spectraStart; c <= spectraEnd && c < row.length; c++) {
-      const v = row[c]
-      const num = typeof v === 'number' ? v : parseFloat(String(v))
-      if (!isNaN(num)) spectra.push(num)
+    if (spectraStart >= 0) {
+      for (let c = spectraStart; c <= spectraEnd && c < row.length; c++) {
+        const v = row[c]
+        const num = typeof v === 'number' ? v : parseFloat(String(v))
+        if (!isNaN(num)) spectra.push(num)
+      }
     }
 
     data.push({
       t: tVal,
       laeq,
+      ...(lceqNum !== undefined ? { lceq: lceqNum } : {}),
       ...(spectra.length > 0 ? { spectra } : {}),
     })
 
-    // Envoyer la progression tous les 5000 points
     if (i % 5000 === 0) {
       self.postMessage({
         type: 'progress',
@@ -237,20 +343,21 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     throw new Error(`Aucune donnée LAeq valide trouvée dans "${fileName}"`)
   }
 
-  // Bandes 1/3 d'octave selon le modèle
   const nBands = data.find((d) => d.spectra)?.spectra?.length ?? 0
   const sourceFreqs = is821 ? SE821_FREQS : SE831C_FREQS
   const spectraFreqs =
     nBands === sourceFreqs.length ? sourceFreqs : sourceFreqs.slice(0, nBands)
+
+  const date = metaStartDate || firstDate || ''
 
   return {
     id: crypto.randomUUID(),
     name: fileName,
     model,
     serial,
-    date: startDate ?? '',
-    startTime: startTimePart?.slice(0, 5) ?? '00:00',
-    stopTime: stopTimePart?.slice(0, 5) ?? '00:00',
+    date,
+    startTime: metaStartTime,
+    stopTime: metaStopTime,
     point: null,
     data,
     rowCount: data.length,
@@ -258,7 +365,10 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
   }
 }
 
-// Écouter les messages du thread principal
+// ---------------------------------------------------------------------------
+// Worker entry point
+// ---------------------------------------------------------------------------
+
 self.onmessage = (e: MessageEvent<{ buffer: ArrayBuffer; fileName: string }>) => {
   const { buffer, fileName } = e.data
   try {

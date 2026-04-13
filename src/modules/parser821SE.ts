@@ -1,21 +1,20 @@
 /**
  * Parser pour fichiers XLSX du sonomètre 821SE / SoundExpert (Larson Davis).
  *
- * Structure réelle (vérifiée 2026-04-08) :
- * - Onglet `Summary` cellule A1 = "SoundExpert 821 Summary" (signature)
- * - Onglet Time History (nom variable) :
- *     ligne 0 = en-têtes  ·  données à partir de la ligne 1 (1 entrée/seconde)
- *     col 1  = Date/Time  (datetime complet "YYYY-MM-DD HH:MM:SS")
- *     col 2  = LAeq  (déjà A-pondéré, dB(A))
- *     cols 37-62 = LZeq 1/3 d'octave 31.5 Hz → 10 kHz (26 bandes, Z-pondéré)
+ * Supporte les exports anglais (G4 EN) et français (G4 FR) :
+ *   EN : onglets Summary, Time History — colonnes Date/Time, LAeq, …
+ *   FR : onglets Sommaire, Historique temporel — colonnes Date / heure, LAeq, …
+ *
+ * Le parser ne dépend PAS de l'onglet Summary/Sommaire : il localise
+ * directement la feuille de données temporelles et détecte les colonnes
+ * par nom d'en-tête. Les métadonnées (modèle, série, dates) sont extraites
+ * du Summary/Sommaire si disponible, sinon dérivées des données.
  */
 import * as XLSX from 'xlsx'
 import type { MeasurementFile, DataPoint } from '../types'
 
 /**
- * Bandes 1/3 d'octave émises par le 821SE (cols 37 à 62, 26 bandes).
- * Z-pondérées au parsing — l'A-weighting est appliqué à l'affichage par
- * `Spectrogram.tsx` pour la cohérence visuelle.
+ * Bandes 1/3 d'octave émises par le 821SE (26 bandes, Z-pondéré).
  */
 export const SE821_FREQ_BANDS: number[] = [
   31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250,
@@ -23,13 +22,10 @@ export const SE821_FREQ_BANDS: number[] = [
   3150, 4000, 5000, 6300, 8000, 10000,
 ]
 
-/**
- * Convertit une heure / datetime en minutes depuis minuit.
- *  - number (sériel Excel) → fraction de jour × 1440
- *  - string "HH:MM:SS"     → simple parse
- *  - string "YYYY-MM-DD HH:MM:SS" → extrait la partie heure via regex
- *  - Date                  → composantes locales
- */
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
 function timeToMinutes(value: unknown): number {
   if (value instanceof Date) {
     return value.getHours() * 60 + value.getMinutes() + value.getSeconds() / 60
@@ -38,7 +34,6 @@ function timeToMinutes(value: unknown): number {
     return value * 24 * 60
   }
   if (typeof value === 'string') {
-    // Match HH:MM[:SS] anywhere — gère "09:01:13" comme "2026-03-09 09:01:13"
     const m = value.match(/(\d{1,2}):(\d{1,2})(?::(\d{1,2}))?/)
     if (m) {
       return (
@@ -51,9 +46,6 @@ function timeToMinutes(value: unknown): number {
   return 0
 }
 
-/**
- * Formate une fraction Excel de date en "YYYY-MM-DD"
- */
 function excelDateToISO(value: unknown): string {
   if (typeof value === 'number') {
     const date = XLSX.SSF.parse_date_code(value)
@@ -63,29 +55,26 @@ function excelDateToISO(value: unknown): string {
     return `${y}-${m}-${d}`
   }
   if (typeof value === 'string') {
+    const iso = value.match(/(\d{4})-(\d{2})-(\d{2})/)
+    if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
     return value
   }
   return ''
 }
 
-/**
- * Extrait une chaîne depuis une cellule
- */
 function cellValue(sheet: XLSX.WorkSheet, row: number, col: number): string {
   const addr = XLSX.utils.encode_cell({ r: row, c: col })
   const cell = sheet[addr]
   return cell ? String(cell.v) : ''
 }
 
-/**
- * Trouve l'onglet Summary/Sommaire dans un workbook.
- * Retourne le sheet ou undefined.
- */
+// ---------------------------------------------------------------------------
+// findSummarySheet — optional, used for metadata only
+// ---------------------------------------------------------------------------
+
 export function findSummarySheet(workbook: XLSX.WorkBook): XLSX.WorkSheet | undefined {
-  // Exact match first
   if (workbook.Sheets['Summary']) return workbook.Sheets['Summary']
   if (workbook.Sheets['Sommaire']) return workbook.Sheets['Sommaire']
-  // Case-insensitive fallback
   for (const name of workbook.SheetNames) {
     const lower = name.toLowerCase()
     if (lower === 'summary' || lower === 'sommaire') return workbook.Sheets[name]
@@ -93,40 +82,27 @@ export function findSummarySheet(workbook: XLSX.WorkBook): XLSX.WorkSheet | unde
   return undefined
 }
 
-/**
- * Détecte si un fichier XLSX provient d'un 821SE / SoundExpert.
- * Critère : onglet Summary/Sommaire existe ET contient
- * "SoundExpert 821" dans les premières cellules.
- */
-export function detect821SE(workbook: XLSX.WorkBook): boolean {
-  const summary = findSummarySheet(workbook)
-  if (!summary) return false
-  const a1 = cellValue(summary, 0, 0)
-  if (/soundexpert\s*821/i.test(a1)) return true
-  // Tolérance : ancienne signature "821SE" / "SoundExpert" ailleurs dans
-  // les premières cellules — utile pour les exports plus anciens.
-  for (let r = 0; r < 10; r++) {
-    for (let c = 0; c < 5; c++) {
-      const v = cellValue(summary, r, c).toLowerCase()
-      if (v.includes('821se') || v.includes('soundexpert')) return true
-    }
-  }
-  return false
-}
+// ---------------------------------------------------------------------------
+// findHistorySheet — finds the time-series data sheet
+// ---------------------------------------------------------------------------
 
 /**
- * Trouve la feuille contenant l'historique temporel.
- * Priorité :
- *  1. Nom contenant "Time History" (831C anglais)
- *  2. Nom contenant "Historique temporel" (821SE français G4)
- *  3. Nom contenant "Time" ou "Historique"
- *  4. Première feuille avec colonnes temps + LAeq
+ * Trouve la feuille contenant les données temporelles seconde par seconde.
+ * Ordre de priorité :
+ *  1. Nom contenant "time history"  (831C / 821SE anglais)
+ *  2. Nom contenant "historique temporel" (821SE français G4)
+ *  3. Nom contenant "time" ou "historique"
+ *  4. Première feuille qui contient une colonne "LAeq"
  */
-function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkSheet; name: string } | null {
-  const summaryNames = ['summary', 'sommaire', 'paramètres', 'parametres',
-    'journal de session', 'session log']
+export function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkSheet; name: string } | null {
+  const skipNames = new Set(
+    ['summary', 'sommaire', 'paramètres', 'parametres', 'parameters',
+     'journal de session', 'session log', 'oba',
+     'historique de mesure', 'measurement log']
+      .map((s) => s.toLowerCase()),
+  )
 
-  // 1. Exact / substring match by priority
+  // Pass 1 — match by sheet name patterns (in priority order)
   const priorities: RegExp[] = [
     /time\s*history/i,
     /historique\s*temporel/i,
@@ -141,20 +117,18 @@ function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkSheet; nam
     }
   }
 
-  // 2. Heuristic: first sheet with time + LAeq columns
+  // Pass 2 — first non-skip sheet that contains a column "LAeq"
   for (const sheetName of workbook.SheetNames) {
-    if (summaryNames.includes(sheetName.toLowerCase())) continue
+    if (skipNames.has(sheetName.toLowerCase())) continue
     const sheet = workbook.Sheets[sheetName]
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }) as unknown[][]
     if (rows.length < 2) continue
     const header = rows[0]
     if (!header) continue
     const headerStr = header.map((h) => String(h ?? '').toLowerCase())
-    const hasTime = headerStr.some((h) =>
-      h.includes('time') || h.includes('date') || h.includes('heure'))
     const hasLaeq = headerStr.some((h) =>
       h.includes('laeq') || h.includes('la eq') || h.includes('leq'))
-    if (hasTime && hasLaeq) {
+    if (hasLaeq) {
       return { sheet, name: sheetName }
     }
   }
@@ -162,30 +136,178 @@ function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkSheet; nam
   return null
 }
 
-/**
- * Lit un fichier XLSX 821SE et retourne un objet MeasurementFile
- */
-export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFile {
-  const workbook = XLSX.read(buffer, { type: 'array', cellDates: false })
+// ---------------------------------------------------------------------------
+// detect821SE — instrument detection (does NOT require Summary)
+// ---------------------------------------------------------------------------
 
-  // --- Feuille Summary / Sommaire ---
-  const summarySheet = findSummarySheet(workbook)
-  if (!summarySheet) {
-    throw new Error('Feuille "Summary" ou "Sommaire" introuvable dans le fichier de mesure')
+/**
+ * Détecte si un fichier XLSX provient d'un 821SE / SoundExpert.
+ * Essaie d'abord le Summary/Sommaire, puis les noms d'onglets,
+ * puis les en-têtes de la feuille de données.
+ */
+export function detect821SE(workbook: XLSX.WorkBook): boolean {
+  // 1. Summary/Sommaire exists and mentions SoundExpert 821
+  const summary = findSummarySheet(workbook)
+  if (summary) {
+    for (let r = 0; r < 10; r++) {
+      for (let c = 0; c < 5; c++) {
+        const v = cellValue(summary, r, c).toLowerCase()
+        if (v.includes('soundexpert') || v.includes('821se') || v.includes('821 se')) return true
+      }
+    }
   }
 
-  const model = cellValue(summarySheet, 1, 1) || 'Sonomètre'
-  const serial = cellValue(summarySheet, 2, 1)
-  const startRaw = cellValue(summarySheet, 3, 1)
-  const stopRaw = cellValue(summarySheet, 4, 1)
+  // 2. Characteristic French 821SE sheet names
+  const names = workbook.SheetNames.map((n) => n.toLowerCase())
+  if (names.includes('historique temporel') || names.includes('journal de session')) {
+    return true
+  }
+
+  // 3. History sheet has FR 821SE header signature
+  const history = findHistorySheet(workbook)
+  if (history) {
+    const rows = XLSX.utils.sheet_to_json(history.sheet, { header: 1, defval: null }) as unknown[][]
+    const header = rows[0]
+    if (header) {
+      const h = header.map((v) => String(v ?? '').toLowerCase())
+      // FR 821SE has "Date / heure" + "LApk" — 831C has "Record Type" + different col layout
+      if (h.some((x) => x.includes('date / heure') || x.includes('date/heure')) &&
+          h.some((x) => x === 'laeq')) {
+        return true
+      }
+    }
+  }
+
+  return false
+}
+
+// ---------------------------------------------------------------------------
+// Column finder by header name
+// ---------------------------------------------------------------------------
+
+interface ColumnMap {
+  timeCol: number
+  laeqCol: number
+  recordTypeCol: number  // -1 if not found
+  lceqCol: number        // -1 if not found
+  spectraStart: number   // -1 if not found
+  spectraEnd: number     // -1 if not found
+}
+
+/**
+ * Recherche les colonnes par nom d'en-tête (FR + EN).
+ * Retourne les indices trouvés ou -1 pour les colonnes absentes.
+ */
+function detectColumns(headers: string[]): ColumnMap {
+  const h = headers.map((v) => v.toLowerCase())
+
+  // timestamp: "Date / heure", "Date/heure", "Date/Time", "DateTime", "Heure", "Time"
+  const timeCol = h.findIndex((x) =>
+    x.includes('date / heure') || x.includes('date/heure') ||
+    x.includes('date/time') || x.includes('datetime') ||
+    x === 'time' || x === 'heure')
+
+  // LAeq (identical FR/EN)
+  const laeqCol = h.findIndex((x) =>
+    x === 'laeq' || x.includes('la eq') ||
+    (x.includes('leq') && !x.includes('lzeq') && !x.includes('lceq')))
+
+  // Record type: "Record Type", "Type d'enregistrement"
+  const recordTypeCol = h.findIndex((x) =>
+    x.includes('record type') || x.includes("type d'enregistrement") || x.includes('enregistrement'))
+
+  // LCeq (identical FR/EN)
+  const lceqCol = h.findIndex((x) => x === 'lceq' || x.includes('lc eq'))
+
+  // Spectra LZeq bands (contiguous block)
+  let spectraStart = -1
+  let spectraEnd = -1
+  const firstLzeq = h.findIndex((x) => x.includes('lzeq') || x.includes('lz eq'))
+  if (firstLzeq >= 0) {
+    spectraStart = firstLzeq
+    spectraEnd = firstLzeq
+    for (let c = firstLzeq + 1; c < h.length; c++) {
+      if (h[c].includes('lzeq') || h[c].includes('lz eq')) {
+        spectraEnd = c
+      } else {
+        break
+      }
+    }
+  }
+
+  return { timeCol, laeqCol, recordTypeCol, lceqCol, spectraStart, spectraEnd }
+}
+
+// ---------------------------------------------------------------------------
+// Metadata extraction from Summary/Sommaire (optional)
+// ---------------------------------------------------------------------------
+
+interface SummaryMeta {
+  model: string
+  serial: string
+  startDate: string
+  startTime: string
+  stopTime: string
+}
+
+function extractSummaryMeta(workbook: XLSX.WorkBook): SummaryMeta | null {
+  const sheet = findSummarySheet(workbook)
+  if (!sheet) return null
+
+  const model = cellValue(sheet, 1, 1) || cellValue(sheet, 0, 1) || ''
+  const serial = cellValue(sheet, 2, 1) || ''
+  const startRaw = cellValue(sheet, 3, 1) || ''
+  const stopRaw = cellValue(sheet, 4, 1) || ''
 
   const [startDate, startTimePart] = startRaw.split(' ')
   const [, stopTimePart] = stopRaw.split(' ')
 
-  // --- Feuille d'historique ---
+  return {
+    model: model || 'Sonomètre',
+    serial,
+    startDate: startDate ?? '',
+    startTime: startTimePart?.slice(0, 5) ?? '00:00',
+    stopTime: stopTimePart?.slice(0, 5) ?? '00:00',
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Date extraction from first data row (fallback when no Summary)
+// ---------------------------------------------------------------------------
+
+function extractDateFromValue(value: unknown): string {
+  if (typeof value === 'number') return excelDateToISO(value)
+  if (typeof value === 'string') {
+    const iso = value.match(/(\d{4})-(\d{2})-(\d{2})/)
+    if (iso) return `${iso[1]}-${iso[2]}-${iso[3]}`
+    const fr = value.match(/(\d{1,2})\/(\d{1,2})\/(\d{4})/)
+    if (fr) return `${fr[3]}-${fr[2].padStart(2, '0')}-${fr[1].padStart(2, '0')}`
+  }
+  return ''
+}
+
+// ---------------------------------------------------------------------------
+// Main parser
+// ---------------------------------------------------------------------------
+
+/**
+ * Lit un fichier XLSX 821SE et retourne un objet MeasurementFile.
+ * Ne requiert PAS d'onglet Summary/Sommaire — les données sont
+ * localisées par nom de feuille puis par en-têtes de colonnes.
+ */
+export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFile {
+  const workbook = XLSX.read(buffer, { type: 'array', cellDates: false })
+
+  // --- Métadonnées optionnelles depuis Summary/Sommaire ---
+  const meta = extractSummaryMeta(workbook)
+
+  // --- Feuille d'historique temporel (obligatoire) ---
   const history = findHistorySheet(workbook)
   if (!history) {
-    throw new Error('Aucune feuille d\'historique temporel trouvée dans le fichier de mesure')
+    throw new Error(
+      `Aucune feuille de données temporelles trouvée dans "${fileName}". ` +
+      `Attendu : "Time History" ou "Historique temporel".`,
+    )
   }
 
   const rows: unknown[][] = XLSX.utils.sheet_to_json(history.sheet, {
@@ -193,51 +315,37 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
     defval: null,
   }) as unknown[][]
 
-  // Défauts 821SE — structure réelle vérifiée 2026-04-08 :
-  // col 1 = Date/Time · col 2 = LAeq · cols 37-62 = LZeq 26 bandes
-  let timeCol = 1
-  let laeqCol = 2
-  let recordTypeCol = -1  // pas de colonne Record Type sur 821SE
-  let spectraStart = 37
-  let spectraEnd = 62
-
-  // Affinage par les en-têtes si présents et explicites
-  // Variantes FR : "Date / heure", "Type d'enregistrement", "Batterie (%)", "Externe (V)", "Surcharge"
+  // --- Détection des colonnes par en-tête ---
   const headerRow = rows[0] as unknown[] | undefined
-  if (headerRow) {
-    const headers = headerRow.map((h) => String(h ?? '').toLowerCase())
-    const tIdx = headers.findIndex((h) =>
-      h.includes('time') || h.includes('date') || h.includes('heure'))
-    if (tIdx >= 0) timeCol = tIdx
-    const lIdx = headers.findIndex((h) =>
-      h === 'laeq' || h.includes('la eq') || (h.includes('leq') && !h.includes('lzeq') && !h.includes('lceq')))
-    if (lIdx >= 0) laeqCol = lIdx
-    const rIdx = headers.findIndex((h) =>
-      h.includes('record') || h.includes('enregistrement') || h.includes('type'))
-    if (rIdx >= 0) recordTypeCol = rIdx
-    const specStart = headers.findIndex((h) => h.includes('lzeq') || h.includes('lz eq'))
-    if (specStart >= 0) {
-      spectraStart = specStart
-      let end = specStart
-      for (let c = specStart + 1; c < headers.length; c++) {
-        if (headers[c].includes('lzeq') || headers[c].includes('lz eq')) {
-          end = c
-        } else {
-          break
-        }
-      }
-      spectraEnd = end
-    }
+  const headers = headerRow
+    ? headerRow.map((h) => String(h ?? ''))
+    : []
+  const cols = detectColumns(headers)
+
+  // Fallback si les en-têtes ne matchent pas : utiliser les positions par défaut 821SE
+  const timeCol = cols.timeCol >= 0 ? cols.timeCol : 1
+  const laeqCol = cols.laeqCol >= 0 ? cols.laeqCol : 2
+  const recordTypeCol = cols.recordTypeCol  // -1 = pas de filtre
+  const spectraStart = cols.spectraStart >= 0 ? cols.spectraStart : 37
+  const spectraEnd = cols.spectraEnd >= 0 ? cols.spectraEnd : 62
+
+  if (cols.timeCol < 0 || cols.laeqCol < 0) {
+    // Warn but don't block — fallback to positional defaults
+    console.warn(
+      `[parser821SE] En-têtes timestamp/LAeq non trouvés dans "${history.name}", ` +
+      `utilisation des positions par défaut (col ${timeCol} / col ${laeqCol})`,
+    )
   }
 
+  // --- Extraction des données ---
   const data: DataPoint[] = []
+  let firstDate = ''
 
   for (let i = 1; i < rows.length; i++) {
     const row = rows[i]
     if (!row) continue
 
-    // 821SE n'a pas de colonne Record Type — n'appliquer le filtre que si
-    // explicitement détectée par les en-têtes.
+    // Filtre Record Type uniquement si la colonne existe
     if (recordTypeCol >= 0) {
       const recordType = row[recordTypeCol]
       if (recordType !== null && recordType !== '' && recordType !== undefined) {
@@ -246,24 +354,38 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
     }
 
     const timeVal = row[timeCol]
-    const t = timeToMinutes(timeVal) % 1440 // Ramener au cycle 24h
+    const t = timeToMinutes(timeVal) % 1440
 
     const laeqVal = row[laeqCol]
     const laeq = typeof laeqVal === 'number' ? laeqVal : parseFloat(String(laeqVal))
     if (!Number.isFinite(laeq)) continue
 
-    // Spectres 1/3 octave LZeq (Z-pondéré). L'A-pondération est appliquée
-    // par le composant Spectrogram à l'affichage uniquement.
+    // Extraire la date de la première ligne valide
+    if (!firstDate && timeVal != null) {
+      firstDate = extractDateFromValue(timeVal)
+    }
+
+    // LCeq optionnel
+    const lceq = cols.lceqCol >= 0 ? (() => {
+      const v = row[cols.lceqCol]
+      const n = typeof v === 'number' ? v : parseFloat(String(v))
+      return Number.isFinite(n) ? n : undefined
+    })() : undefined
+
+    // Spectres 1/3 octave LZeq optionnels
     const spectra: number[] = []
-    for (let c = spectraStart; c <= spectraEnd && c < row.length; c++) {
-      const v = row[c]
-      const num = typeof v === 'number' ? v : parseFloat(String(v))
-      if (!isNaN(num)) spectra.push(num)
+    if (spectraStart >= 0) {
+      for (let c = spectraStart; c <= spectraEnd && c < row.length; c++) {
+        const v = row[c]
+        const num = typeof v === 'number' ? v : parseFloat(String(v))
+        if (!isNaN(num)) spectra.push(num)
+      }
     }
 
     data.push({
       t,
       laeq,
+      ...(lceq !== undefined ? { lceq } : {}),
       ...(spectra.length > 0 ? { spectra } : {}),
     })
   }
@@ -271,25 +393,28 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
   if (data.length === 0) {
     throw new Error(
       `Aucune donnée LAeq valide trouvée dans "${fileName}". ` +
-      `Vérifiez les colonnes Date/Time et LAeq dans l'onglet Time History.`,
+      `Vérifiez les colonnes dans l'onglet "${history.name}".`,
     )
   }
 
-  // Aligner spectraFreqs sur le nombre réel de bandes lues (26 si défauts).
+  // Bandes spectrales
   const nBands = data.find((d) => d.spectra)?.spectra?.length ?? 0
   const spectraFreqs =
     nBands === SE821_FREQ_BANDS.length
       ? SE821_FREQ_BANDS
       : SE821_FREQ_BANDS.slice(0, nBands)
 
+  // Date : préférer Summary, sinon dériver de la première ligne
+  const date = meta?.startDate || firstDate || ''
+
   return {
     id: crypto.randomUUID(),
     name: fileName,
-    model: model || 'Sonomètre',
-    serial,
-    date: startDate ?? excelDateToISO(null),
-    startTime: startTimePart?.slice(0, 5) ?? '00:00',
-    stopTime: stopTimePart?.slice(0, 5) ?? '00:00',
+    model: meta?.model || 'Sonomètre',
+    serial: meta?.serial || '',
+    date,
+    startTime: meta?.startTime || '00:00',
+    stopTime: meta?.stopTime || '00:00',
     point: null,
     data,
     rowCount: data.length,

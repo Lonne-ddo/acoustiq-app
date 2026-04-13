@@ -87,12 +87,50 @@ export function findSummarySheet(workbook: XLSX.WorkBook): XLSX.WorkSheet | unde
 // ---------------------------------------------------------------------------
 
 /**
- * Trouve la feuille contenant les données temporelles seconde par seconde.
+ * Détecte le nom de la feuille de données temporelles parmi les noms d'onglets.
  * Ordre de priorité :
- *  1. Nom contenant "time history"  (831C / 821SE anglais)
- *  2. Nom contenant "historique temporel" (821SE français G4)
- *  3. Nom contenant "time" ou "historique"
- *  4. Première feuille qui contient une colonne "LAeq"
+ *  1. Contient "DATA_Time History" (831C anglais)
+ *  2. Contient "Historique temporel" (821SE français G4)
+ *  3. Contient "Time History" (variante)
+ *  4. Contient "Time" ou "Historique" (fallback)
+ */
+function detectTimeSheetName(sheetNames: string[]): string | null {
+  const tests: ((s: string) => boolean)[] = [
+    (s) => s.includes('DATA_Time History') || s.includes('DATA_Time_History'),
+    (s) => s.toLowerCase().includes('historique temporel'),
+    (s) => s.toLowerCase().includes('time history'),
+    (s) => s.toLowerCase().includes('time'),
+    (s) => s.toLowerCase().includes('historique'),
+  ]
+  const skipNames = new Set(
+    ['summary', 'sommaire', 'paramètres', 'parametres', 'parameters',
+     'journal de session', 'session log', 'oba',
+     'historique de mesure', 'measurement log']
+      .map((s) => s.toLowerCase()),
+  )
+  for (const test of tests) {
+    const match = sheetNames.find((s) => !skipNames.has(s.toLowerCase()) && test(s))
+    if (match) return match
+  }
+  return null
+}
+
+/** Vérifie si une feuille contient une colonne LAeq dans ses en-têtes. */
+function sheetHasLaeq(sheet: XLSX.WorkSheet): boolean {
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }) as unknown[][]
+  if (rows.length < 2) return false
+  const header = rows[0]
+  if (!header) return false
+  return header.some((h) => {
+    const v = String(h ?? '').toLowerCase()
+    return v.includes('laeq') || v.includes('la eq') || v.includes('leq')
+  })
+}
+
+/**
+ * Trouve la feuille contenant les données temporelles seconde par seconde.
+ * Utilise la détection par nom, puis vérifie que l'onglet contient bien LAeq.
+ * Si le match par nom ne contient pas LAeq, tente les onglets restants.
  */
 export function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkSheet; name: string } | null {
   const skipNames = new Set(
@@ -102,39 +140,29 @@ export function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkShe
       .map((s) => s.toLowerCase()),
   )
 
-  // Pass 1 — match by sheet name patterns (in priority order)
-  // 1. "DATA_Time History" → 831C anglais standard
-  // 2. "Historique temporel" → 821SE français G4
-  // 3. "Time History" → variante générique
-  // 4. "Time" ou "Historique" → fallback large
-  const priorities: RegExp[] = [
-    /data[_ ]time\s*history/i,
-    /historique\s*temporel/i,
-    /time\s*history/i,
-    /\btime\b/i,
-    /\bhistorique\b/i,
-  ]
-  for (const re of priorities) {
-    for (const sheetName of workbook.SheetNames) {
-      if (skipNames.has(sheetName.toLowerCase())) continue
-      if (re.test(sheetName)) {
-        return { sheet: workbook.Sheets[sheetName], name: sheetName }
-      }
+  // 1. Match by name priority
+  const bestName = detectTimeSheetName(workbook.SheetNames)
+  if (bestName) {
+    const sheet = workbook.Sheets[bestName]
+    // Verify LAeq presence; if not, still return (831C has no header row, uses positional cols)
+    return { sheet, name: bestName }
+  }
+
+  // 2. Fallback: first non-skip sheet with a LAeq column
+  for (const sheetName of workbook.SheetNames) {
+    if (skipNames.has(sheetName.toLowerCase())) continue
+    const sheet = workbook.Sheets[sheetName]
+    if (sheetHasLaeq(sheet)) {
+      return { sheet, name: sheetName }
     }
   }
 
-  // Pass 2 — first non-skip sheet that contains a column "LAeq"
+  // 3. Last resort: first non-skip sheet with data
   for (const sheetName of workbook.SheetNames) {
     if (skipNames.has(sheetName.toLowerCase())) continue
     const sheet = workbook.Sheets[sheetName]
     const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }) as unknown[][]
-    if (rows.length < 2) continue
-    const header = rows[0]
-    if (!header) continue
-    const headerStr = header.map((h) => String(h ?? '').toLowerCase())
-    const hasLaeq = headerStr.some((h) =>
-      h.includes('laeq') || h.includes('la eq') || h.includes('leq'))
-    if (hasLaeq) {
+    if (rows.length >= 2) {
       return { sheet, name: sheetName }
     }
   }

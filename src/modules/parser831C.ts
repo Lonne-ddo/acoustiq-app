@@ -3,7 +3,7 @@
  */
 import * as XLSX from 'xlsx'
 import type { MeasurementFile, DataPoint } from '../types'
-import { findSummarySheet } from './parser821SE'
+import { findSummarySheet, findHistorySheet } from './parser821SE'
 
 /**
  * Bandes 1/3 d'octave émises par le 831C dans les colonnes 41-67 (27 bandes
@@ -123,17 +123,12 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
   const startTimePart = startTimeMatch ? startTimeMatch[1] : '00:00:00'
   const stopTimePart = stopTimeMatch ? stopTimeMatch[1] : '00:00:00'
 
-  // --- Feuille Time History / Historique temporel ---
-  let historySheet: XLSX.WorkSheet | undefined
-  for (const name of workbook.SheetNames) {
-    if (/time\s*history/i.test(name) || /historique\s*temporel/i.test(name)) {
-      historySheet = workbook.Sheets[name]
-      break
-    }
+  // --- Feuille Time History (utilise la détection partagée) ---
+  const historyResult = findHistorySheet(workbook)
+  if (!historyResult) {
+    throw new Error('Feuille de données temporelles introuvable dans le fichier de mesure')
   }
-  if (!historySheet) {
-    throw new Error('Feuille "Time History" ou "Historique temporel" introuvable dans le fichier de mesure')
-  }
+  const historySheet = historyResult.sheet
 
   const rows: unknown[][] = XLSX.utils.sheet_to_json(historySheet, {
     header: 1,

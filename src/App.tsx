@@ -212,132 +212,197 @@ const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
   ],
 }
 
-const FILE_LIST_LIMIT = 10
 
 /** Liste de fichiers groupée par date, avec bordure couleur du point */
-function FileList({ files, pointMap, pointLabels, onPointChange, onPointLabelChange, onFileRemove }: {
+/** Formate une durée en secondes en "Xh XXmin" */
+function formatDuration(totalSeconds: number): string {
+  const h = Math.floor(totalSeconds / 3600)
+  const m = Math.floor((totalSeconds % 3600) / 60)
+  if (h > 0) return `${h}h${m > 0 ? String(m).padStart(2, '0') : '00'}`
+  return `${m}min`
+}
+
+function FileList({ files, pointMap, pointLabels, allPoints, onPointChange, onPointLabelChange, onFileRemove, onCreatePoint }: {
   files: MeasurementFile[]
   pointMap: Record<string, string>
   pointLabels: Record<string, string>
+  allPoints: string[]
   onPointChange: (fileId: string, point: string) => void
   onPointLabelChange: (point: string, label: string) => void
   onFileRemove: (fileId: string) => void
+  onCreatePoint: (name: string) => void
 }) {
-  const [expanded, setExpanded] = useState(false)
+  const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
+  const [newPointInput, setNewPointInput] = useState<string | null>(null) // file ID awaiting new point
 
-  // Grouper par date
-  const grouped = useMemo(() => {
-    const map = new Map<string, MeasurementFile[]>()
+  // Group files by point (assigned) or "unassigned"
+  const groups = useMemo(() => {
+    const assigned = new Map<string, MeasurementFile[]>()
+    const unassigned: MeasurementFile[] = []
     for (const f of files) {
-      const date = f.date || 'Sans date'
-      if (!map.has(date)) map.set(date, [])
-      map.get(date)!.push(f)
+      const pt = pointMap[f.id]
+      if (pt) {
+        if (!assigned.has(pt)) assigned.set(pt, [])
+        assigned.get(pt)!.push(f)
+      } else {
+        unassigned.push(f)
+      }
     }
-    return [...map.entries()].sort(([a], [b]) => a.localeCompare(b))
-  }, [files])
+    // Sort assigned groups by point name
+    const sortedAssigned = [...assigned.entries()].sort(([a], [b]) => a.localeCompare(b))
+    return { assigned: sortedAssigned, unassigned }
+  }, [files, pointMap])
 
-  // Limiter si pas étendu
-  const allFiles = grouped.flatMap(([, fs]) => fs)
-  const visibleCount = expanded ? allFiles.length : FILE_LIST_LIMIT
-  const hasMore = allFiles.length > FILE_LIST_LIMIT && !expanded
-  let rendered = 0
+  const toggleGroup = (key: string) =>
+    setCollapsedGroups((prev) => ({ ...prev, [key]: !prev[key] }))
+
+  // Total duration for a group of files (using rowCount as proxy for seconds)
+  const groupDuration = (fs: MeasurementFile[]) =>
+    formatDuration(fs.reduce((sum, f) => sum + f.rowCount, 0))
+
+  const renderFileCard = (f: MeasurementFile, showAssign: boolean) => {
+    const pt = pointMap[f.id]
+    return (
+      <li key={f.id} className="rounded px-2.5 py-1.5 bg-gray-800/70 border border-gray-700/50">
+        <div className="flex items-start gap-1">
+          <p className="text-[11px] font-medium truncate flex-1 text-gray-300" title={f.name}>{f.name}</p>
+          <button
+            onClick={() => onFileRemove(f.id)}
+            className="text-gray-600 hover:text-red-400 shrink-0 transition-colors"
+            title={t('sidebar.remove')}
+            aria-label={`Retirer ${f.name}`}
+          >
+            <X size={10} />
+          </button>
+        </div>
+        <p className="text-[10px] text-gray-500">
+          {f.startTime} → {f.stopTime} · {f.rowCount} pts
+        </p>
+        {showAssign && (
+          <div className="mt-1.5 space-y-1">
+            <select
+              value={pt ?? ''}
+              onChange={(e) => {
+                if (e.target.value === '__new__') {
+                  setNewPointInput(f.id)
+                } else {
+                  onPointChange(f.id, e.target.value)
+                }
+              }}
+              className="w-full text-[11px] bg-gray-700 text-gray-100 border border-gray-600
+                         rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            >
+              <option value="">{t('sidebar.assignPoint')}</option>
+              {allPoints.map((p) => (
+                <option key={p} value={p}>{pointLabels[p] || p}</option>
+              ))}
+              <option value="__new__">+ Nouveau point…</option>
+            </select>
+            {newPointInput === f.id && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault()
+                  const input = (e.currentTarget.elements.namedItem('np') as HTMLInputElement)
+                  const name = input.value.trim()
+                  if (name) {
+                    onCreatePoint(name)
+                    onPointChange(f.id, name)
+                  }
+                  setNewPointInput(null)
+                }}
+                className="flex gap-1"
+              >
+                <input
+                  name="np"
+                  autoFocus
+                  placeholder="Nom du point"
+                  className="flex-1 text-[11px] bg-gray-800 text-emerald-300 border border-gray-700
+                             rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500
+                             placeholder:text-gray-600"
+                  onKeyDown={(e) => { if (e.key === 'Escape') setNewPointInput(null) }}
+                />
+                <button type="submit" className="text-[10px] text-emerald-400 hover:text-emerald-300 px-1">OK</button>
+              </form>
+            )}
+          </div>
+        )}
+      </li>
+    )
+  }
 
   return (
-    <>
-      {grouped.map(([date, dateFiles]) => {
-        const remaining = visibleCount - rendered
-        if (remaining <= 0) return null
-        const visible = dateFiles.slice(0, remaining)
-        rendered += visible.length
-
+    <div className="space-y-1.5">
+      {/* Assigned point groups */}
+      {groups.assigned.map(([pt, ptFiles]) => {
+        const collapsed = collapsedGroups[pt] ?? false
+        const color = POINT_COLORS[pt] ?? '#6b7280'
+        const label = pointLabels[pt] || pt
         return (
-          <div key={date}>
-            {grouped.length > 1 && (
-              <p className="text-xs text-gray-600 font-medium mt-2 mb-1">{date}</p>
+          <div key={pt} className="rounded-md border border-gray-700/60 overflow-hidden">
+            {/* Group header */}
+            <button
+              onClick={() => toggleGroup(pt)}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-800/60 transition-colors"
+            >
+              <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
+              <ChevronDown size={10} className={`text-gray-500 transition-transform shrink-0 ${collapsed ? '-rotate-90' : ''}`} />
+              <span className="text-[11px] font-semibold text-gray-200 truncate flex-1" title={label}>
+                {label}
+              </span>
+              <span className="text-[10px] text-gray-500 shrink-0">
+                {ptFiles.length} fich. · {groupDuration(ptFiles)}
+              </span>
+            </button>
+            {/* Editable label row */}
+            {!collapsed && (
+              <div className="px-3 pb-1">
+                <input
+                  type="text"
+                  key={pt}
+                  defaultValue={label}
+                  placeholder={pt}
+                  onBlur={(e) => {
+                    const v = e.currentTarget.value.trim()
+                    onPointLabelChange(pt, v === pt ? '' : v)
+                  }}
+                  onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
+                  className="w-full text-[10px] bg-transparent text-emerald-400/80 border-b border-gray-700/50
+                             px-0 py-0.5 focus:outline-none focus:border-emerald-500
+                             placeholder:text-gray-600"
+                  title="Renommer ce point"
+                />
+              </div>
             )}
-            <ul className="space-y-2">
-              {visible.map((f) => {
-                const pt = pointMap[f.id]
-                const borderColor = pt ? POINT_COLORS[pt] ?? '#374151' : '#374151'
-                return (
-                  <li
-                    key={f.id}
-                    className="rounded-md px-3 py-2 bg-gray-800 border border-gray-700"
-                    style={{ borderLeftWidth: 3, borderLeftColor: borderColor }}
-                  >
-                    <div className="flex items-start gap-1">
-                      <p className="text-sm font-medium truncate flex-1" title={f.name}>{f.name}</p>
-                      <button
-                        onClick={() => onFileRemove(f.id)}
-                        className="text-gray-600 hover:text-red-400 shrink-0 mt-0.5 transition-colors"
-                        title={t('sidebar.remove')}
-                        aria-label={`Retirer ${f.name}`}
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
-                    <p className="text-xs text-gray-400 mt-0.5">
-                      <span className="mr-1">&#127908;</span>
-                      {f.model} · {f.serial}
-                    </p>
-                    <p className="text-xs text-gray-500">
-                      {f.startTime} → {f.stopTime}
-                    </p>
-                    <p className="text-xs text-gray-600">{f.rowCount} {t('chart.points')}</p>
-                    <div className="mt-2 space-y-1">
-                      <select
-                        value={pointMap[f.id] ?? ''}
-                        onChange={(e) => onPointChange(f.id, e.target.value)}
-                        aria-label={`Point de mesure pour ${f.name}`}
-                        className="w-full text-xs bg-gray-700 text-gray-100 border border-gray-600
-                                   rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                      >
-                        <option value="">{t('sidebar.assignPoint')}</option>
-                        {MEASUREMENT_POINTS.map((pt) => (
-                          <option key={pt} value={pt}>{pt}</option>
-                        ))}
-                      </select>
-                      {pt && (
-                        <input
-                          type="text"
-                          defaultValue={pointLabels[pt] || pt}
-                          placeholder={pt}
-                          onBlur={(e) => {
-                            const v = e.currentTarget.value.trim()
-                            onPointLabelChange(pt, v === pt ? '' : v)
-                          }}
-                          onKeyDown={(e) => { if (e.key === 'Enter') e.currentTarget.blur() }}
-                          className="w-full text-xs bg-gray-800 text-emerald-300 border border-gray-700
-                                     rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500
-                                     placeholder:text-gray-600"
-                          title="Renommer ce point (Enter pour valider)"
-                        />
-                      )}
-                    </div>
-                  </li>
-                )
-              })}
-            </ul>
+            {/* File cards */}
+            {!collapsed && (
+              <ul className="px-2 pb-2 space-y-1">
+                {ptFiles.map((f) => renderFileCard(f, false))}
+              </ul>
+            )}
           </div>
         )
       })}
-      {hasMore && (
-        <button
-          onClick={() => setExpanded(true)}
-          className="w-full mt-2 text-xs text-emerald-400 hover:text-emerald-300 py-1 transition-colors"
-        >
-          Afficher les {allFiles.length - FILE_LIST_LIMIT} fichiers restants
-        </button>
+
+      {/* Unassigned files */}
+      {groups.unassigned.length > 0 && (
+        <div className="rounded-md border border-gray-700/40 overflow-hidden">
+          <button
+            onClick={() => toggleGroup('__unassigned')}
+            className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-800/60 transition-colors"
+          >
+            <div className="w-2 h-2 rounded-full shrink-0 bg-gray-600" />
+            <ChevronDown size={10} className={`text-gray-500 transition-transform shrink-0 ${collapsedGroups['__unassigned'] ? '-rotate-90' : ''}`} />
+            <span className="text-[11px] font-semibold text-gray-400 flex-1">Non assignés</span>
+            <span className="text-[10px] text-gray-500 shrink-0">{groups.unassigned.length} fich.</span>
+          </button>
+          {!collapsedGroups['__unassigned'] && (
+            <ul className="px-2 pb-2 space-y-1">
+              {groups.unassigned.map((f) => renderFileCard(f, true))}
+            </ul>
+          )}
+        </div>
       )}
-      {expanded && allFiles.length > FILE_LIST_LIMIT && (
-        <button
-          onClick={() => setExpanded(false)}
-          className="w-full mt-1 text-xs text-gray-500 hover:text-gray-300 py-1 transition-colors"
-        >
-          Réduire la liste
-        </button>
-      )}
-    </>
+    </div>
   )
 }
 
@@ -374,8 +439,10 @@ interface SidebarProps {
   onMeteoChange: (m: MeteoData) => void
   onOpenChecklist: () => void
   pointLabels: Record<string, string>
+  allPoints: string[]
   onPointChange: (fileId: string, point: string) => void
   onPointLabelChange: (point: string, label: string) => void
+  onCreatePoint: (name: string) => void
   onFileRemove: (fileId: string) => void
   onEventAdd: (ev: SourceEvent) => void
   onEventRemove: (id: string) => void
@@ -427,7 +494,7 @@ function SidebarSection({
 
 function Sidebar({
   collapsed, onToggle,
-  files, pointMap, pointLabels, events, availableDates, errors,
+  files, pointMap, pointLabels, allPoints, events, availableDates, errors,
   audioFile, chartTimeMin, loading, loadProgress, rejectedFiles,
   candidates,
   annotations, pendingAnnotationText,
@@ -437,7 +504,7 @@ function Sidebar({
   onSaveTemplate, onApplyTemplate, onDeleteTemplate,
   meteo, onMeteoChange,
   onOpenChecklist,
-  onPointChange, onPointLabelChange, onFileRemove,
+  onPointChange, onPointLabelChange, onCreatePoint, onFileRemove,
   onEventAdd, onEventRemove, onClearError,
   onDetectCandidates, onConfirmCandidate, onDismissCandidate,
   onSaveProject, onLoadProject, onParseFiles,
@@ -688,8 +755,10 @@ function Sidebar({
               files={files}
               pointMap={pointMap}
               pointLabels={pointLabels}
+              allPoints={allPoints}
               onPointChange={onPointChange}
               onPointLabelChange={onPointLabelChange}
+              onCreatePoint={onCreatePoint}
               onFileRemove={onFileRemove}
             />
           )}
@@ -1318,6 +1387,8 @@ export default function App() {
   const [pointMap, setPointMap] = useState<Record<string, string>>({})
   // Labels personnalisés par point (ex: "BV-94" → "Récepteur Nord")
   const [pointLabels, setPointLabels] = useState<Record<string, string>>({})
+  // Points créés par l'utilisateur (en plus de MEASUREMENT_POINTS)
+  const [customPoints, setCustomPoints] = useState<string[]>([])
   const [errors, setErrors] = useState<string[]>([])
   const [events, setEvents] = useState<SourceEvent[]>([])
   const [concordance, setConcordance] = useState<Record<string, ConcordanceState>>({})
@@ -1483,6 +1554,19 @@ export default function App() {
     setLoading(false)
     setLoadProgress(0)
   }, [])
+
+  // All known point names (default + custom + any from pointMap)
+  const allPoints = useMemo(() => {
+    const set = new Set([...MEASUREMENT_POINTS, ...customPoints])
+    for (const pt of Object.values(pointMap)) { if (pt) set.add(pt) }
+    return [...set].sort()
+  }, [customPoints, pointMap])
+
+  function handleCreatePoint(name: string) {
+    if (!MEASUREMENT_POINTS.includes(name) && !customPoints.includes(name)) {
+      setCustomPoints((prev) => [...prev, name])
+    }
+  }
 
   function handlePointChange(fileId: string, point: string) {
     setPointMap((prev) => ({ ...prev, [fileId]: point }))
@@ -1923,6 +2007,7 @@ export default function App() {
         onMeteoChange={setMeteo}
         onOpenChecklist={() => setChecklistOpen(true)}
         pointLabels={pointLabels}
+        allPoints={allPoints}
         onParseFiles={handleParseFiles}
         onPointChange={handlePointChange}
         onPointLabelChange={(pt, label) => setPointLabels((prev) => {
@@ -1930,6 +2015,7 @@ export default function App() {
           if (label) next[pt] = label; else delete next[pt]
           return next
         })}
+        onCreatePoint={handleCreatePoint}
         onFileRemove={handleFileRemove}
         onEventAdd={handleEventAdd}
         onEventRemove={handleEventRemove}

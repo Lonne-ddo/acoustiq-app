@@ -70,22 +70,20 @@ function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkSheet; nam
       .map((s) => s.toLowerCase()),
   )
 
-  const priorities: RegExp[] = [
-    /data[_ ]time\s*history/i,
-    /historique\s*temporel/i,
-    /time\s*history/i,
-    /\btime\b/i,
-    /\bhistorique\b/i,
+  // Detect by sheet name priority
+  const tests: ((s: string) => boolean)[] = [
+    (s) => s.includes('DATA_Time History') || s.includes('DATA_Time_History'),
+    (s) => s.toLowerCase().includes('historique temporel'),
+    (s) => s.toLowerCase().includes('time history'),
+    (s) => s.toLowerCase().includes('time'),
+    (s) => s.toLowerCase().includes('historique'),
   ]
-  for (const re of priorities) {
-    for (const sheetName of workbook.SheetNames) {
-      if (skipNames.has(sheetName.toLowerCase())) continue
-      if (re.test(sheetName)) {
-        return { sheet: workbook.Sheets[sheetName], name: sheetName }
-      }
-    }
+  for (const test of tests) {
+    const match = workbook.SheetNames.find((s) => !skipNames.has(s.toLowerCase()) && test(s))
+    if (match) return { sheet: workbook.Sheets[match], name: match }
   }
 
+  // Fallback: first non-skip sheet with LAeq column
   for (const sheetName of workbook.SheetNames) {
     if (skipNames.has(sheetName.toLowerCase())) continue
     const sheet = workbook.Sheets[sheetName]
@@ -93,10 +91,20 @@ function findHistorySheet(workbook: XLSX.WorkBook): { sheet: XLSX.WorkSheet; nam
     if (rows.length < 2) continue
     const header = rows[0]
     if (!header) continue
-    const headerStr = header.map((h) => String(h ?? '').toLowerCase())
-    if (headerStr.some((h) => h.includes('laeq') || h.includes('la eq') || h.includes('leq'))) {
+    if (header.some((h) => {
+      const v = String(h ?? '').toLowerCase()
+      return v.includes('laeq') || v.includes('la eq') || v.includes('leq')
+    })) {
       return { sheet, name: sheetName }
     }
+  }
+
+  // Last resort: first non-skip sheet with data
+  for (const sheetName of workbook.SheetNames) {
+    if (skipNames.has(sheetName.toLowerCase())) continue
+    const sheet = workbook.Sheets[sheetName]
+    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }) as unknown[][]
+    if (rows.length >= 2) return { sheet, name: sheetName }
   }
 
   return null

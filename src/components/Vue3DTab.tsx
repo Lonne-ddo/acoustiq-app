@@ -157,6 +157,9 @@ function MapMode({ onBuild, initialBbox }: {
     }).addTo(map)
     mapRef.current = map
 
+    // Force Leaflet to recalculate dimensions after layout settles
+    setTimeout(() => { map.invalidateSize() }, 100)
+
     // Restore existing rectangle if bbox was saved
     if (initialBbox) {
       const rect = L.rectangle(
@@ -271,7 +274,7 @@ function MapMode({ onBuild, initialBbox }: {
         </div>
       </div>
       {/* Map */}
-      <div ref={mapContainerRef} className="flex-1 min-h-0" style={{ cursor: 'crosshair' }} />
+      <div ref={mapContainerRef} style={{ height: '500px', width: '100%', cursor: 'crosshair' }} />
     </div>
   )
 }

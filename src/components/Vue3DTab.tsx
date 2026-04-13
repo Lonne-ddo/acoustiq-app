@@ -674,26 +674,55 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   }, [mode])
 
   const fetchBuildings = async (b: BBox) => {
+    // Validate bbox size (max ~1 km²)
+    const centerLat = (b.south + b.north) / 2
+    const deltaLatKm = (b.north - b.south) * 111
+    const deltaLngKm = (b.east - b.west) * 111 * Math.cos((centerLat * Math.PI) / 180)
+    const areaKm2 = deltaLatKm * deltaLngKm
+    if (areaKm2 > 1) {
+      setLoadError('Zone trop grande — dessinez un rectangle plus petit (max ~1 km²)')
+      return
+    }
+
     setLoading(true)
     setLoadError(null)
-    try {
-      const query = `[out:json][timeout:25];(way["building"](${b.south},${b.west},${b.north},${b.east}););out body;>;out skel qt;`
-      const res = await fetch('https://overpass-api.de/api/interpreter', {
-        method: 'POST',
-        body: `data=${encodeURIComponent(query)}`,
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      })
-      if (!res.ok) throw new Error(`Overpass API: ${res.status}`)
-      const data = await res.json()
-      const parsed = parseOsmBuildings(data, b)
-      setBuildings(parsed)
-      setBbox(b)
-      setMode('3d')
-    } catch (err) {
-      setLoadError(String((err as Error).message ?? err))
-    } finally {
-      setLoading(false)
+
+    const OVERPASS_ENDPOINTS = [
+      'https://overpass-api.de/api/interpreter',
+      'https://overpass.kumi.systems/api/interpreter',
+      'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+    ]
+
+    const query = `[out:json][timeout:25];(way["building"](${b.south},${b.west},${b.north},${b.east}););out body;>;out skel qt;`
+    const body = `data=${encodeURIComponent(query)}`
+
+    for (const endpoint of OVERPASS_ENDPOINTS) {
+      const controller = new AbortController()
+      const timer = setTimeout(() => controller.abort(), 10000)
+      try {
+        const res = await fetch(endpoint, {
+          method: 'POST',
+          body,
+          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+          signal: controller.signal,
+        })
+        clearTimeout(timer)
+        if (!res.ok) continue
+        const data = await res.json()
+        const parsed = parseOsmBuildings(data, b)
+        setBuildings(parsed)
+        setBbox(b)
+        setMode('3d')
+        setLoading(false)
+        return
+      } catch (err) {
+        clearTimeout(timer)
+        // Continue to next endpoint on timeout or network error
+      }
     }
+
+    setLoadError('Impossible de récupérer les données OSM — vérifiez votre connexion ou réduisez la zone.')
+    setLoading(false)
   }
 
   const handleBuild = (b: BBox) => {
@@ -716,13 +745,14 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
 
   if (loadError) {
     return (
-      <div className="flex-1 flex flex-col items-center justify-center text-gray-500 gap-3 p-10">
+      <div className="flex-1 flex flex-col items-center justify-center text-gray-500 gap-4 p-10">
         <Box size={40} className="opacity-40" />
-        <p className="text-sm text-center text-red-400">{loadError}</p>
+        <p className="text-sm text-center text-red-400 max-w-md leading-relaxed">{loadError}</p>
         <button
           onClick={() => { setLoadError(null); setMode('map') }}
-          className="text-xs text-gray-400 hover:text-gray-200 bg-gray-900 border border-gray-700 rounded px-3 py-1.5"
+          className="flex items-center gap-1.5 text-sm font-medium text-gray-200 bg-gray-800 hover:bg-gray-700 border border-gray-600 rounded px-4 py-2 transition-colors"
         >
+          <ArrowLeft size={14} />
           Retour à la carte
         </button>
       </div>

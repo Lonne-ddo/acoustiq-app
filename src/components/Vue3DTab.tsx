@@ -129,6 +129,17 @@ function parseOsmBuildings(
   return buildings
 }
 
+// --- Map helpers --------------------------------------------------------------
+
+function computeBoundsArea(bounds: L.LatLngBounds): number {
+  const s = bounds.getSouth(), n = bounds.getNorth()
+  const w = bounds.getWest(), e = bounds.getEast()
+  const centerLat = (s + n) / 2
+  const dLatKm = (n - s) * 111
+  const dLngKm = (e - w) * 111 * Math.cos((centerLat * Math.PI) / 180)
+  return dLatKm * dLngKm
+}
+
 // --- Map Mode -----------------------------------------------------------------
 
 function MapMode({ onBuild, initialBbox }: {
@@ -139,9 +150,20 @@ function MapMode({ onBuild, initialBbox }: {
   const mapRef = useRef<L.Map | null>(null)
   const rectRef = useRef<L.Rectangle | null>(null)
   const drawStartRef = useRef<L.LatLng | null>(null)
+  const flashTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [bbox, setBbox] = useState<BBox | null>(initialBbox ?? null)
   const [searching, setSearching] = useState(false)
+  const [areaKm2, setAreaKm2] = useState<number | null>(() => {
+    if (!initialBbox) return null
+    const b = L.latLngBounds(
+      [initialBbox.south, initialBbox.west],
+      [initialBbox.north, initialBbox.east],
+    )
+    return computeBoundsArea(b)
+  })
+  const [isDrawing, setIsDrawing] = useState(false)
+  const [flashMsg, setFlashMsg] = useState<string | null>(null)
 
   useEffect(() => {
     const container = mapContainerRef.current
@@ -176,19 +198,29 @@ function MapMode({ onBuild, initialBbox }: {
     const onMouseDown = (e: L.LeafletMouseEvent) => {
       if (e.originalEvent.button !== 0) return
       drawing = true
+      setIsDrawing(true)
       drawStartRef.current = e.latlng
       map.dragging.disable()
       if (rectRef.current) { map.removeLayer(rectRef.current); rectRef.current = null }
+      setBbox(null)
+      setAreaKm2(null)
+      setFlashMsg(null)
     }
 
     const onMouseMove = (e: L.LeafletMouseEvent) => {
       if (!drawing || !drawStartRef.current) return
       const bounds = L.latLngBounds(drawStartRef.current, e.latlng)
+      const area = computeBoundsArea(bounds)
+      setAreaKm2(area)
+
+      const color = area > 1.0 ? '#E24B4A' : area > 0.8 ? '#EF9F27' : '#3b82f6'
+
       if (rectRef.current) {
         rectRef.current.setBounds(bounds)
+        rectRef.current.setStyle({ color, fillOpacity: 0.15 })
       } else {
         rectRef.current = L.rectangle(bounds, {
-          color: '#3b82f6', weight: 2, fillOpacity: 0.15,
+          color, weight: 2, fillOpacity: 0.15,
         }).addTo(map)
       }
     }
@@ -196,16 +228,33 @@ function MapMode({ onBuild, initialBbox }: {
     const onMouseUp = () => {
       if (!drawing) return
       drawing = false
+      setIsDrawing(false)
       map.dragging.enable()
       drawStartRef.current = null
+
       if (rectRef.current) {
         const b = rectRef.current.getBounds()
-        setBbox({
-          south: b.getSouth(),
-          west: b.getWest(),
-          north: b.getNorth(),
-          east: b.getEast(),
-        })
+        const area = computeBoundsArea(b)
+        setAreaKm2(area)
+
+        if (area > 1.0) {
+          // Too large — remove rectangle and flash message
+          map.removeLayer(rectRef.current)
+          rectRef.current = null
+          setBbox(null)
+          setFlashMsg('Zone trop grande — recommencez avec une zone plus petite')
+          if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
+          flashTimerRef.current = setTimeout(() => setFlashMsg(null), 2000)
+        } else {
+          // Valid — set green color and store bbox
+          rectRef.current.setStyle({ color: '#22c55e', fillOpacity: 0.15 })
+          setBbox({
+            south: b.getSouth(),
+            west: b.getWest(),
+            north: b.getNorth(),
+            east: b.getEast(),
+          })
+        }
       }
     }
 
@@ -219,6 +268,7 @@ function MapMode({ onBuild, initialBbox }: {
       map.off('mouseup', onMouseUp)
       map.remove()
       mapRef.current = null
+      if (flashTimerRef.current) clearTimeout(flashTimerRef.current)
     }
   }, [initialBbox])
 
@@ -238,6 +288,11 @@ function MapMode({ onBuild, initialBbox }: {
     } catch { /* ignore geocoding errors */ }
     finally { setSearching(false) }
   }
+
+  const areaColor = areaKm2 === null ? 'text-gray-300'
+    : areaKm2 > 1.0 ? 'text-red-400'
+    : areaKm2 > 0.8 ? 'text-amber-400'
+    : 'text-gray-300'
 
   return (
     <div className="flex flex-col flex-1 min-h-0">
@@ -273,8 +328,34 @@ function MapMode({ onBuild, initialBbox }: {
           </button>
         </div>
       </div>
-      {/* Map */}
-      <div ref={mapContainerRef} style={{ height: '500px', width: '100%', cursor: 'crosshair' }} />
+      {/* Map + overlays */}
+      <div className="relative flex-1 min-h-0">
+        <div ref={mapContainerRef} style={{ height: '500px', width: '100%', cursor: 'crosshair' }} />
+
+        {/* Surface indicator */}
+        {areaKm2 !== null && (
+          <div
+            className="absolute z-[1000] pointer-events-none"
+            style={{ bottom: 8, left: '50%', transform: 'translateX(-50%)' }}
+          >
+            <div className={`bg-gray-900/80 backdrop-blur-sm rounded px-3 py-1 text-xs font-medium ${areaColor}`}>
+              {areaKm2.toFixed(2)} {isDrawing ? '/ 1.0 km² max' : 'km²'}
+            </div>
+          </div>
+        )}
+
+        {/* Flash message */}
+        {flashMsg && (
+          <div
+            className="absolute z-[1000] pointer-events-none"
+            style={{ bottom: 40, left: '50%', transform: 'translateX(-50%)' }}
+          >
+            <div className="bg-red-900/90 text-red-200 rounded px-3 py-1.5 text-xs font-medium whitespace-nowrap">
+              {flashMsg}
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   )
 }
@@ -826,16 +907,6 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   }, [mode])
 
   const fetchBuildings = async (b: BBox) => {
-    // Validate bbox size (max ~1 km²)
-    const centerLat = (b.south + b.north) / 2
-    const deltaLatKm = (b.north - b.south) * 111
-    const deltaLngKm = (b.east - b.west) * 111 * Math.cos((centerLat * Math.PI) / 180)
-    const areaKm2 = deltaLatKm * deltaLngKm
-    if (areaKm2 > 1) {
-      setLoadError('Zone trop grande — dessinez un rectangle plus petit (max ~1 km²)')
-      return
-    }
-
     setLoading(true)
     setLoadError(null)
     setFailedBbox(b)

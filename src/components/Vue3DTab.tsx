@@ -5,7 +5,7 @@
 import { useRef, useEffect, useState, useCallback } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
-import { Box, RotateCcw, Eye } from 'lucide-react'
+import { Box, RotateCcw, Eye, Camera, Loader2, Check, AlertTriangle, X } from 'lucide-react'
 import type { LwSourceSummary, Scene3DData } from '../types'
 
 // --- Constantes ---------------------------------------------------------------
@@ -38,10 +38,44 @@ interface Source3D {
   placed: boolean
 }
 
+interface AiDimensions {
+  width: number
+  depth: number
+  height: number
+  confidence: 'low' | 'medium' | 'high'
+  notes: string
+}
+
 interface Props {
   lwSources: LwSourceSummary[]
   scene3D: Scene3DData | undefined
   onScene3DChange: (data: Scene3DData) => void
+}
+
+// --- Helpers IA ---------------------------------------------------------------
+
+function readFileAsBase64(file: File): Promise<{ base64: string; mediaType: string }> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader()
+    reader.onload = () => {
+      const result = reader.result as string
+      // result = "data:image/png;base64,iVBOR..."
+      const commaIdx = result.indexOf(',')
+      const meta = result.slice(0, commaIdx) // "data:image/png;base64"
+      const base64 = result.slice(commaIdx + 1)
+      // Extract media type from "data:image/png;base64"
+      const mediaType = meta.replace('data:', '').replace(';base64', '')
+      resolve({ base64, mediaType })
+    }
+    reader.onerror = () => reject(new Error('Erreur de lecture du fichier'))
+    reader.readAsDataURL(file)
+  })
+}
+
+const CONFIDENCE_LABELS: Record<AiDimensions['confidence'], { label: string; color: string }> = {
+  low: { label: 'Faible', color: 'text-red-400' },
+  medium: { label: 'Moyenne', color: 'text-amber-400' },
+  high: { label: 'Haute', color: 'text-green-400' },
 }
 
 // --- Composant ----------------------------------------------------------------
@@ -65,6 +99,15 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     return lwSources.map((s) => ({ id: s.id, x: 0, y: 0, z: 0, placed: false }))
   })
 
+  // --- IA photo analysis state ---
+  const [aiPhotos, setAiPhotos] = useState<File[]>([])
+  const [aiPhotoUrls, setAiPhotoUrls] = useState<string[]>([])
+  const [aiLoading, setAiLoading] = useState(false)
+  const [aiResult, setAiResult] = useState<AiDimensions | null>(null)
+  const [aiError, setAiError] = useState<string | null>(null)
+  const [aiApiKey, setAiApiKey] = useState(() => localStorage.getItem('acoustiq_anthropic_key') ?? '')
+  const [aiExpanded, setAiExpanded] = useState(false)
+
   // Sync sources3D when lwSources changes (new sources added / removed)
   useEffect(() => {
     setSources3D((prev) => {
@@ -84,6 +127,11 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   }, [onScene3DChange])
 
   useEffect(() => { persistScene(building, sources3D) }, [building, sources3D, persistScene])
+
+  // Revoke object URLs on cleanup
+  useEffect(() => {
+    return () => { aiPhotoUrls.forEach((u) => URL.revokeObjectURL(u)) }
+  }, [aiPhotoUrls])
 
   // --- Three.js setup ---
   useEffect(() => {
@@ -369,6 +417,117 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     })
   }
 
+  // --- IA photo handlers ---
+  const handlePhotoSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const fileList = e.target.files
+    if (!fileList) return
+    const selected = Array.from(fileList).slice(0, 3)
+    // Revoke old URLs
+    aiPhotoUrls.forEach((u) => URL.revokeObjectURL(u))
+    setAiPhotos(selected)
+    setAiPhotoUrls(selected.map((f) => URL.createObjectURL(f)))
+    setAiResult(null)
+    setAiError(null)
+  }
+
+  const handleAiAnalyze = async () => {
+    if (aiPhotos.length === 0 || !aiApiKey.trim()) return
+    setAiLoading(true)
+    setAiError(null)
+    setAiResult(null)
+
+    try {
+      // Convert images to base64
+      const imageContents: Array<{ type: 'image'; source: { type: 'base64'; media_type: string; data: string } }> = []
+      for (const file of aiPhotos) {
+        const { base64, mediaType } = await readFileAsBase64(file)
+        imageContents.push({
+          type: 'image',
+          source: { type: 'base64', media_type: mediaType, data: base64 },
+        })
+      }
+
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': aiApiKey.trim(),
+          'anthropic-version': '2023-06-01',
+          'anthropic-dangerous-direct-browser-access': 'true',
+        },
+        body: JSON.stringify({
+          model: 'claude-opus-4-5',
+          max_tokens: 1024,
+          messages: [{
+            role: 'user',
+            content: [
+              ...imageContents,
+              {
+                type: 'text',
+                text: 'Tu es un expert en analyse de bâtiments industriels. Analyse ces photos d\'une usine et estime ses dimensions approximatives en mètres. Réponds UNIQUEMENT en JSON valide avec ce format exact : {"width": number, "depth": number, "height": number, "confidence": "low"|"medium"|"high", "notes": string}. width = dimension la plus longue au sol, depth = dimension perpendiculaire, height = hauteur principale du bâtiment. Base-toi sur des références visuelles comme les camions, portes, fenêtres, ou autres éléments de taille connue.',
+              },
+            ],
+          }],
+        }),
+      })
+
+      if (!response.ok) {
+        const errBody = await response.text()
+        throw new Error(`API ${response.status}: ${errBody.slice(0, 200)}`)
+      }
+
+      const data: { content: Array<{ type: string; text?: string }> } = await response.json()
+      const textBlock = data.content.find((b) => b.type === 'text')
+      if (!textBlock?.text) throw new Error('Réponse vide de l\'API')
+
+      // Extract JSON from response (may be wrapped in markdown code block)
+      let jsonStr = textBlock.text.trim()
+      const jsonMatch = jsonStr.match(/\{[\s\S]*\}/)
+      if (jsonMatch) jsonStr = jsonMatch[0]
+
+      const parsed: unknown = JSON.parse(jsonStr)
+      // Validate shape
+      if (
+        typeof parsed === 'object' && parsed !== null &&
+        'width' in parsed && 'depth' in parsed && 'height' in parsed &&
+        typeof (parsed as Record<string, unknown>).width === 'number' &&
+        typeof (parsed as Record<string, unknown>).depth === 'number' &&
+        typeof (parsed as Record<string, unknown>).height === 'number'
+      ) {
+        const p = parsed as Record<string, unknown>
+        const confidence = ['low', 'medium', 'high'].includes(p.confidence as string)
+          ? (p.confidence as AiDimensions['confidence'])
+          : 'low'
+        setAiResult({
+          width: p.width as number,
+          depth: p.depth as number,
+          height: p.height as number,
+          confidence,
+          notes: typeof p.notes === 'string' ? p.notes : '',
+        })
+      } else {
+        throw new Error('JSON invalide')
+      }
+    } catch (err) {
+      const msg = err instanceof SyntaxError
+        ? 'Analyse non concluante, ajustez manuellement'
+        : String((err as Error).message ?? err)
+      setAiError(msg)
+    } finally {
+      setAiLoading(false)
+    }
+  }
+
+  const handleAiApply = () => {
+    if (!aiResult) return
+    setBuilding({ width: aiResult.width, depth: aiResult.depth, height: aiResult.height })
+  }
+
+  const handleApiKeyChange = (val: string) => {
+    setAiApiKey(val)
+    localStorage.setItem('acoustiq_anthropic_key', val)
+  }
+
   // No sources state
   if (lwSources.length === 0) {
     return (
@@ -423,6 +582,136 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
               </div>
             ))}
           </div>
+        </div>
+
+        {/* Section IA photo analysis */}
+        <div className="px-3 py-2 border-b border-gray-800 space-y-2">
+          <button
+            onClick={() => setAiExpanded((v) => !v)}
+            className="w-full flex items-center gap-1.5 text-xs font-semibold text-gray-400 uppercase tracking-wide hover:text-gray-300 transition-colors"
+          >
+            <Camera size={13} />
+            <span className="flex-1 text-left">Affiner avec l'IA</span>
+            <span className="text-[10px] text-gray-600">{aiExpanded ? '▲' : '▼'}</span>
+          </button>
+
+          {aiExpanded && (
+            <div className="space-y-2">
+              {/* API key */}
+              <div>
+                <label className="text-[10px] text-gray-500 block mb-0.5">Clé API Anthropic</label>
+                <input
+                  type="password"
+                  value={aiApiKey}
+                  onChange={(e) => handleApiKeyChange(e.target.value)}
+                  placeholder="sk-ant-..."
+                  className="w-full bg-gray-900 border border-gray-700 rounded px-1.5 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none placeholder:text-gray-700"
+                />
+              </div>
+
+              {/* Photo upload */}
+              <div>
+                <label className="text-[10px] text-gray-500 block mb-1">Photos du bâtiment (max 3)</label>
+                <label className="flex items-center justify-center gap-1 text-xs text-gray-400 hover:text-gray-200 bg-gray-900 hover:bg-gray-800 border border-gray-700 border-dashed rounded px-2 py-2 cursor-pointer transition-colors">
+                  <Camera size={12} />
+                  {aiPhotos.length === 0 ? 'Analyser des photos' : `${aiPhotos.length} photo${aiPhotos.length > 1 ? 's' : ''}`}
+                  <input
+                    type="file"
+                    multiple
+                    accept="image/*"
+                    onChange={handlePhotoSelect}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+
+              {/* Photo thumbnails */}
+              {aiPhotoUrls.length > 0 && (
+                <div className="flex gap-1">
+                  {aiPhotoUrls.map((url, i) => (
+                    <div key={i} className="relative w-16 h-12 rounded overflow-hidden border border-gray-700">
+                      <img src={url} alt={`Photo ${i + 1}`} className="w-full h-full object-cover" />
+                    </div>
+                  ))}
+                  <button
+                    onClick={() => {
+                      aiPhotoUrls.forEach((u) => URL.revokeObjectURL(u))
+                      setAiPhotos([])
+                      setAiPhotoUrls([])
+                      setAiResult(null)
+                      setAiError(null)
+                    }}
+                    className="flex items-center justify-center w-6 h-12 text-gray-600 hover:text-gray-400 transition-colors"
+                    title="Retirer les photos"
+                  >
+                    <X size={12} />
+                  </button>
+                </div>
+              )}
+
+              {/* Analyze button */}
+              {aiPhotos.length > 0 && !aiResult && (
+                <button
+                  onClick={handleAiAnalyze}
+                  disabled={aiLoading || !aiApiKey.trim()}
+                  className="w-full flex items-center justify-center gap-1.5 text-xs font-medium bg-blue-600 hover:bg-blue-500 disabled:bg-gray-800 disabled:text-gray-600 text-white rounded px-2 py-1.5 transition-colors"
+                >
+                  {aiLoading ? (
+                    <>
+                      <Loader2 size={12} className="animate-spin" />
+                      Analyse en cours...
+                    </>
+                  ) : (
+                    'Analyser'
+                  )}
+                </button>
+              )}
+
+              {/* Error */}
+              {aiError && (
+                <div className="flex items-start gap-1.5 text-[11px] text-red-400 bg-red-950/30 border border-red-900/50 rounded px-2 py-1.5">
+                  <AlertTriangle size={12} className="shrink-0 mt-0.5" />
+                  <span>{aiError}</span>
+                </div>
+              )}
+
+              {/* Result */}
+              {aiResult && (
+                <div className="bg-gray-900 border border-gray-700 rounded p-2 space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[10px] text-gray-500 uppercase">Dimensions estimées</span>
+                    <span className={`text-[10px] font-medium ${CONFIDENCE_LABELS[aiResult.confidence].color}`}>
+                      {CONFIDENCE_LABELS[aiResult.confidence].label}
+                    </span>
+                  </div>
+                  <div className="grid grid-cols-3 gap-1 text-xs text-gray-300">
+                    <div className="text-center">
+                      <div className="text-gray-500 text-[10px]">Larg.</div>
+                      <div className="font-medium">{aiResult.width} m</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-gray-500 text-[10px]">Prof.</div>
+                      <div className="font-medium">{aiResult.depth} m</div>
+                    </div>
+                    <div className="text-center">
+                      <div className="text-gray-500 text-[10px]">Haut.</div>
+                      <div className="font-medium">{aiResult.height} m</div>
+                    </div>
+                  </div>
+                  {aiResult.notes && (
+                    <p className="text-[10px] text-gray-500 leading-tight">{aiResult.notes}</p>
+                  )}
+                  <button
+                    onClick={handleAiApply}
+                    className="w-full flex items-center justify-center gap-1 text-xs font-medium bg-green-700 hover:bg-green-600 text-white rounded px-2 py-1.5 transition-colors"
+                  >
+                    <Check size={12} />
+                    Appliquer au modèle
+                  </button>
+                </div>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Liste des sources */}

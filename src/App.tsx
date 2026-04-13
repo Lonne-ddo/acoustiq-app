@@ -195,7 +195,7 @@ const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
   carriere: 'outils',
   yamnet: 'outils',
   ecme: 'outils',
-  vue3d: 'rapport',
+  vue3d: 'outils',
 }
 
 const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
@@ -205,9 +205,9 @@ const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
     { id: 'report', label: 'Rapport' },
     { id: 'lw', label: 'Calcul Lw' },
     { id: 'concordance', label: 'Concordance' },
-    { id: 'vue3d', label: 'Vue 3D' },
   ],
   outils: [
+    { id: 'vue3d', label: 'Vue 3D' },
     { id: 'carriere', label: 'Carrière / Sablière' },
     { id: 'yamnet', label: 'Audio IA' },
     { id: 'ecme', label: 'Parc ECME' },

@@ -215,6 +215,17 @@ export interface Scene3DData {
   }>
   /** Bounding box OSM utilisé pour générer le modèle 3D */
   bbox?: { south: number; west: number; north: number; east: number }
+  /** Image satellite drapée sur le sol */
+  satelliteImage?: {
+    dataUrl: string        // image encodée en base64 data URL
+    opacity: number        // 0.0 à 1.0, défaut 0.8
+    bbox: {                // bbox de la zone OSM pour l'alignement
+      south: number
+      west: number
+      north: number
+      east: number
+    }
+  }
 }
 
 /** Structure d'un projet sauvegardé */

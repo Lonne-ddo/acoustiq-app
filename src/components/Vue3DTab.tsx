@@ -8,7 +8,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import L from 'leaflet'
 import 'leaflet/dist/leaflet.css'
-import { Box, RotateCcw, Eye, ArrowLeft, Search, Loader2, MapPin } from 'lucide-react'
+import { Box, RotateCcw, Eye, ArrowLeft, Search, Loader2, MapPin, ImageIcon, X, AlertTriangle } from 'lucide-react'
 import type { LwSourceSummary, Scene3DData } from '../types'
 
 // Fix default Leaflet icon bug
@@ -281,7 +281,12 @@ function MapMode({ onBuild, initialBbox }: {
 
 // --- 3D Mode ------------------------------------------------------------------
 
-function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selectedSourceId, setSelectedSourceId, onBack }: {
+interface SatelliteState {
+  dataUrl: string
+  opacity: number
+}
+
+function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selectedSourceId, setSelectedSourceId, onBack, satelliteImage, onSatelliteChange }: {
   buildings: BuildingFootprint[]
   bbox: BBox
   lwSources: LwSourceSummary[]
@@ -290,6 +295,8 @@ function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selec
   selectedSourceId: string | null
   setSelectedSourceId: React.Dispatch<React.SetStateAction<string | null>>
   onBack: () => void
+  satelliteImage: SatelliteState | null
+  onSatelliteChange: (sat: SatelliteState | null) => void
 }) {
   const canvasRef = useRef<HTMLDivElement>(null)
   const rendererRef = useRef<THREE.WebGLRenderer | null>(null)
@@ -297,9 +304,12 @@ function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selec
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null)
   const spheresRef = useRef<Map<string, THREE.Mesh>>(new Map())
   const groundRef = useRef<THREE.Mesh | null>(null)
+  const gridRef = useRef<THREE.GridHelper | null>(null)
   const roofMeshesRef = useRef<THREE.Mesh[]>([])
+  const satTextureRef = useRef<THREE.Texture | null>(null)
   const animFrameRef = useRef<number>(0)
   const [tooltip, setTooltip] = useState<{ x: number; y: number; text: string } | null>(null)
+  const [sizeWarning, setSizeWarning] = useState(false)
 
   // Scene dimensions in meters
   const centerLat = (bbox.south + bbox.north) / 2
@@ -344,18 +354,19 @@ function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selec
 
     // Ground
     const gndGeo = new THREE.PlaneGeometry(groundW * 1.3, groundD * 1.3)
-    const gndMat = new THREE.MeshStandardMaterial({ color: 0x4a6741, roughness: 0.9 })
+    const gndMat = new THREE.MeshLambertMaterial({ color: 0x4a5c3a })
     const ground = new THREE.Mesh(gndGeo, gndMat)
     ground.rotation.x = -Math.PI / 2
     ground.name = 'ground'
     scene.add(ground)
     groundRef.current = ground
 
-    // Grid
+    // Grid (visible only when no satellite image)
     const gridSize = Math.max(groundW, groundD) * 1.3
     const grid = new THREE.GridHelper(gridSize, Math.round(gridSize / 10), 0x555555, 0x333333)
     grid.position.y = 0.05
     scene.add(grid)
+    gridRef.current = grid
 
     // Buildings
     const buildingMat = new THREE.MeshStandardMaterial({ color: 0x888888, roughness: 0.6, metalness: 0.15 })
@@ -405,6 +416,8 @@ function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selec
       controls.dispose()
       renderer.dispose()
       if (container.contains(renderer.domElement)) container.removeChild(renderer.domElement)
+      // Dispose satellite texture if active
+      if (satTextureRef.current) { satTextureRef.current.dispose(); satTextureRef.current = null }
       scene.traverse((obj) => {
         if (obj instanceof THREE.Mesh) {
           obj.geometry.dispose()
@@ -415,6 +428,48 @@ function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selec
       })
     }
   }, [buildings, bbox, groundW, groundD])
+
+  // --- Satellite texture on ground ---
+  useEffect(() => {
+    const ground = groundRef.current
+    const grid = gridRef.current
+    if (!ground) return
+
+    if (satelliteImage) {
+      // Dispose previous texture
+      if (satTextureRef.current) { satTextureRef.current.dispose(); satTextureRef.current = null }
+
+      const texture = new THREE.TextureLoader().load(satelliteImage.dataUrl)
+      texture.wrapS = THREE.ClampToEdgeWrapping
+      texture.wrapT = THREE.ClampToEdgeWrapping
+      satTextureRef.current = texture
+
+      const oldMat = ground.material as THREE.Material
+      oldMat.dispose()
+      ground.material = new THREE.MeshLambertMaterial({
+        map: texture,
+        transparent: true,
+        opacity: satelliteImage.opacity,
+      })
+
+      if (grid) grid.visible = false
+    } else {
+      // Restore default ground
+      if (satTextureRef.current) { satTextureRef.current.dispose(); satTextureRef.current = null }
+      const oldMat = ground.material as THREE.Material
+      oldMat.dispose()
+      ground.material = new THREE.MeshLambertMaterial({ color: 0x4a5c3a })
+      if (grid) grid.visible = true
+    }
+  }, [satelliteImage?.dataUrl]) // only reload texture when image changes, not opacity
+
+  // --- Satellite opacity live update ---
+  useEffect(() => {
+    const ground = groundRef.current
+    if (!ground || !satelliteImage) return
+    const mat = ground.material as THREE.MeshLambertMaterial
+    if (mat.transparent) mat.opacity = satelliteImage.opacity
+  }, [satelliteImage?.opacity, satelliteImage])
 
   // --- Source spheres ---
   useEffect(() => {
@@ -616,6 +671,87 @@ function ThreeDMode({ buildings, bbox, lwSources, sources3D, setSources3D, selec
           })}
         </div>
 
+        {/* Satellite image section */}
+        <div className="px-3 py-2 border-t border-gray-800 space-y-2">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+            <ImageIcon size={12} /> Image satellite
+          </h3>
+
+          {!satelliteImage ? (
+            <>
+              <label className="flex items-center justify-center gap-1.5 text-xs text-gray-400 hover:text-gray-200 bg-gray-900 hover:bg-gray-800 border border-gray-700 border-dashed rounded px-2 py-2 cursor-pointer transition-colors">
+                <ImageIcon size={12} />
+                Importer une image satellite
+                <input
+                  type="file"
+                  accept="image/*,image/jpeg,image/png"
+                  className="hidden"
+                  onChange={(e) => {
+                    const file = e.target.files?.[0]
+                    if (!file) return
+                    if (file.size > 5 * 1024 * 1024) setSizeWarning(true)
+                    else setSizeWarning(false)
+                    const reader = new FileReader()
+                    reader.onload = () => {
+                      onSatelliteChange({ dataUrl: reader.result as string, opacity: 0.8 })
+                    }
+                    reader.readAsDataURL(file)
+                    e.target.value = ''
+                  }}
+                />
+              </label>
+              {sizeWarning && (
+                <div className="flex items-start gap-1 text-[10px] text-amber-400">
+                  <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+                  <span>Image volumineuse (&gt;5 Mo) — le projet sera plus lourd.</span>
+                </div>
+              )}
+              <p className="text-[10px] text-gray-600 leading-tight">
+                Capturez la zone depuis Google Earth ou Maps et importez l'image. Elle sera automatiquement alignée sur la zone OSM sélectionnée.
+              </p>
+            </>
+          ) : (
+            <>
+              {/* Preview + remove */}
+              <div className="relative">
+                <img
+                  src={satelliteImage.dataUrl}
+                  alt="Satellite"
+                  className="w-full rounded border border-gray-700 object-cover"
+                  style={{ maxHeight: 80 }}
+                />
+                <button
+                  onClick={() => { onSatelliteChange(null); setSizeWarning(false) }}
+                  className="absolute top-1 right-1 bg-gray-900/80 hover:bg-red-900/80 text-gray-400 hover:text-red-300 rounded-full p-0.5 transition-colors"
+                  title="Supprimer l'image"
+                >
+                  <X size={12} />
+                </button>
+              </div>
+              {sizeWarning && (
+                <div className="flex items-start gap-1 text-[10px] text-amber-400">
+                  <AlertTriangle size={10} className="shrink-0 mt-0.5" />
+                  <span>Image volumineuse (&gt;5 Mo) — le projet sera plus lourd.</span>
+                </div>
+              )}
+              {/* Opacity slider */}
+              <div className="flex items-center gap-2">
+                <label className="text-[10px] text-gray-500 shrink-0">Opacité</label>
+                <input
+                  type="range"
+                  min={0}
+                  max={1}
+                  step={0.05}
+                  value={satelliteImage.opacity}
+                  onChange={(e) => onSatelliteChange({ ...satelliteImage, opacity: parseFloat(e.target.value) })}
+                  className="flex-1 h-1 accent-blue-500"
+                />
+                <span className="text-[10px] text-gray-400 w-7 text-right">{Math.round(satelliteImage.opacity * 100)}%</span>
+              </div>
+            </>
+          )}
+        </div>
+
         {lwSources.length > 0 && (
           <div className="px-3 py-2 border-t border-gray-800">
             <button
@@ -644,6 +780,10 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   const [loading, setLoading] = useState(false)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
+  const [satellite, setSatellite] = useState<SatelliteState | null>(() => {
+    if (scene3D?.satelliteImage) return { dataUrl: scene3D.satelliteImage.dataUrl, opacity: scene3D.satelliteImage.opacity }
+    return null
+  })
 
   const [sources3D, setSources3D] = useState<Source3D[]>(() => {
     if (scene3D?.sources) return scene3D.sources
@@ -659,12 +799,13 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   }, [lwSources])
 
   // Persist to parent
-  const persistScene = useCallback((bx: BBox | undefined, srcs: Source3D[]) => {
+  const persistScene = useCallback((bx: BBox | undefined, srcs: Source3D[], sat: SatelliteState | null) => {
     const bld = scene3D?.building ?? { width: 120, depth: 70, height: 15 }
-    onScene3DChange({ building: bld, sources: srcs, bbox: bx })
+    const satData = sat && bx ? { dataUrl: sat.dataUrl, opacity: sat.opacity, bbox: bx } : undefined
+    onScene3DChange({ building: bld, sources: srcs, bbox: bx, satelliteImage: satData })
   }, [onScene3DChange, scene3D?.building])
 
-  useEffect(() => { persistScene(bbox, sources3D) }, [bbox, sources3D, persistScene])
+  useEffect(() => { persistScene(bbox, sources3D, satellite) }, [bbox, sources3D, satellite, persistScene])
 
   // Fetch buildings from Overpass when bbox saved + mode is 3d but no buildings loaded
   useEffect(() => {
@@ -773,6 +914,8 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
       selectedSourceId={selectedSourceId}
       setSelectedSourceId={setSelectedSourceId}
       onBack={handleBack}
+      satelliteImage={satellite}
+      onSatelliteChange={setSatellite}
     />
   )
 }

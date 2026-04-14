@@ -102,7 +102,8 @@ import Changelog from './components/Changelog'
 // Injecté par Vite (vite.config.ts → define)
 declare const __APP_VERSION__: string
 const APP_VERSION = __APP_VERSION__
-import { ToastProvider } from './components/Toast'
+import { ToastProvider, showToast } from './components/Toast'
+import { detectSessions, formatGap, GAP_STYLES } from './utils/sessionDetection'
 
 // Couleurs par point pour la bordure des cartes
 const POINT_COLORS: Record<string, string> = {
@@ -383,12 +384,52 @@ function FileList({ files, pointMap, pointLabels, allPoints, onPointChange, onPo
                 />
               </div>
             )}
-            {/* File cards */}
-            {!collapsed && (
-              <ul className="px-2 pb-2 space-y-1">
-                {ptFiles.map((f) => renderFileCard(f, false))}
-              </ul>
-            )}
+            {/* File cards groupés par session + séparateurs de discontinuité */}
+            {!collapsed && (() => {
+              const { sessions, gaps } = detectSessions(ptFiles)
+              if (sessions.length <= 1) {
+                return (
+                  <ul className="px-2 pb-2 space-y-1">
+                    {ptFiles.map((f) => renderFileCard(f, false))}
+                  </ul>
+                )
+              }
+              return (
+                <div className="px-2 pb-2 space-y-1">
+                  {sessions.map((sess, si) => {
+                    const h = Math.floor(sess.durationMin / 60)
+                    const m = Math.round(sess.durationMin % 60)
+                    const dur = h > 0 ? `${h}h${String(m).padStart(2, '0')}` : `${m} min`
+                    return (
+                      <div key={sess.index} className="space-y-0.5">
+                        <div className="flex items-center gap-1.5 text-[10px] text-gray-500 pt-1">
+                          <span className="px-1.5 py-0.5 bg-gray-800 border border-gray-700 rounded text-gray-400">
+                            Session {si + 1}
+                          </span>
+                          <span>{sess.files[0].date} · {dur}</span>
+                        </div>
+                        <ul className="space-y-1 pl-2 border-l-2 border-gray-800">
+                          {sess.files.map((f) => renderFileCard(f, false))}
+                        </ul>
+                        {gaps[si] && (() => {
+                          const gap = gaps[si]
+                          if (gap.severity === 'none') return null
+                          const style = GAP_STYLES[gap.severity]
+                          return (
+                            <div className={`flex items-center gap-1.5 text-[10px] my-1 py-1 px-2 border rounded ${style.border} ${style.text} bg-gray-900/60`}>
+                              <span className="shrink-0">⚠</span>
+                              <span className="flex-1">
+                                Discontinuité {style.label} — {formatGap(gap.gapMin)} sans données
+                              </span>
+                            </div>
+                          )
+                        })()}
+                      </div>
+                    )
+                  })}
+                </div>
+              )
+            })()}
           </div>
         )
       })}
@@ -466,6 +507,20 @@ interface SidebarProps {
   onAudioLoaded: (audio: AudioFile) => void
   onAudioRemove: () => void
   onAudioSeek: (timeMin: number) => void
+  groupSuggestions: GroupSuggestion[]
+  onAcceptSuggestion: (s: GroupSuggestion) => void
+  onDismissSuggestion: (s: GroupSuggestion) => void
+  onAcceptAllSuggestions: () => void
+}
+
+export interface GroupSuggestion {
+  serial: string
+  model: string
+  suggestedPoint: string
+  fileIds: string[]
+  continuousDurationMin: number
+  startISO: string
+  endISO: string
 }
 
 /**
@@ -519,6 +574,7 @@ function Sidebar({
   onDetectCandidates, onConfirmCandidate, onDismissCandidate,
   onSaveProject, onLoadProject, onParseFiles,
   onAudioLoaded, onAudioRemove, onAudioSeek,
+  groupSuggestions, onAcceptSuggestion, onDismissSuggestion, onAcceptAllSuggestions,
 }: SidebarProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const projectInputRef = useRef<HTMLInputElement>(null)
@@ -755,6 +811,55 @@ function Sidebar({
             </div>
           )}
 
+          {groupSuggestions.length > 0 && (
+            <div className="mb-3 rounded border border-emerald-700/50 bg-emerald-950/30 p-2 space-y-1.5">
+              <p className="text-[11px] font-semibold text-emerald-300">
+                {groupSuggestions.reduce((sum, s) => sum + s.fileIds.length, 0)} fichiers détectés →
+                {' '}{groupSuggestions.length} point{groupSuggestions.length > 1 ? 's' : ''} de mesure
+              </p>
+              <div className="space-y-0.5">
+                {groupSuggestions.map((s) => {
+                  const h = Math.floor(s.continuousDurationMin / 60)
+                  const m = Math.round(s.continuousDurationMin % 60)
+                  const dur = h > 0 ? `${h}h${String(m).padStart(2, '0')}` : `${m} min`
+                  return (
+                    <div key={s.serial} className="flex items-center gap-1.5 text-[10px] text-gray-300">
+                      <span className="flex-1 truncate">
+                        <span className="text-emerald-300 font-medium">{s.suggestedPoint}</span>
+                        {' · '}{s.fileIds.length} fich. · {dur} continus
+                      </span>
+                      <button
+                        onClick={() => onAcceptSuggestion(s)}
+                        className="text-emerald-300 hover:text-emerald-200"
+                        aria-label="Accepter le regroupement"
+                        title="Accepter"
+                      >✓</button>
+                      <button
+                        onClick={() => onDismissSuggestion(s)}
+                        className="text-gray-500 hover:text-gray-300"
+                        aria-label="Ignorer"
+                        title="Ignorer"
+                      >✕</button>
+                    </div>
+                  )
+                })}
+              </div>
+              <div className="flex gap-1.5 pt-1 border-t border-emerald-900/40">
+                <button
+                  onClick={onAcceptAllSuggestions}
+                  className="flex-1 text-[10px] bg-emerald-700 hover:bg-emerald-600 text-white rounded px-2 py-1 transition-colors"
+                >
+                  Tout confirmer
+                </button>
+                <button
+                  onClick={() => { for (const s of groupSuggestions) onDismissSuggestion(s) }}
+                  className="flex-1 text-[10px] bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-400 rounded px-2 py-1 transition-colors"
+                >
+                  Tout ignorer
+                </button>
+              </div>
+            </div>
+          )}
           {files.length === 0 ? (
             <div className="text-center text-gray-500 text-sm py-3 px-2">
               <FileAudio size={28} className="mx-auto mb-2 opacity-30" />
@@ -1571,12 +1676,29 @@ export default function App() {
     return [...pts].sort()
   }, [files, pointMap])
 
+  // Suggestion de regroupement en attente (bannière dans la sidebar).
+  const [groupSuggestions, setGroupSuggestions] = useState<GroupSuggestion[]>([])
+
   // ---- Handlers fichiers ----
   const handleFilesAdded = useCallback((newFiles: MeasurementFile[]) => {
     let accepted: MeasurementFile[] = []
     setFiles((prev) => {
-      const existing = new Set(prev.map((f) => `${f.name}|${f.date}`))
-      accepted = newFiles.filter((f) => !existing.has(`${f.name}|${f.date}`))
+      // Doublon : même nom de fichier OU (même série + mêmes start/stop)
+      const byName = new Set(prev.map((f) => f.name))
+      const bySerialRange = new Set(
+        prev.filter((f) => f.serial).map((f) => `${f.serial}|${f.date}|${f.startTime}|${f.stopTime}`),
+      )
+      accepted = []
+      for (const f of newFiles) {
+        const key = `${f.serial}|${f.date}|${f.startTime}|${f.stopTime}`
+        if (byName.has(f.name) || (f.serial && bySerialRange.has(key))) {
+          showToast(`Fichier déjà importé : ${f.name}`, 'info')
+          continue
+        }
+        byName.add(f.name)
+        if (f.serial) bySerialRange.add(key)
+        accepted.push(f)
+      }
       return [...prev, ...accepted]
     })
     // Auto-assigner le dernier point utilisé si un seul point existe
@@ -1595,19 +1717,16 @@ export default function App() {
     setLoading(false)
     setLoadProgress(0)
 
-    // Auto-détection : fichiers avec même numéro de série ET chronologiquement
-    // contigus (gap < 5 min entre stopTime et startTime suivant).
+    // Détection de regroupement : propose via une bannière (pas de confirm bloquant).
     setTimeout(() => {
       autoDetectGroupingRef.current(accepted)
     }, 0)
   }, [])
 
-  // Détection + proposition de regroupement — exécuté après l'ajout de fichiers.
-  // Accède à pointMap et handleCreatePoint via ref pour éviter les closures périmées.
+  // Détection de regroupement → met à jour groupSuggestions (bannière non bloquante).
   const autoDetectGrouping = (incoming: MeasurementFile[]) => {
     if (incoming.length < 2) return
     const currentPointMap = pointMapRef.current
-    // Grouper par série (ignorer fichiers sans série)
     const bySerial = new Map<string, MeasurementFile[]>()
     for (const f of incoming) {
       const s = (f.serial || '').trim()
@@ -1615,47 +1734,57 @@ export default function App() {
       if (!bySerial.has(s)) bySerial.set(s, [])
       bySerial.get(s)!.push(f)
     }
+    const suggestions: GroupSuggestion[] = []
     for (const [serial, group] of bySerial) {
       if (group.length < 2) continue
-      // Aucun fichier ne doit déjà être assigné à un point
-      const alreadyAssigned = group.some((f) => currentPointMap[f.id])
-      if (alreadyAssigned) continue
-      // Trier par (date, startTime) puis vérifier la contiguïté
-      const sorted = [...group].sort((a, b) =>
-        `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`),
-      )
-      let contiguous = true
-      for (let i = 1; i < sorted.length; i++) {
-        const prevStop = Date.parse(`${sorted[i - 1].date}T${sorted[i - 1].stopTime}`)
-        const nextStart = Date.parse(`${sorted[i].date}T${sorted[i].startTime}`)
-        if (!isFinite(prevStop) || !isFinite(nextStart)) { contiguous = false; break }
-        const gapMin = (nextStart - prevStop) / 60000
-        if (gapMin > 5 || gapMin < -5) { contiguous = false; break }
-      }
-      if (!contiguous) continue
+      if (group.some((f) => currentPointMap[f.id])) continue
+      const { sessions } = detectSessions(group)
+      // Ne propose que si une seule session continue (≤ 5 min gap entre chaque fichier).
+      if (sessions.length !== 1) continue
+      const sorted = sessions[0].files
       const model = sorted[0].model || '831C'
-      const suggested = `${model}-${serial}`
-      const ok = window.confirm(
-        `${group.length} fichiers semblent appartenir au même point :\n\n` +
-        `• Série : ${serial}\n` +
-        `• Modèle : ${model}\n` +
-        `• Plages : ${sorted[0].date} ${sorted[0].startTime} → ${sorted[sorted.length - 1].date} ${sorted[sorted.length - 1].stopTime}\n\n` +
-        `Les regrouper sous le point « ${suggested} » ?`,
-      )
-      if (!ok) continue
-      // Créer le point s'il n'existe pas et l'assigner
-      handleCreatePoint(suggested)
-      setPointMap((prev) => {
-        const next = { ...prev }
-        for (const f of sorted) next[f.id] = suggested
-        return next
+      suggestions.push({
+        serial,
+        model,
+        suggestedPoint: `${model}-${serial}`,
+        fileIds: sorted.map((f) => f.id),
+        continuousDurationMin: sessions[0].durationMin,
+        startISO: sessions[0].startISO,
+        endISO: sessions[0].endISO,
       })
     }
+    if (suggestions.length > 0) setGroupSuggestions((prev) => [...prev, ...suggestions])
   }
   const autoDetectGroupingRef = useRef(autoDetectGrouping)
   autoDetectGroupingRef.current = autoDetectGrouping
   const pointMapRef = useRef(pointMap)
   pointMapRef.current = pointMap
+
+  function acceptGroupSuggestion(s: GroupSuggestion) {
+    handleCreatePoint(s.suggestedPoint)
+    setPointMap((prev) => {
+      const next = { ...prev }
+      for (const id of s.fileIds) next[id] = s.suggestedPoint
+      return next
+    })
+    setGroupSuggestions((prev) => prev.filter((x) => x.serial !== s.serial))
+    showToast(`Regroupés sous « ${s.suggestedPoint} »`, 'success')
+  }
+  function dismissGroupSuggestion(s: GroupSuggestion) {
+    setGroupSuggestions((prev) => prev.filter((x) => x.serial !== s.serial))
+  }
+  function acceptAllGroupSuggestions() {
+    for (const s of groupSuggestions) {
+      handleCreatePoint(s.suggestedPoint)
+    }
+    setPointMap((prev) => {
+      const next = { ...prev }
+      for (const s of groupSuggestions) for (const id of s.fileIds) next[id] = s.suggestedPoint
+      return next
+    })
+    setGroupSuggestions([])
+    showToast(`${groupSuggestions.length} regroupement${groupSuggestions.length > 1 ? 's' : ''} appliqué${groupSuggestions.length > 1 ? 's' : ''}`, 'success')
+  }
 
   // All known point names (default + custom + any from pointMap)
   const allPoints = useMemo(() => {
@@ -2131,6 +2260,10 @@ export default function App() {
         onAudioLoaded={setAudioFile}
         onAudioRemove={() => setAudioFile(null)}
         onAudioSeek={handleAudioSeek}
+        groupSuggestions={groupSuggestions}
+        onAcceptSuggestion={acceptGroupSuggestion}
+        onDismissSuggestion={dismissGroupSuggestion}
+        onAcceptAllSuggestions={acceptAllGroupSuggestions}
       />
       )}
       <MainPanel

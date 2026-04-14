@@ -23,6 +23,12 @@ export function useToast() {
   return useContext(ToastContext)
 }
 
+/** Dispatcher utilisable hors d'un composant (ex. handlers de App.tsx). */
+let globalToastDispatch: ((message: string, type?: ToastType) => void) | null = null
+export function showToast(message: string, type: ToastType = 'info') {
+  globalToastDispatch?.(message, type)
+}
+
 const ICONS: Record<ToastType, React.ReactNode> = {
   success: <CheckCircle size={14} className="text-emerald-400 shrink-0" />,
   error: <AlertCircle size={14} className="text-red-400 shrink-0" />,
@@ -42,6 +48,11 @@ export function ToastProvider({ children }: { children: React.ReactNode }) {
     const id = crypto.randomUUID()
     setToasts((prev) => [...prev, { id, message, type }])
   }, [])
+
+  useEffect(() => {
+    globalToastDispatch = addToast
+    return () => { globalToastDispatch = null }
+  }, [addToast])
 
   const removeToast = useCallback((id: string) => {
     setToasts((prev) => prev.filter((t) => t.id !== id))

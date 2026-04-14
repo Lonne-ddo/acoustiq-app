@@ -280,8 +280,11 @@ function FileList({ files, pointMap, pointLabels, allPoints, onPointChange, onPo
             <X size={10} />
           </button>
         </div>
-        <p className="text-[10px] text-gray-500">
-          {f.startTime} → {f.stopTime} · {f.rowCount} pts
+        <p
+          className="text-[10px] text-gray-500"
+          title={`Modèle ${f.model || '—'} · Série ${f.serial || '—'} · ${f.rowCount.toLocaleString('fr-FR')} mesures 1 s`}
+        >
+          {f.startTime} → {f.stopTime} · {f.rowCount.toLocaleString('fr-FR')} mesures
         </p>
         {showAssign && (
           <div className="mt-1.5 space-y-1">
@@ -1134,9 +1137,14 @@ function MainPanel({
 
       {/* Contenu selon l'onglet */}
       {effectiveTab === 'chart' && (
-        <div ref={containerRef} className="flex-1 flex flex-col min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+        <div className="flex-1 flex flex-col min-h-0 overflow-y-auto animate-[fadeIn_0.15s_ease-out]">
           {hasChart ? (
             <>
+              <div
+                ref={containerRef}
+                className="flex flex-col shrink-0"
+                style={{ height: 'min(70vh, 720px)', minHeight: 380 }}
+              >
               <div style={{ height: `${chartPct}%` }} className="min-h-0 shrink-0">
                 <TimeSeriesChart
                   files={chartFiles}
@@ -1178,7 +1186,10 @@ function MainPanel({
               </div>
 
               {/* Spectrogramme embarqué (collapsible) */}
-              <div className="border-t border-gray-800 bg-gray-900/40 flex-1 min-h-0 flex flex-col">
+              <div
+                className="border-t border-gray-800 bg-gray-900/40 flex-1 min-h-0 flex flex-col"
+                style={{ minHeight: spectrogramExpanded ? 140 : undefined }}
+              >
                 <button
                   onClick={onSpectrogramToggle}
                   className="w-full flex items-center gap-2 px-6 py-1.5 text-xs text-gray-400
@@ -1193,7 +1204,7 @@ function MainPanel({
                   </span>
                 </button>
                 {spectrogramExpanded && (
-                  <div className="flex-1 min-h-0">
+                  <div className="flex-1 min-h-0" style={{ minHeight: 120 }}>
                     <Spectrogram
                       files={chartFiles}
                       pointMap={pointMap}
@@ -1209,8 +1220,11 @@ function MainPanel({
                 )}
               </div>
 
+              </div>
               {!presentationMode && (
-                <IndicesPanel files={chartFiles} pointMap={pointMap} selectedDate={selectedDate} meteo={meteo} aggregationSeconds={aggregationSeconds} />
+                <div className="shrink-0">
+                  <IndicesPanel files={chartFiles} pointMap={pointMap} selectedDate={selectedDate} meteo={meteo} aggregationSeconds={aggregationSeconds} />
+                </div>
               )}
             </>
           ) : (
@@ -1557,9 +1571,11 @@ export default function App() {
 
   // ---- Handlers fichiers ----
   const handleFilesAdded = useCallback((newFiles: MeasurementFile[]) => {
+    let accepted: MeasurementFile[] = []
     setFiles((prev) => {
       const existing = new Set(prev.map((f) => `${f.name}|${f.date}`))
-      return [...prev, ...newFiles.filter((f) => !existing.has(`${f.name}|${f.date}`))]
+      accepted = newFiles.filter((f) => !existing.has(`${f.name}|${f.date}`))
+      return [...prev, ...accepted]
     })
     // Auto-assigner le dernier point utilisé si un seul point existe
     setPointMap((prevMap) => {
@@ -1576,7 +1592,68 @@ export default function App() {
     })
     setLoading(false)
     setLoadProgress(0)
+
+    // Auto-détection : fichiers avec même numéro de série ET chronologiquement
+    // contigus (gap < 5 min entre stopTime et startTime suivant).
+    setTimeout(() => {
+      autoDetectGroupingRef.current(accepted)
+    }, 0)
   }, [])
+
+  // Détection + proposition de regroupement — exécuté après l'ajout de fichiers.
+  // Accède à pointMap et handleCreatePoint via ref pour éviter les closures périmées.
+  const autoDetectGrouping = (incoming: MeasurementFile[]) => {
+    if (incoming.length < 2) return
+    const currentPointMap = pointMapRef.current
+    // Grouper par série (ignorer fichiers sans série)
+    const bySerial = new Map<string, MeasurementFile[]>()
+    for (const f of incoming) {
+      const s = (f.serial || '').trim()
+      if (!s) continue
+      if (!bySerial.has(s)) bySerial.set(s, [])
+      bySerial.get(s)!.push(f)
+    }
+    for (const [serial, group] of bySerial) {
+      if (group.length < 2) continue
+      // Aucun fichier ne doit déjà être assigné à un point
+      const alreadyAssigned = group.some((f) => currentPointMap[f.id])
+      if (alreadyAssigned) continue
+      // Trier par (date, startTime) puis vérifier la contiguïté
+      const sorted = [...group].sort((a, b) =>
+        `${a.date}T${a.startTime}`.localeCompare(`${b.date}T${b.startTime}`),
+      )
+      let contiguous = true
+      for (let i = 1; i < sorted.length; i++) {
+        const prevStop = Date.parse(`${sorted[i - 1].date}T${sorted[i - 1].stopTime}`)
+        const nextStart = Date.parse(`${sorted[i].date}T${sorted[i].startTime}`)
+        if (!isFinite(prevStop) || !isFinite(nextStart)) { contiguous = false; break }
+        const gapMin = (nextStart - prevStop) / 60000
+        if (gapMin > 5 || gapMin < -5) { contiguous = false; break }
+      }
+      if (!contiguous) continue
+      const model = sorted[0].model || '831C'
+      const suggested = `${model}-${serial}`
+      const ok = window.confirm(
+        `${group.length} fichiers semblent appartenir au même point :\n\n` +
+        `• Série : ${serial}\n` +
+        `• Modèle : ${model}\n` +
+        `• Plages : ${sorted[0].date} ${sorted[0].startTime} → ${sorted[sorted.length - 1].date} ${sorted[sorted.length - 1].stopTime}\n\n` +
+        `Les regrouper sous le point « ${suggested} » ?`,
+      )
+      if (!ok) continue
+      // Créer le point s'il n'existe pas et l'assigner
+      handleCreatePoint(suggested)
+      setPointMap((prev) => {
+        const next = { ...prev }
+        for (const f of sorted) next[f.id] = suggested
+        return next
+      })
+    }
+  }
+  const autoDetectGroupingRef = useRef(autoDetectGrouping)
+  autoDetectGroupingRef.current = autoDetectGrouping
+  const pointMapRef = useRef(pointMap)
+  pointMapRef.current = pointMap
 
   // All known point names (default + custom + any from pointMap)
   const allPoints = useMemo(() => {

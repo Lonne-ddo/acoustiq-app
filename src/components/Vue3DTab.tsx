@@ -8,7 +8,7 @@ import type { StyleSpecification, GeoJSONSource, MapMouseEvent } from 'maplibre-
 import 'maplibre-gl/dist/maplibre-gl.css'
 import {
   RotateCcw, Target, Eye, Compass, Loader2, Search, Pencil, X, Trash2,
-  MapPin, StickyNote, Plus, Info, Edit3, Crosshair,
+  MapPin, StickyNote, Plus, Info, Edit3, Crosshair, Box, ArrowLeft,
 } from 'lucide-react'
 import type { LwSourceSummary, Scene3DData } from '../types'
 import ContextMenu from './ContextMenu'
@@ -231,6 +231,7 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   const [drawVersion, setDrawVersion] = useState(0) // bump to trigger draft GeoJSON refresh
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
+  const [focusedZoneId, setFocusedZoneId] = useState<string | null>(null)
 
   pendingSelectionRef.current = selectedSourceId
   drawingRef.current = drawing
@@ -383,6 +384,26 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     mapRef.current?.dragPan.enable()
   }, [])
 
+  // Focus 3D : cadre la zone et bascule en vue 3D inclinée
+  const focus3DOnZone = useCallback((zoneId: string) => {
+    const zone = zones.find((z) => z.id === zoneId)
+    const map = mapRef.current
+    if (!zone || !map) return
+    const bounds = new maplibregl.LngLatBounds()
+    for (const [lng, lat] of zone.coords) bounds.extend([lng, lat])
+    setPitch(60)
+    setBearing(0)
+    setFocusedZoneId(zoneId)
+    map.fitBounds(bounds, { padding: 70, pitch: 60, bearing: 0, duration: 900, maxZoom: 19 })
+  }, [zones])
+
+  const exit3DFocus = useCallback(() => {
+    setFocusedZoneId(null)
+    setPitch(INITIAL_PITCH)
+    setBearing(0)
+    mapRef.current?.easeTo({ pitch: INITIAL_PITCH, bearing: 0, duration: 500 })
+  }, [])
+
   const startDrawing = useCallback(() => {
     const map = mapRef.current
     if (!map) return
@@ -430,6 +451,13 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
           'fill-extrusion-opacity': 0.92,
           'fill-extrusion-vertical-gradient': true,
         },
+      })
+
+      // Masque de focus 3D : polygone monde troué par la zone focus
+      map.addSource('zone-mask', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      map.addLayer({
+        id: 'zone-mask-fill', type: 'fill', source: 'zone-mask',
+        paint: { 'fill-color': '#000000', 'fill-opacity': 0.55 },
       })
 
       // Zones (finalized polygons)
@@ -728,6 +756,44 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     ;(map.getSource('annotations') as GeoJSONSource | undefined)?.setData(buildAnnotationsGeoJSON())
   }, [buildAnnotationsGeoJSON])
 
+  // Clear focus si la zone ciblée n'existe plus
+  useEffect(() => {
+    if (focusedZoneId && !zones.some((z) => z.id === focusedZoneId)) {
+      setFocusedZoneId(null)
+    }
+  }, [zones, focusedZoneId])
+
+  // Mask focus 3D : outer monde + zone en trou
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) return
+    const src = map.getSource('zone-mask') as GeoJSONSource | undefined
+    if (!src) return
+    if (!focusedZoneId) {
+      src.setData({ type: 'FeatureCollection', features: [] })
+      return
+    }
+    const zone = zones.find((z) => z.id === focusedZoneId)
+    if (!zone) { src.setData({ type: 'FeatureCollection', features: [] }); return }
+    const outer: [number, number][] = [
+      [-180, -85], [180, -85], [180, 85], [-180, 85], [-180, -85],
+    ]
+    const hole: [number, number][] = [...zone.coords]
+    if (hole.length > 0) {
+      const f = hole[0], l = hole[hole.length - 1]
+      if (f[0] !== l[0] || f[1] !== l[1]) hole.push(f)
+    }
+    hole.reverse() // exterior CCW, hole CW
+    src.setData({
+      type: 'FeatureCollection',
+      features: [{
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [outer, hole] },
+        properties: {},
+      }],
+    })
+  }, [focusedZoneId, zones])
+
   // --- Navigation controls ---
   const handlePitchChange = (v: number) => { setPitch(v); mapRef.current?.easeTo({ pitch: v, duration: 200 }) }
   const handleBearingChange = (v: number) => { setBearing(v); mapRef.current?.easeTo({ bearing: v, duration: 200 }) }
@@ -926,6 +992,24 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
         {/* Map */}
         <div ref={mapContainerRef} className="flex-1 relative" style={{ minHeight: 600 }} />
 
+        {/* Bandeau focus modèle 3D */}
+        {focusedZoneId && (() => {
+          const z = zones.find((x) => x.id === focusedZoneId)
+          if (!z) return null
+          return (
+            <div className="absolute top-14 left-1/2 -translate-x-1/2 bg-gray-950/95 border border-emerald-600 rounded px-3 py-1.5 text-xs text-emerald-300 shadow-lg z-10 flex items-center gap-2">
+              <Box size={12} />
+              Modèle 3D — {z.name} · {buildingCount} bâtiment{buildingCount > 1 ? 's' : ''}
+              <button
+                onClick={exit3DFocus}
+                className="ml-2 text-xs text-gray-300 hover:text-gray-100 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-0.5 flex items-center gap-1 transition-colors"
+              >
+                <ArrowLeft size={11} /> Retour à la carte
+              </button>
+            </div>
+          )
+        })()}
+
         {/* Drawing hint overlay */}
         {drawing && (
           <div className="absolute top-14 left-1/2 -translate-x-1/2 bg-gray-950/95 border border-blue-600 rounded px-3 py-1.5 text-xs text-blue-300 shadow-lg z-10 flex items-center gap-2">
@@ -1005,21 +1089,37 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
             {drawing ? <><X size={11} /> Annuler le tracé</> : <><Pencil size={11} /> Tracer une zone</>}
           </button>
           {zones.length > 0 && (
-            <div className="space-y-1 max-h-32 overflow-y-auto">
-              {zones.map((z) => (
-                <div key={z.id} className="flex items-center gap-1.5 text-[11px] text-gray-400 bg-gray-900 border border-gray-800 rounded px-2 py-1">
-                  <span className="inline-block w-2 h-2 rounded-sm bg-blue-500 shrink-0" />
-                  <span className="flex-1 truncate">{z.name}</span>
-                  <span className="text-[10px] text-gray-600 shrink-0">{z.coords.length} pts</span>
-                  <button
-                    onClick={() => act.deleteZone(z.id)}
-                    className="text-gray-500 hover:text-red-400"
-                    aria-label="Supprimer la zone"
-                  >
-                    <Trash2 size={11} />
-                  </button>
-                </div>
-              ))}
+            <div className="space-y-1.5 max-h-56 overflow-y-auto">
+              {zones.map((z) => {
+                const isFocused = focusedZoneId === z.id
+                return (
+                  <div key={z.id} className={`bg-gray-900 border rounded px-2 py-1.5 space-y-1 ${isFocused ? 'border-emerald-600/80' : 'border-gray-800'}`}>
+                    <div className="flex items-center gap-1.5 text-[11px] text-gray-400">
+                      <span className="inline-block w-2 h-2 rounded-sm bg-blue-500 shrink-0" />
+                      <span className="flex-1 truncate">{z.name}</span>
+                      <span className="text-[10px] text-gray-600 shrink-0">{z.coords.length} pts</span>
+                      <button
+                        onClick={() => { if (isFocused) exit3DFocus(); act.deleteZone(z.id) }}
+                        className="text-gray-500 hover:text-red-400"
+                        aria-label="Supprimer la zone"
+                      >
+                        <Trash2 size={11} />
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => isFocused ? exit3DFocus() : focus3DOnZone(z.id)}
+                      className={`w-full flex items-center justify-center gap-1.5 text-[10px] rounded px-2 py-1 border transition-colors ${
+                        isFocused
+                          ? 'bg-emerald-950/60 border-emerald-700 text-emerald-200 hover:bg-emerald-900/60'
+                          : 'bg-gray-800 border-gray-700 text-gray-300 hover:bg-gray-700'
+                      }`}
+                    >
+                      <Box size={10} />
+                      {isFocused ? 'Modèle 3D actif — sortir' : 'Générer le modèle 3D'}
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           )}
         </div>

@@ -6,7 +6,7 @@ import { useRef, useEffect, useState, useCallback } from 'react'
 import maplibregl from 'maplibre-gl'
 import type { StyleSpecification, GeoJSONSource, MapMouseEvent } from 'maplibre-gl'
 import 'maplibre-gl/dist/maplibre-gl.css'
-import { RotateCcw, Target, Eye, Compass, Loader2 } from 'lucide-react'
+import { RotateCcw, Target, Eye, Compass, Loader2, Search } from 'lucide-react'
 import type { LwSourceSummary, Scene3DData } from '../types'
 
 // --- Constants ----------------------------------------------------------------
@@ -137,6 +137,8 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   const [bearing, setBearing] = useState<number>(scene3D?.view?.bearing ?? 0)
   const [osmStatus, setOsmStatus] = useState<OsmStatus>('idle')
   const [buildingCount, setBuildingCount] = useState(0)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searching, setSearching] = useState(false)
 
   const [sources3D, setSources3D] = useState<Source3D[]>(() => {
     if (scene3D?.sources) return scene3D.sources.map((s) => ({
@@ -415,16 +417,57 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     setSelectedSourceId(null)
   }
 
+  const handleSearch = async () => {
+    const q = searchQuery.trim()
+    const map = mapRef.current
+    if (!q || !map) return
+    setSearching(true)
+    try {
+      const res = await fetch(
+        `https://nominatim.openstreetmap.org/search?format=json&limit=1&q=${encodeURIComponent(q)}`,
+      )
+      const results: Array<{ lat: string; lon: string }> = await res.json()
+      if (results.length > 0) {
+        const lat = parseFloat(results[0].lat)
+        const lon = parseFloat(results[0].lon)
+        map.flyTo({ center: [lon, lat], zoom: 16, duration: 800 })
+      }
+    } catch { /* ignore geocoding errors */ }
+    finally { setSearching(false) }
+  }
+
   const placedCount = sources3D.filter((s) => s.placed).length
 
   return (
     <div className="flex flex-1 min-h-0 overflow-hidden">
-      {/* Map */}
-      <div
-        ref={mapContainerRef}
-        className="flex-1 relative"
-        style={{ minHeight: 600 }}
-      />
+      {/* Map column (search bar + map) */}
+      <div className="flex-1 flex flex-col min-w-0">
+        {/* Search bar */}
+        <div className="flex items-center gap-2 px-4 py-2 bg-gray-950 border-b border-gray-800 shrink-0">
+          <Search size={14} className="text-gray-500 shrink-0" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+            placeholder="Rechercher un lieu (ville, adresse...)"
+            className="flex-1 bg-gray-900 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200 focus:border-blue-500 focus:outline-none"
+          />
+          <button
+            onClick={handleSearch}
+            disabled={searching || !searchQuery.trim()}
+            className="text-xs text-gray-400 hover:text-gray-200 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded px-3 py-1 transition-colors disabled:opacity-50"
+          >
+            {searching ? <Loader2 size={12} className="animate-spin" /> : 'Centrer'}
+          </button>
+        </div>
+        {/* Map */}
+        <div
+          ref={mapContainerRef}
+          className="flex-1 relative"
+          style={{ minHeight: 600 }}
+        />
+      </div>
 
       {/* Side panel */}
       <div className="w-[260px] shrink-0 border-l border-gray-800 bg-gray-950 flex flex-col overflow-hidden">

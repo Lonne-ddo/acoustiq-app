@@ -47,11 +47,20 @@ const MAP_STYLE: StyleSpecification = {
       tileSize: 256,
       maxzoom: 19,
     },
+    // Modèle d'élévation Terrarium (AWS) — gratuit, sans clé
+    'terrain-dem': {
+      type: 'raster-dem',
+      tiles: ['https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png'],
+      tileSize: 256,
+      encoding: 'terrarium',
+      maxzoom: 15,
+    },
   },
   layers: [
     { id: 'satellite', type: 'raster', source: 'satellite' },
     { id: 'satellite_labels', type: 'raster', source: 'satellite_labels', paint: { 'raster-opacity': 0.8 } },
   ],
+  terrain: { source: 'terrain-dem', exaggeration: 1.3 },
 }
 
 // --- Types --------------------------------------------------------------------
@@ -66,7 +75,16 @@ interface Source3D {
 interface BuildingFeature {
   type: 'Feature'
   geometry: { type: 'Polygon'; coordinates: number[][][] }
-  properties: { height: number }
+  properties: { height: number; color: string }
+}
+
+/** Nuance de gris clair déterministe à partir d'un identifiant. */
+function buildingColor(seed: string): string {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0
+  const v = 188 + (Math.abs(h) % 34) // 188-221 → #BCBCBC..#DDDDDD
+  const hex = v.toString(16).padStart(2, '0')
+  return `#${hex}${hex}${hex}`
 }
 
 interface Zone {
@@ -135,6 +153,7 @@ function parseOsmXmlToGeoJSON(xmlText: string): BuildingFeature[] {
 
   const features: BuildingFeature[] = []
   for (const way of xml.querySelectorAll('way')) {
+    const wayId = way.getAttribute('id') || ''
     const tags = way.querySelectorAll('tag')
     let isBuilding = false
     let heightTag: number | null = null
@@ -166,7 +185,7 @@ function parseOsmXmlToGeoJSON(xmlText: string): BuildingFeature[] {
     features.push({
       type: 'Feature',
       geometry: { type: 'Polygon', coordinates: [ring] },
-      properties: { height },
+      properties: { height, color: buildingColor(wayId) },
     })
   }
   return features
@@ -207,7 +226,8 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
 
   const [drawing, setDrawing] = useState(false)
   const drawingRef = useRef(false)
-  const drawPointsRef = useRef<[number, number][]>([])
+  const drawStartRef = useRef<[number, number] | null>(null)
+  const drawEndRef = useRef<[number, number] | null>(null)
   const [drawVersion, setDrawVersion] = useState(0) // bump to trigger draft GeoJSON refresh
 
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null)
@@ -280,28 +300,27 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     return { type: 'FeatureCollection', features }
   }, [zones])
 
-  const buildDraftGeoJSON = useCallback((): {
-    line: GeoJSON.FeatureCollection
-    vertices: GeoJSON.FeatureCollection
-  } => {
-    const pts = drawPointsRef.current
-    const line: GeoJSON.FeatureCollection = {
+  const buildDraftGeoJSON = useCallback((): GeoJSON.FeatureCollection => {
+    const s = drawStartRef.current
+    const e = drawEndRef.current
+    if (!s || !e) return { type: 'FeatureCollection', features: [] }
+    const minLng = Math.min(s[0], e[0]), maxLng = Math.max(s[0], e[0])
+    const minLat = Math.min(s[1], e[1]), maxLat = Math.max(s[1], e[1])
+    const ring: [number, number][] = [
+      [minLng, minLat],
+      [maxLng, minLat],
+      [maxLng, maxLat],
+      [minLng, maxLat],
+      [minLng, minLat],
+    ]
+    return {
       type: 'FeatureCollection',
-      features: pts.length >= 2 ? [{
+      features: [{
         type: 'Feature',
-        geometry: { type: 'LineString', coordinates: pts },
+        geometry: { type: 'Polygon', coordinates: [ring] },
         properties: {},
-      }] : [],
+      }],
     }
-    const vertices: GeoJSON.FeatureCollection = {
-      type: 'FeatureCollection',
-      features: pts.map((p, i) => ({
-        type: 'Feature',
-        geometry: { type: 'Point', coordinates: p },
-        properties: { idx: i },
-      })),
-    }
-    return { line, vertices }
   }, [])
 
   const buildMpointsGeoJSON = useCallback((): GeoJSON.FeatureCollection => ({
@@ -355,34 +374,27 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     }
   }, [])
 
-  // --- Drawing helpers ---
-  const finalizeZone = useCallback(() => {
-    const pts = drawPointsRef.current
-    // Last click of dblclick duplicates the previous vertex; drop it if close enough.
-    let cleaned = pts.slice()
-    if (cleaned.length >= 2) {
-      const a = cleaned[cleaned.length - 1]
-      const b = cleaned[cleaned.length - 2]
-      if (Math.abs(a[0] - b[0]) < 1e-9 && Math.abs(a[1] - b[1]) < 1e-9) cleaned.pop()
-    }
-    if (cleaned.length < 3) {
-      // Not enough points — just cancel
-      drawPointsRef.current = []
-      setDrawing(false)
-      setDrawVersion((v) => v + 1)
-      return
-    }
-    const zone: Zone = { id: genId('zone'), name: `Zone ${zones.length + 1}`, coords: cleaned }
-    setZones((prev) => [...prev, zone])
-    drawPointsRef.current = []
-    setDrawing(false)
-    setDrawVersion((v) => v + 1)
-  }, [zones.length])
-
+  // --- Drawing helpers (rectangle drag) ---
   const cancelDrawing = useCallback(() => {
-    drawPointsRef.current = []
+    drawStartRef.current = null
+    drawEndRef.current = null
     setDrawing(false)
     setDrawVersion((v) => v + 1)
+    mapRef.current?.dragPan.enable()
+  }, [])
+
+  const startDrawing = useCallback(() => {
+    const map = mapRef.current
+    if (!map) return
+    // Vue dessus automatique
+    setPitch(0)
+    setBearing(0)
+    map.easeTo({ pitch: 0, bearing: 0, duration: 350 })
+    drawStartRef.current = null
+    drawEndRef.current = null
+    setDrawing(true)
+    setDrawVersion((v) => v + 1)
+    map.dragPan.disable()
   }, [])
 
   // --- Map initialization ---
@@ -412,10 +424,11 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
       map.addLayer({
         id: 'buildings-3d', type: 'fill-extrusion', source: 'osm-buildings',
         paint: {
-          'fill-extrusion-color': '#9ca3af',
+          'fill-extrusion-color': ['coalesce', ['get', 'color'], '#c8c8c8'],
           'fill-extrusion-height': ['get', 'height'],
           'fill-extrusion-base': 0,
-          'fill-extrusion-opacity': 0.85,
+          'fill-extrusion-opacity': 0.92,
+          'fill-extrusion-vertical-gradient': true,
         },
       })
 
@@ -430,21 +443,15 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
         paint: { 'line-color': '#3b82f6', 'line-width': 2 },
       })
 
-      // Zone draft
-      map.addSource('zone-draft-line', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      // Zone draft (rectangle en cours de tracé)
+      map.addSource('zone-draft', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
       map.addLayer({
-        id: 'zone-draft-line', type: 'line', source: 'zone-draft-line',
-        paint: { 'line-color': '#60a5fa', 'line-width': 2, 'line-dasharray': [2, 2] },
+        id: 'zone-draft-fill', type: 'fill', source: 'zone-draft',
+        paint: { 'fill-color': '#60a5fa', 'fill-opacity': 0.15 },
       })
-      map.addSource('zone-draft-vertices', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
       map.addLayer({
-        id: 'zone-draft-vertices', type: 'circle', source: 'zone-draft-vertices',
-        paint: {
-          'circle-radius': 5,
-          'circle-color': '#60a5fa',
-          'circle-stroke-width': 2,
-          'circle-stroke-color': '#ffffff',
-        },
+        id: 'zone-draft-outline', type: 'line', source: 'zone-draft',
+        paint: { 'line-color': '#60a5fa', 'line-width': 2, 'line-dasharray': [2, 2] },
       })
 
       // Measurement points
@@ -537,19 +544,11 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
       moveTimerRef.current = setTimeout(() => { fetchOsmBuildings() }, 1000)
     })
 
-    // --- Left-click handler ---
+    // --- Left-click : sélection / placement de source (hors mode tracé) ---
     const onClick = (e: MapMouseEvent) => {
-      // Close any context menu on left click
       setContextMenu(null)
+      if (drawingRef.current) return // le tracé se fait via mousedown/move/up
 
-      // Drawing mode: add vertex
-      if (drawingRef.current) {
-        drawPointsRef.current = [...drawPointsRef.current, [e.lngLat.lng, e.lngLat.lat]]
-        setDrawVersion((v) => v + 1)
-        return
-      }
-
-      // Existing behaviour: select/place source
       const features = map.queryRenderedFeatures(e.point, { layers: ['src-dot', 'src-halo'] })
       if (features.length > 0) {
         const id = features[0].properties?.id as string | undefined
@@ -582,14 +581,47 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     }
     map.on('click', onClick)
 
-    // --- Double-click: close polygon ---
-    const onDblClick = (e: MapMouseEvent) => {
-      if (drawingRef.current) {
-        e.preventDefault() // block default zoom
-        finalizeZone()
-      }
+    // --- Tracé de zone : mousedown / mousemove / mouseup (rectangle drag) ---
+    const onMouseDown = (e: MapMouseEvent) => {
+      if (!drawingRef.current) return
+      drawStartRef.current = [e.lngLat.lng, e.lngLat.lat]
+      drawEndRef.current = [e.lngLat.lng, e.lngLat.lat]
+      setDrawVersion((v) => v + 1)
     }
-    map.on('dblclick', onDblClick)
+    const onMouseMove = (e: MapMouseEvent) => {
+      if (!drawingRef.current || !drawStartRef.current) return
+      drawEndRef.current = [e.lngLat.lng, e.lngLat.lat]
+      setDrawVersion((v) => v + 1)
+    }
+    const onMouseUp = (e: MapMouseEvent) => {
+      if (!drawingRef.current || !drawStartRef.current) return
+      const s = drawStartRef.current
+      const end: [number, number] = [e.lngLat.lng, e.lngLat.lat]
+      const minLng = Math.min(s[0], end[0]), maxLng = Math.max(s[0], end[0])
+      const minLat = Math.min(s[1], end[1]), maxLat = Math.max(s[1], end[1])
+      // Rejeter rectangles dégénérés (< ~1 m)
+      if ((maxLng - minLng) < 1e-5 || (maxLat - minLat) < 1e-5) {
+        cancelDrawing()
+        return
+      }
+      const coords: [number, number][] = [
+        [minLng, minLat],
+        [maxLng, minLat],
+        [maxLng, maxLat],
+        [minLng, maxLat],
+      ]
+      const defaultName = `Zone ${zones.length + 1}`
+      const name = window.prompt('Nom de la zone :', defaultName)?.trim() || defaultName
+      setZones((prev) => [...prev, { id: genId('zone'), name, coords }])
+      drawStartRef.current = null
+      drawEndRef.current = null
+      setDrawing(false)
+      setDrawVersion((v) => v + 1)
+      map.dragPan.enable()
+    }
+    map.on('mousedown', onMouseDown)
+    map.on('mousemove', onMouseMove)
+    map.on('mouseup', onMouseUp)
 
     // --- Right-click: context menu ---
     const onContextMenu = (e: MapMouseEvent) => {
@@ -627,7 +659,9 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
       if (moveTimerRef.current) clearTimeout(moveTimerRef.current)
       container.removeEventListener('contextmenu', suppressNative)
       map.off('click', onClick)
-      map.off('dblclick', onDblClick)
+      map.off('mousedown', onMouseDown)
+      map.off('mousemove', onMouseMove)
+      map.off('mouseup', onMouseUp)
       map.off('contextmenu', onContextMenu)
       map.remove()
       mapRef.current = null
@@ -679,9 +713,7 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   useEffect(() => {
     const map = mapRef.current
     if (!map || !map.isStyleLoaded()) return
-    const { line, vertices } = buildDraftGeoJSON()
-    ;(map.getSource('zone-draft-line') as GeoJSONSource | undefined)?.setData(line)
-    ;(map.getSource('zone-draft-vertices') as GeoJSONSource | undefined)?.setData(vertices)
+    ;(map.getSource('zone-draft') as GeoJSONSource | undefined)?.setData(buildDraftGeoJSON())
   }, [drawVersion, buildDraftGeoJSON])
 
   useEffect(() => {
@@ -898,7 +930,7 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
         {drawing && (
           <div className="absolute top-14 left-1/2 -translate-x-1/2 bg-gray-950/95 border border-blue-600 rounded px-3 py-1.5 text-xs text-blue-300 shadow-lg z-10 flex items-center gap-2">
             <Pencil size={12} />
-            Clic gauche pour ajouter un sommet · Double-clic pour fermer · Échap pour annuler
+            Cliquez-glissez sur la carte pour définir un rectangle · Relâchez pour valider · Échap pour annuler
             <button
               onClick={cancelDrawing}
               className="ml-2 text-gray-400 hover:text-gray-200"
@@ -962,7 +994,7 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
           </h3>
           <button
             onClick={() => {
-              if (drawing) { cancelDrawing() } else { drawPointsRef.current = []; setDrawing(true); setDrawVersion((v) => v + 1) }
+              if (drawing) cancelDrawing(); else startDrawing()
             }}
             className={`w-full flex items-center justify-center gap-1.5 text-[11px] border rounded px-2 py-1.5 transition-colors ${
               drawing

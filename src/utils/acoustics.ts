@@ -49,6 +49,163 @@ export function detectRisingEvents(
 }
 
 /**
+ * Détection d'événements acoustiquement significatifs sur la base d'une
+ * émergence par rapport au bruit de fond local (moyenne glissante 60 s).
+ *
+ * Algorithme :
+ *   1. Pour chaque instant t, calcul d'une moyenne énergétique glissante
+ *      sur ±baselineSec/2 secondes (bruit de fond local).
+ *   2. Marque les instants où LAeq − baseline ≥ emergenceDb.
+ *   3. Conserve les runs continus de durée ≥ minDurationSec.
+ *   4. Fusionne deux runs séparés de moins de mergeGapSec.
+ *   5. Caractérise chaque événement (LAeq énergétique, LAFmax, émergence).
+ *
+ * Les données doivent être échantillonnées à 1 s (typique 831C/821SE).
+ */
+export interface DetectedEvent {
+  /** Heure de début HH:MM */
+  time: string
+  /** Heure de fin HH:MM */
+  endTime: string
+  /** Minutes depuis minuit (début/fin) */
+  tStartMin: number
+  tEndMin: number
+  /** Durée en secondes */
+  durationSec: number
+  /** LAeq énergétique sur l'événement (dB(A)) */
+  laeq: number
+  /** LAFmax sur l'événement (dB(A)) */
+  lafmax: number
+  /** Bruit de fond local moyen (dB(A)) */
+  baseline: number
+  /** Émergence (dB) = laeq − baseline */
+  emergence: number
+}
+
+function fmtHHMM(tMin: number): string {
+  const h = Math.floor(tMin / 60) % 24
+  const m = Math.floor(tMin % 60)
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+}
+
+export function detectEmergenceEvents(
+  data: Array<{ t: number; laeq: number }>,
+  options: {
+    /** Seuil d'émergence en dB (défaut 6) */
+    emergenceDb?: number
+    /** Durée minimale d'émergence continue en s (défaut 10) */
+    minDurationSec?: number
+    /** Fusion d'événements séparés de moins de N s (défaut 30) */
+    mergeGapSec?: number
+    /** Fenêtre de calcul du bruit de fond en s (défaut 60) */
+    baselineSec?: number
+  } = {},
+): DetectedEvent[] {
+  const emergenceDb = options.emergenceDb ?? 6
+  const minDurationSec = options.minDurationSec ?? 10
+  const mergeGapSec = options.mergeGapSec ?? 30
+  const baselineSec = options.baselineSec ?? 60
+
+  if (data.length < 2) return []
+  const sorted = [...data]
+    .filter((d) => Number.isFinite(d.t) && Number.isFinite(d.laeq))
+    .sort((a, b) => a.t - b.t)
+  if (sorted.length < 2) return []
+
+  const halfWinMin = baselineSec / 2 / 60
+
+  // Baseline énergétique glissante (fenêtre ±halfWin) — O(n) avec deux pointeurs.
+  const baseline = new Array<number>(sorted.length)
+  let lo = 0
+  let hi = 0
+  let sumLin = 0
+  for (let i = 0; i < sorted.length; i++) {
+    const tMin = sorted[i].t
+    while (hi < sorted.length && sorted[hi].t <= tMin + halfWinMin) {
+      sumLin += Math.pow(10, sorted[hi].laeq / 10)
+      hi++
+    }
+    while (lo < hi && sorted[lo].t < tMin - halfWinMin) {
+      sumLin -= Math.pow(10, sorted[lo].laeq / 10)
+      lo++
+    }
+    const n = hi - lo
+    baseline[i] = n > 0 ? 10 * Math.log10(sumLin / n) : sorted[i].laeq
+  }
+
+  // Détection des runs : segments contigus où laeq − baseline ≥ emergenceDb.
+  // Tolérance de continuité : on autorise un trou < 2 s (échantillonnage 1 s).
+  type Run = { iStart: number; iEnd: number }
+  const runs: Run[] = []
+  let cur: Run | null = null
+  for (let i = 0; i < sorted.length; i++) {
+    const above = sorted[i].laeq - baseline[i] >= emergenceDb
+    if (above) {
+      if (!cur) cur = { iStart: i, iEnd: i }
+      else cur.iEnd = i
+    } else if (cur) {
+      runs.push(cur)
+      cur = null
+    }
+  }
+  if (cur) runs.push(cur)
+
+  // Filtre par durée minimale
+  const longEnough = runs.filter((r) => {
+    const durSec = (sorted[r.iEnd].t - sorted[r.iStart].t) * 60
+    return durSec >= minDurationSec
+  })
+
+  // Fusion des runs proches
+  const merged: Run[] = []
+  for (const r of longEnough) {
+    const last = merged[merged.length - 1]
+    if (last) {
+      const gapSec = (sorted[r.iStart].t - sorted[last.iEnd].t) * 60
+      if (gapSec < mergeGapSec) {
+        last.iEnd = r.iEnd
+        continue
+      }
+    }
+    merged.push({ ...r })
+  }
+
+  // Caractérisation
+  const out: DetectedEvent[] = []
+  for (const r of merged) {
+    let sumLin2 = 0
+    let maxL = -Infinity
+    let sumBaseLin = 0
+    let n = 0
+    for (let i = r.iStart; i <= r.iEnd; i++) {
+      sumLin2 += Math.pow(10, sorted[i].laeq / 10)
+      sumBaseLin += Math.pow(10, baseline[i] / 10)
+      if (sorted[i].laeq > maxL) maxL = sorted[i].laeq
+      n++
+    }
+    if (n === 0) continue
+    const laeq = 10 * Math.log10(sumLin2 / n)
+    const baseAvg = 10 * Math.log10(sumBaseLin / n)
+    const tStartMin = sorted[r.iStart].t
+    const tEndMin = sorted[r.iEnd].t
+    const durationSec = Math.max(1, Math.round((tEndMin - tStartMin) * 60))
+    out.push({
+      time: fmtHHMM(tStartMin),
+      endTime: fmtHHMM(tEndMin),
+      tStartMin,
+      tEndMin,
+      durationSec,
+      laeq,
+      lafmax: maxL,
+      baseline: baseAvg,
+      emergence: laeq - baseAvg,
+    })
+  }
+
+  return out
+}
+
+/**
  * Calcule la moyenne énergétique (LAeq) d'un tableau de niveaux en dB.
  * Filtre les valeurs NaN/null/Infinity en amont (robustesse parsing).
  */

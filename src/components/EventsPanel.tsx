@@ -16,6 +16,12 @@ const PRESET_COLORS = [
   '#a855f7', // purple
 ]
 
+export interface DetectParams {
+  emergenceDb: number
+  minDurationSec: number
+  mergeGapSec: number
+}
+
 interface Props {
   events: SourceEvent[]
   availableDates: string[]
@@ -31,6 +37,17 @@ interface Props {
   onAnnotationUpdate: (id: string, text: string) => void
   pendingAnnotationText: string | null
   onPendingAnnotationChange: (text: string | null) => void
+  detectParams: DetectParams
+  onDetectParamsChange: (p: DetectParams) => void
+}
+
+const MAX_CANDIDATES_DISPLAYED = 50
+
+function formatDurationCandidate(sec: number): string {
+  if (sec < 60) return `${sec}s`
+  const m = Math.floor(sec / 60)
+  const s = sec % 60
+  return s === 0 ? `${m}min` : `${m}min${s}s`
 }
 
 export default function EventsPanel({
@@ -38,6 +55,7 @@ export default function EventsPanel({
   candidates, onDetect, onConfirmCandidate, onDismissCandidate,
   annotations, onAnnotationAdd, onAnnotationRemove, onAnnotationUpdate,
   pendingAnnotationText, onPendingAnnotationChange,
+  detectParams, onDetectParamsChange,
 }: Props) {
   const [label, setLabel] = useState('')
   const [time, setTime] = useState('00:00')
@@ -110,29 +128,78 @@ export default function EventsPanel({
                        bg-orange-900/40 hover:bg-orange-900/60 disabled:opacity-30
                        border border-orange-800/60 text-xs font-medium text-orange-300
                        transition-colors"
-            title="Détecte les montées ≥ 6 dB en 60 s sur tous les points assignés"
+            title="Détecte les émergences ≥ seuil dB sur le bruit de fond local (60 s)"
           >
             <Sparkles size={12} />
             Détecter événements
           </button>
+
+          {/* Paramètres configurables */}
+          <div className="bg-gray-800/40 border border-gray-700/50 rounded-md p-2 space-y-1.5">
+            <div>
+              <div className="flex items-center justify-between text-[10px] text-gray-400">
+                <span>Seuil d'émergence</span>
+                <span className="text-orange-300 font-mono">{detectParams.emergenceDb} dB</span>
+              </div>
+              <input
+                type="range"
+                min={3}
+                max={15}
+                step={1}
+                value={detectParams.emergenceDb}
+                onChange={(e) => onDetectParamsChange({ ...detectParams, emergenceDb: Number(e.target.value) })}
+                className="w-full accent-orange-500"
+              />
+            </div>
+            <div>
+              <div className="flex items-center justify-between text-[10px] text-gray-400">
+                <span>Durée minimale</span>
+                <span className="text-orange-300 font-mono">{detectParams.minDurationSec} s</span>
+              </div>
+              <input
+                type="range"
+                min={5}
+                max={60}
+                step={1}
+                value={detectParams.minDurationSec}
+                onChange={(e) => onDetectParamsChange({ ...detectParams, minDurationSec: Number(e.target.value) })}
+                className="w-full accent-orange-500"
+              />
+            </div>
+            <div>
+              <div className="flex items-center justify-between text-[10px] text-gray-400">
+                <span>Fusion si écart &lt;</span>
+                <span className="text-orange-300 font-mono">{detectParams.mergeGapSec} s</span>
+              </div>
+              <input
+                type="range"
+                min={10}
+                max={120}
+                step={5}
+                value={detectParams.mergeGapSec}
+                onChange={(e) => onDetectParamsChange({ ...detectParams, mergeGapSec: Number(e.target.value) })}
+                className="w-full accent-orange-500"
+              />
+            </div>
+          </div>
 
           {candidates.length > 0 && (
             <div className="bg-orange-950/20 border border-orange-900/40 rounded-md p-2 space-y-1">
               <p className="text-xs font-semibold text-orange-300 uppercase tracking-wider">
                 Candidats détectés ({candidates.length})
               </p>
-              <ul className="space-y-1 max-h-48 overflow-y-auto">
-                {candidates.map((c) => (
+              <ul className="space-y-1 max-h-72 overflow-y-auto">
+                {candidates.slice(0, MAX_CANDIDATES_DISPLAYED).map((c) => (
                   <li
                     key={c.id}
                     className="flex items-center gap-1.5 bg-gray-900/60 rounded px-2 py-1"
                   >
                     <div className="flex-1 min-w-0">
                       <p className="text-xs text-gray-200 truncate">
-                        {c.point} · +{c.delta.toFixed(1)} dB
+                        {c.point} · {c.time}{c.endTime ? `→${c.endTime}` : ''} · +{c.delta.toFixed(1)} dB · {c.laeq.toFixed(1)} dB(A){c.durationSec ? ` · ${formatDurationCandidate(c.durationSec)}` : ''}
                       </p>
                       <p className="text-[10px] text-gray-500">
-                        {c.day} · {c.time} · {c.laeq.toFixed(1)} dB(A)
+                        {c.day}{c.lafmax ? ` · LAFmax ${c.lafmax.toFixed(1)} dB(A)` : ''}{c.baseline ? ` · fond ${c.baseline.toFixed(1)} dB(A)` : ''}
                       </p>
                     </div>
                     <button
@@ -152,6 +219,11 @@ export default function EventsPanel({
                   </li>
                 ))}
               </ul>
+              {candidates.length > MAX_CANDIDATES_DISPLAYED && (
+                <p className="text-[10px] text-gray-500 italic pt-1 border-t border-orange-900/30">
+                  et {candidates.length - MAX_CANDIDATES_DISPLAYED} autres événements moins significatifs
+                </p>
+              )}
             </div>
           )}
 

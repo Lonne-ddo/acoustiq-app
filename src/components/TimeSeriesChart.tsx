@@ -216,6 +216,10 @@ interface Props {
   audioOffsetMin?: number
   /** Labels personnalisés par point (ex: { "BV-94": "Récepteur Nord" }) */
   pointLabels?: Record<string, string>
+  /** Points masqués (toggle global légende/sidebar) */
+  hiddenPoints?: Set<string>
+  /** Toggle visibilité d'un point (légende cliquable) */
+  onTogglePointVisibility?: (pt: string) => void
 }
 
 /** Format court d'une date ISO en français : "2026-03-09" → "09 mars" */
@@ -257,6 +261,8 @@ export default function TimeSeriesChart({
   audioSegments,
   audioOffsetMin = 0,
   pointLabels = {},
+  hiddenPoints,
+  onTogglePointVisibility,
 }: Props) {
   // Affichage des données météo (vent) sur le graphique
   const [showWind, setShowWind] = useState(false)
@@ -269,7 +275,7 @@ export default function TimeSeriesChart({
   const chartAreaRef = useRef<HTMLDivElement>(null)
   const [dragging, setDragging] = useState(false)
   const [exporting, setExporting] = useState(false)
-  const [hiddenLines, setHiddenLines] = useState<Set<string>>(new Set())
+  const [localHiddenLines, setLocalHiddenLines] = useState<Set<string>>(new Set())
   const dragStartX = useRef(0)
   const dragStartRange = useRef<ZoomRange | null>(null)
 
@@ -464,6 +470,16 @@ export default function TimeSeriesChart({
     })
     return out
   }, [pointNames, renderedDates, filesByPointDate, selectedDate, pointColors, pointLabels])
+
+  // Set des keys masquées : dérivé du set "par point" lifté à App, fusionné
+  // avec l'état local (legacy si pas de prop).
+  const hiddenLines = useMemo<Set<string>>(() => {
+    const s = new Set<string>(localHiddenLines)
+    if (hiddenPoints) {
+      for (const spec of lineSpecs) if (hiddenPoints.has(spec.pt)) s.add(spec.key)
+    }
+    return s
+  }, [localHiddenLines, hiddenPoints, lineSpecs])
 
   /** Compatibilité : "filesByPoint" pour la date principale uniquement (utilisé par sélection/comparaison) */
   const filesByPoint = useMemo(() => {
@@ -1287,7 +1303,12 @@ export default function TimeSeriesChart({
                     (typeof e === 'object' && e && 'dataKey' in e && (e as { dataKey?: string }).dataKey) ||
                     (typeof e === 'object' && e && 'value' in e ? String((e as { value?: string }).value) : '')
                   if (!key) return
-                  setHiddenLines((prev) => {
+                  if (onTogglePointVisibility) {
+                    const spec = lineSpecs.find((s) => s.key === key)
+                    if (spec) onTogglePointVisibility(spec.pt)
+                    return
+                  }
+                  setLocalHiddenLines((prev) => {
                     const next = new Set(prev)
                     if (next.has(key)) next.delete(key)
                     else next.add(key)

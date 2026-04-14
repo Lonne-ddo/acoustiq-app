@@ -61,7 +61,7 @@ import { EMPTY_ECME_STATE, type EcmePageState } from './utils/ecmeParser'
 import WorkflowGuide from './components/WorkflowGuide'
 import type { ClassifiedSegment } from './utils/yamnetProcessor'
 import {
-  detectRisingEvents,
+  detectEmergenceEvents,
   laeqAvg,
   computeL10,
   computeL50,
@@ -230,7 +230,7 @@ function formatDuration(totalSeconds: number): string {
   return `${m}min`
 }
 
-function FileList({ files, pointMap, pointLabels, allPoints, onPointChange, onPointLabelChange, onFileRemove, onCreatePoint }: {
+function FileList({ files, pointMap, pointLabels, allPoints, onPointChange, onPointLabelChange, onFileRemove, onCreatePoint, hiddenPoints, onTogglePointVisibility }: {
   files: MeasurementFile[]
   pointMap: Record<string, string>
   pointLabels: Record<string, string>
@@ -239,6 +239,8 @@ function FileList({ files, pointMap, pointLabels, allPoints, onPointChange, onPo
   onPointLabelChange: (point: string, label: string) => void
   onFileRemove: (fileId: string) => void
   onCreatePoint: (name: string) => void
+  hiddenPoints: Set<string>
+  onTogglePointVisibility: (pt: string) => void
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
   const [newPointInput, setNewPointInput] = useState<string | null>(null) // file ID awaiting new point
@@ -348,22 +350,35 @@ function FileList({ files, pointMap, pointLabels, allPoints, onPointChange, onPo
         const collapsed = collapsedGroups[pt] ?? false
         const color = POINT_COLORS[pt] ?? '#6b7280'
         const label = pointLabels[pt] || pt
+        const hidden = hiddenPoints.has(pt)
         return (
-          <div key={pt} className="rounded-md border border-gray-700/60 overflow-hidden">
+          <div
+            key={pt}
+            className={`rounded-md border border-gray-700/60 overflow-hidden transition-opacity ${hidden ? 'opacity-30' : ''}`}
+          >
             {/* Group header */}
-            <button
-              onClick={() => toggleGroup(pt)}
-              className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-gray-800/60 transition-colors"
-            >
-              <div className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: color }} />
-              <ChevronDown size={10} className={`text-gray-500 transition-transform shrink-0 ${collapsed ? '-rotate-90' : ''}`} />
-              <span className="text-[11px] font-semibold text-gray-200 truncate flex-1" title={label}>
-                {label}
-              </span>
-              <span className="text-[10px] text-gray-500 shrink-0">
-                {ptFiles.length} fich. · {groupDuration(ptFiles)}
-              </span>
-            </button>
+            <div className="w-full flex items-center gap-2 px-3 py-2 hover:bg-gray-800/60 transition-colors">
+              <button
+                onClick={(e) => { e.stopPropagation(); onTogglePointVisibility(pt) }}
+                className="w-3 h-3 rounded-full shrink-0 border border-transparent hover:border-gray-400 transition-colors"
+                style={{ backgroundColor: color, opacity: hidden ? 0.4 : 1 }}
+                title={hidden ? `Afficher ${label}` : `Masquer ${label}`}
+                aria-label={hidden ? `Afficher ${label}` : `Masquer ${label}`}
+                aria-pressed={hidden}
+              />
+              <button
+                onClick={() => toggleGroup(pt)}
+                className="flex items-center gap-2 flex-1 text-left min-w-0"
+              >
+                <ChevronDown size={10} className={`text-gray-500 transition-transform shrink-0 ${collapsed ? '-rotate-90' : ''}`} />
+                <span className="text-[11px] font-semibold text-gray-200 truncate flex-1" title={label}>
+                  {label}
+                </span>
+                <span className="text-[10px] text-gray-500 shrink-0">
+                  {ptFiles.length} fich. · {groupDuration(ptFiles)}
+                </span>
+              </button>
+            </div>
             {/* Editable label row */}
             {!collapsed && (
               <div className="px-3 pb-1">
@@ -511,6 +526,10 @@ interface SidebarProps {
   onAcceptSuggestion: (s: GroupSuggestion) => void
   onDismissSuggestion: (s: GroupSuggestion) => void
   onAcceptAllSuggestions: () => void
+  hiddenPoints: Set<string>
+  onTogglePointVisibility: (pt: string) => void
+  detectParams: { emergenceDb: number; minDurationSec: number; mergeGapSec: number }
+  onDetectParamsChange: (p: { emergenceDb: number; minDurationSec: number; mergeGapSec: number }) => void
 }
 
 export interface GroupSuggestion {
@@ -575,6 +594,8 @@ function Sidebar({
   onSaveProject, onLoadProject, onParseFiles,
   onAudioLoaded, onAudioRemove, onAudioSeek,
   groupSuggestions, onAcceptSuggestion, onDismissSuggestion, onAcceptAllSuggestions,
+  hiddenPoints, onTogglePointVisibility,
+  detectParams, onDetectParamsChange,
 }: SidebarProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const projectInputRef = useRef<HTMLInputElement>(null)
@@ -875,6 +896,8 @@ function Sidebar({
               onPointLabelChange={onPointLabelChange}
               onCreatePoint={onCreatePoint}
               onFileRemove={onFileRemove}
+              hiddenPoints={hiddenPoints}
+              onTogglePointVisibility={onTogglePointVisibility}
             />
           )}
 
@@ -911,6 +934,8 @@ function Sidebar({
               onAnnotationUpdate={onAnnotationUpdate}
               pendingAnnotationText={pendingAnnotationText}
               onPendingAnnotationChange={onPendingAnnotationChange}
+              detectParams={detectParams}
+              onDetectParamsChange={onDetectParamsChange}
             />
           </div>
         </SidebarSection>
@@ -1023,6 +1048,8 @@ interface MainPanelProps {
   onScene3DChange: (data: Scene3DData) => void
   presentationMode: boolean
   onPresentationToggle: () => void
+  hiddenPoints: Set<string>
+  onTogglePointVisibility: (pt: string) => void
   onDateChange: (date: string) => void
   onTabChange: (tab: Tab) => void
   onCellChange: (eventId: string, point: string, state: ConcordanceState) => void
@@ -1053,11 +1080,13 @@ function MainPanel({
   carriereState, setCarriereState, ecmeState, setEcmeState,
   lwSources, onLwSourcesChange, scene3D, onScene3DChange,
   presentationMode, onPresentationToggle,
+  hiddenPoints, onTogglePointVisibility,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
 }: MainPanelProps) {
   const chartFiles = files.filter((f) => !!pointMap[f.id])
+  const visibleChartFiles = chartFiles.filter((f) => !hiddenPoints.has(pointMap[f.id]))
   const hasChart = chartFiles.length > 0
   const [showRecent, setShowRecent] = useState(false)
 
@@ -1280,6 +1309,8 @@ function MainPanel({
                   audioSegments={audioSegments}
                   audioOffsetMin={audioFile?.startOffsetMin ?? 0}
                   pointLabels={pointLabels}
+                  hiddenPoints={hiddenPoints}
+                  onTogglePointVisibility={onTogglePointVisibility}
                 />
               </div>
 
@@ -1313,7 +1344,7 @@ function MainPanel({
                 {spectrogramExpanded && (
                   <div className="flex-1 min-h-0" style={{ minHeight: 120 }}>
                     <Spectrogram
-                      files={chartFiles}
+                      files={visibleChartFiles}
                       pointMap={pointMap}
                       selectedDate={selectedDate}
                       availableDates={availableDates}
@@ -1330,7 +1361,7 @@ function MainPanel({
               </div>
               {!presentationMode && (
                 <div className="shrink-0">
-                  <IndicesPanel files={chartFiles} pointMap={pointMap} selectedDate={selectedDate} meteo={meteo} aggregationSeconds={aggregationSeconds} />
+                  <IndicesPanel files={visibleChartFiles} pointMap={pointMap} selectedDate={selectedDate} meteo={meteo} aggregationSeconds={aggregationSeconds} />
                 </div>
               )}
             </>
@@ -1584,6 +1615,17 @@ export default function App() {
   // Mode présentation : masque sidebar + barre d'onglets
   const [presentationMode, setPresentationMode] = useState(false)
 
+  // Visibilité des courbes par point (toggle via légende/sidebar)
+  const [hiddenPoints, setHiddenPoints] = useState<Set<string>>(new Set())
+  const togglePointVisibility = useCallback((pt: string) => {
+    setHiddenPoints((prev) => {
+      const next = new Set(prev)
+      if (next.has(pt)) next.delete(pt)
+      else next.add(pt)
+      return next
+    })
+  }, [])
+
   // Modal de comparaison de projets
   const [showComparison, setShowComparison] = useState(false)
 
@@ -1817,10 +1859,16 @@ export default function App() {
   function handleEventAdd(ev: SourceEvent) { setEvents((prev) => [...prev, ev]) }
   function handleEventRemove(id: string) { setEvents((prev) => prev.filter((ev) => ev.id !== id)) }
 
+  // Paramètres de détection d'événements (sliders sous le bouton)
+  const [detectParams, setDetectParams] = useState<{
+    emergenceDb: number
+    minDurationSec: number
+    mergeGapSec: number
+  }>({ emergenceDb: 6, minDurationSec: 10, mergeGapSec: 30 })
+
   // ---- Auto-détection des candidats événements ----
   const handleDetectCandidates = useCallback(() => {
     const out: CandidateEvent[] = []
-    // Grouper les fichiers par (point, date)
     const byPointDate = new Map<string, MeasurementFile[]>()
     for (const f of files) {
       const pt = pointMap[f.id]
@@ -1832,20 +1880,31 @@ export default function App() {
     for (const [key, fs] of byPointDate) {
       const [pt, day] = key.split('|')
       const data = fs.flatMap((f) => f.data).map((dp) => ({ t: dp.t, laeq: dp.laeq }))
-      const detected = detectRisingEvents(data, { minDeltaDb: 6, windowSec: 60 })
+      const detected = detectEmergenceEvents(data, {
+        emergenceDb: detectParams.emergenceDb,
+        minDurationSec: detectParams.minDurationSec,
+        mergeGapSec: detectParams.mergeGapSec,
+        baselineSec: 60,
+      })
       for (const d of detected) {
         out.push({
           id: crypto.randomUUID(),
           point: pt,
           day,
           time: d.time,
-          delta: d.delta,
+          endTime: d.endTime,
+          durationSec: d.durationSec,
+          delta: d.emergence,
           laeq: d.laeq,
+          lafmax: d.lafmax,
+          baseline: d.baseline,
         })
       }
     }
+    // Tri par émergence décroissante (les plus significatifs en premier)
+    out.sort((a, b) => b.delta - a.delta)
     setCandidates(out)
-  }, [files, pointMap])
+  }, [files, pointMap, detectParams])
 
   function handleConfirmCandidate(id: string) {
     const c = candidates.find((x) => x.id === id)
@@ -2264,6 +2323,10 @@ export default function App() {
         onAcceptSuggestion={acceptGroupSuggestion}
         onDismissSuggestion={dismissGroupSuggestion}
         onAcceptAllSuggestions={acceptAllGroupSuggestions}
+        hiddenPoints={hiddenPoints}
+        onTogglePointVisibility={togglePointVisibility}
+        detectParams={detectParams}
+        onDetectParamsChange={setDetectParams}
       />
       )}
       <MainPanel
@@ -2316,6 +2379,8 @@ export default function App() {
         onScene3DChange={setScene3D}
         presentationMode={presentationMode}
         onPresentationToggle={() => setPresentationMode((v) => !v)}
+        hiddenPoints={hiddenPoints}
+        onTogglePointVisibility={togglePointVisibility}
         onDateChange={setSelectedDate}
         onTabChange={setActiveTab}
         onCellChange={handleCellChange}

@@ -39,14 +39,24 @@ export interface SourceEvent {
 
 export type ConcordanceState = 'Confirmé' | 'Incertain' | 'Non visible'
 
-/** Candidat d'événement issu de la détection automatique (rise ≥ 6 dB en 60 s) */
+/** Candidat d'événement issu de la détection automatique (émergence sur bruit de fond local) */
 export interface CandidateEvent {
   id: string
   point: string  // nom du point de mesure (BV-94, etc.)
   day: string    // YYYY-MM-DD
-  time: string   // HH:MM
-  delta: number  // delta dB par rapport au plancher de la fenêtre
-  laeq: number   // valeur LAeq au pic
+  time: string   // HH:MM (début de l'événement)
+  /** Heure de fin HH:MM */
+  endTime?: string
+  /** Durée de l'événement en secondes */
+  durationSec?: number
+  /** Émergence dB = LAeq événement − bruit de fond local */
+  delta: number
+  /** LAeq énergétique sur la durée de l'événement (dB(A)) */
+  laeq: number
+  /** LAFmax pendant l'événement (dB(A)) */
+  lafmax?: number
+  /** Bruit de fond local (moyenne glissante) au moment de l'événement (dB(A)) */
+  baseline?: number
 }
 
 /** Annotation textuelle ancrée à un instant et un niveau dB sur le graphique */

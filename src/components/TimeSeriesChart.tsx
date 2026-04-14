@@ -25,7 +25,8 @@ import {
 } from 'recharts'
 import html2canvas from 'html2canvas'
 import { drawQrBadge } from '../utils/qrBadge'
-import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind } from 'lucide-react'
+import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3 } from 'lucide-react'
+import ContextMenu from './ContextMenu'
 import { ReferenceDot } from 'recharts'
 import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData } from '../types'
 import type { ClassifiedSegment } from '../utils/yamnetProcessor'
@@ -284,6 +285,12 @@ export default function TimeSeriesChart({
         x: number   // position pixel pour la popup
         y: number
       }
+    | null
+  >(null)
+
+  // ── Menu contextuel (clic droit) ──────────────────────────────────────────
+  const [chartMenu, setChartMenu] = useState<
+    | { x: number; y: number; tMin: number; inSelection: boolean; nearestLaeqByPoint: Record<string, number> }
     | null
   >(null)
 
@@ -1190,6 +1197,32 @@ export default function TimeSeriesChart({
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
         onDoubleClick={handleDoubleClick}
+        onContextMenu={(e) => {
+          e.preventDefault()
+          const rect = chartAreaRef.current?.getBoundingClientRect()
+          if (!rect) return
+          const xLocal = e.clientX - rect.left
+          const yLocal = e.clientY - rect.top
+          const tMin = xPxToMinutes(xLocal)
+          // Plage sélectionnée courante ?
+          const inSelection = !!selectionPopup &&
+            tMin >= selectionPopup.tStart && tMin <= selectionPopup.tEnd
+          // LAeq proche par point
+          const nearestLaeqByPoint: Record<string, number> = {}
+          if (visibleData.length > 0) {
+            let best = visibleData[0]
+            let bestDist = Math.abs(best.t - tMin)
+            for (const d of visibleData) {
+              const dist = Math.abs(d.t - tMin)
+              if (dist < bestDist) { best = d; bestDist = dist }
+            }
+            for (const spec of lineSpecs) {
+              const v = (best as unknown as Record<string, unknown>)[spec.key]
+              if (typeof v === 'number') nearestLaeqByPoint[spec.pt] = v
+            }
+          }
+          setChartMenu({ x: xLocal, y: yLocal, tMin, inSelection, nearestLaeqByPoint })
+        }}
       >
         <div ref={chartRef} className="h-full px-4 py-3">
           <ResponsiveContainer width="100%" height="100%">
@@ -1567,6 +1600,102 @@ export default function TimeSeriesChart({
               setSelectionPopup(null)
               setSelectionPx(null)
             }}
+          />
+        )}
+
+        {/* Menu contextuel clic droit */}
+        {chartMenu && (
+          <ContextMenu
+            x={chartMenu.x}
+            y={chartMenu.y}
+            items={(() => {
+              const tMin = chartMenu.tMin
+              const timeHHMM = minutesToHHMM(tMin)
+              const timeHHMMSS = minutesToHHMMSS(tMin)
+              const firstPoint = Object.keys(chartMenu.nearestLaeqByPoint)[0]
+              const firstLaeq = firstPoint !== undefined ? chartMenu.nearestLaeqByPoint[firstPoint] : undefined
+              if (chartMenu.inSelection && selectionPopup) {
+                return [
+                  {
+                    label: `Ajouter comme événement (${minutesToHHMM(selectionPopup.tStart)}–${minutesToHHMM(selectionPopup.tEnd)})`,
+                    icon: <Flag size={12} />,
+                    action: () => {
+                      const label = window.prompt('Nom de l\'événement :')
+                      if (!label || !label.trim()) return
+                      onAddEvent({
+                        id: crypto.randomUUID(),
+                        label: label.trim(),
+                        time: minutesToHHMM(selectionPopup.tStart),
+                        day: selectedDate,
+                        color: '#f43f5e',
+                      })
+                      setSelectionPopup(null)
+                      setSelectionPx(null)
+                    },
+                  },
+                  {
+                    label: 'Effacer la sélection',
+                    icon: <Trash2 size={12} />,
+                    danger: true,
+                    action: () => { setSelectionPopup(null); setSelectionPx(null) },
+                  },
+                ]
+              }
+              return [
+                {
+                  label: `Annoter ce moment (${timeHHMMSS})`,
+                  icon: <StickyNote size={12} />,
+                  action: () => {
+                    const text = window.prompt('Texte de l\'annotation :')
+                    if (!text || !text.trim()) return
+                    onAnnotationPlace({
+                      id: crypto.randomUUID(),
+                      text: text.trim(),
+                      time: timeHHMMSS,
+                      day: selectedDate,
+                      laeq: firstLaeq !== undefined ? Math.round(firstLaeq * 10) / 10 : 0,
+                      color: '#fbbf24',
+                    })
+                  },
+                },
+                {
+                  label: `Marquer comme événement ici (${timeHHMM})`,
+                  icon: <Flag size={12} />,
+                  action: () => {
+                    const label = window.prompt('Nom de l\'événement :')
+                    if (!label || !label.trim()) return
+                    onAddEvent({
+                      id: crypto.randomUUID(),
+                      label: label.trim(),
+                      time: timeHHMM,
+                      day: selectedDate,
+                      color: '#f43f5e',
+                    })
+                  },
+                },
+                {
+                  label: firstPoint
+                    ? `Copier LAeq (${firstPoint} : ${firstLaeq?.toFixed(1)} dB)`
+                    : 'Copier la valeur LAeq',
+                  icon: <Copy size={12} />,
+                  disabled: firstLaeq === undefined,
+                  action: () => {
+                    const parts = Object.entries(chartMenu.nearestLaeqByPoint)
+                      .map(([p, v]) => `${p}: ${v.toFixed(1)} dB`)
+                      .join(' · ')
+                    const text = `${selectedDate} ${timeHHMMSS} · ${parts}`
+                    navigator.clipboard?.writeText(text).catch(() => { /* ignore */ })
+                  },
+                },
+                {
+                  label: 'Ajouter période (bientôt)',
+                  icon: <Edit3 size={12} />,
+                  disabled: true,
+                  action: () => { /* #3 à venir */ },
+                },
+              ]
+            })()}
+            onClose={() => setChartMenu(null)}
           />
         )}
       </div>

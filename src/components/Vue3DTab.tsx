@@ -11,6 +11,7 @@ import {
   MapPin, StickyNote, Plus, Info, Edit3, Crosshair,
 } from 'lucide-react'
 import type { LwSourceSummary, Scene3DData } from '../types'
+import ContextMenu from './ContextMenu'
 
 // --- Constants ----------------------------------------------------------------
 
@@ -910,7 +911,7 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
 
         {/* Context menu */}
         {contextMenu && (
-          <ContextMenuView
+          <ContextMenu
             x={contextMenu.x}
             y={contextMenu.y}
             items={menuItems()}
@@ -999,7 +1000,7 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
           </div>
           {lwSources.length === 0 && (
             <p className="text-[11px] text-gray-600 leading-tight">
-              Aucune source disponible — calculez les Lw dans l'onglet <strong className="text-gray-500">Puissance Lw</strong> d'abord.
+              Aucune source disponible — calculez les Lw dans l'onglet <strong className="text-gray-500">Analyse → Calcul Lw</strong> d'abord.
             </p>
           )}
           <div className="space-y-1">
@@ -1071,58 +1072,6 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
           {osmStatus === 'idle' && <span className="text-gray-600">Zoomez davantage pour charger les bâtiments</span>}
         </div>
       </div>
-    </div>
-  )
-}
-
-// --- Context menu view -------------------------------------------------------
-
-interface ContextMenuViewProps {
-  x: number
-  y: number
-  items: { label: string; icon?: React.ReactNode; action: () => void; danger?: boolean }[]
-  onClose: () => void
-}
-
-function ContextMenuView({ x, y, items, onClose }: ContextMenuViewProps) {
-  const ref = useRef<HTMLDivElement>(null)
-
-  useEffect(() => {
-    const onDocClick = (e: MouseEvent) => {
-      if (!ref.current) return
-      if (!ref.current.contains(e.target as Node)) onClose()
-    }
-    // Attach on next tick so the triggering right-click doesn't immediately close it
-    const t = setTimeout(() => {
-      document.addEventListener('mousedown', onDocClick)
-    }, 0)
-    return () => {
-      clearTimeout(t)
-      document.removeEventListener('mousedown', onDocClick)
-    }
-  }, [onClose])
-
-  return (
-    <div
-      ref={ref}
-      className="absolute z-50 min-w-[200px] bg-gray-950 border border-gray-700 rounded shadow-xl py-1 text-xs"
-      style={{ left: x, top: y }}
-      onContextMenu={(e) => e.preventDefault()}
-    >
-      {items.map((it, i) => (
-        <button
-          key={i}
-          onClick={() => { it.action(); onClose() }}
-          className={`w-full flex items-center gap-2 px-3 py-1.5 text-left transition-colors ${
-            it.danger
-              ? 'text-red-400 hover:bg-red-950/40'
-              : 'text-gray-300 hover:bg-gray-900 hover:text-gray-100'
-          }`}
-        >
-          {it.icon && <span className="shrink-0 opacity-80">{it.icon}</span>}
-          <span className="flex-1">{it.label}</span>
-        </button>
-      ))}
     </div>
   )
 }

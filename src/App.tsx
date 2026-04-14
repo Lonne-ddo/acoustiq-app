@@ -187,8 +187,8 @@ const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
   chart: 'analyse',
   reafie: 'conformite',
   report: 'rapport',
-  lw: 'rapport',
-  concordance: 'rapport',
+  lw: 'analyse',
+  concordance: 'analyse',
   map: 'outils',
   regulation: 'outils',
   history: 'outils',
@@ -199,12 +199,14 @@ const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
 }
 
 const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
-  analyse: [{ id: 'chart', label: 'Visualisation' }],
+  analyse: [
+    { id: 'chart', label: 'Visualisation' },
+    { id: 'lw', label: 'Calcul Lw' },
+    { id: 'concordance', label: 'Concordance' },
+  ],
   conformite: [{ id: 'reafie', label: 'Conformité 2026' }],
   rapport: [
     { id: 'report', label: 'Rapport' },
-    { id: 'lw', label: 'Calcul Lw' },
-    { id: 'concordance', label: 'Concordance' },
   ],
   outils: [
     { id: 'vue3d', label: 'Vue 3D' },

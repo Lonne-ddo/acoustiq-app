@@ -201,30 +201,37 @@ export interface LwSourceSummary {
 
 /** Données de la scène 3D sauvegardées dans le projet */
 export interface Scene3DData {
-  building: {
-    width: number   // largeur en mètres (défaut: 120)
-    depth: number   // profondeur en mètres (défaut: 70)
-    height: number  // hauteur en mètres (défaut: 15)
+  /** Bâtiment simplifié — conservé pour compatibilité des anciens projets */
+  building?: {
+    width: number
+    depth: number
+    height: number
   }
   sources: Array<{
     id: string      // référence à la source existante
-    x: number
-    y: number
-    z: number
+    lng?: number    // longitude (nouveau format MapLibre)
+    lat?: number    // latitude (nouveau format MapLibre)
+    /** Anciens champs Three.js (conservés pour compatibilité, non utilisés) */
+    x?: number
+    y?: number
+    z?: number
     placed: boolean
   }>
-  /** Bounding box OSM utilisé pour générer le modèle 3D */
+  /** Centre de la carte et zoom sauvegardés */
+  view?: {
+    lng: number
+    lat: number
+    zoom: number
+    pitch: number
+    bearing: number
+  }
+  /** Bounding box (legacy) — conservé pour compatibilité */
   bbox?: { south: number; west: number; north: number; east: number }
-  /** Image satellite drapée sur le sol */
+  /** Image satellite (legacy) — conservé pour compatibilité, non affiché */
   satelliteImage?: {
-    dataUrl: string        // image encodée en base64 data URL
-    opacity: number        // 0.0 à 1.0, défaut 0.8
-    bbox: {                // bbox de la zone OSM pour l'alignement
-      south: number
-      west: number
-      north: number
-      east: number
-    }
+    dataUrl: string
+    opacity: number
+    bbox: { south: number; west: number; north: number; east: number }
   }
 }
 

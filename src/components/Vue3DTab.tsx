@@ -9,6 +9,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import {
   RotateCcw, Target, Eye, Compass, Loader2, Search, Pencil, X, Trash2,
   MapPin, StickyNote, Plus, Info, Edit3, Crosshair, Box, ArrowLeft,
+  Ruler, Mountain, TreePine,
 } from 'lucide-react'
 import type { LwSourceSummary, Scene3DData } from '../types'
 import ContextMenu from './ContextMenu'
@@ -22,6 +23,19 @@ const INITIAL_PITCH = 45
 const LS_ZONES = 'acoustiq_vue3d_zones'
 const LS_MPOINTS = 'acoustiq_vue3d_mpoints'
 const LS_ANNOTATIONS = 'acoustiq_vue3d_annotations'
+const LS_MEASUREMENTS = 'acoustiq_vue3d_measurements'
+
+// Distance haversine (m) entre deux positions lng/lat
+function haversineMeters(a: [number, number], b: [number, number]): number {
+  const R = 6371000
+  const toRad = (d: number) => (d * Math.PI) / 180
+  const dLat = toRad(b[1] - a[1])
+  const dLng = toRad(b[0] - a[0])
+  const s1 = Math.sin(dLat / 2)
+  const s2 = Math.sin(dLng / 2)
+  const aa = s1 * s1 + Math.cos(toRad(a[1])) * Math.cos(toRad(b[1])) * s2 * s2
+  return 2 * R * Math.asin(Math.min(1, Math.sqrt(aa)))
+}
 
 function lwColor(lw: number): string {
   if (lw >= 115) return '#E24B4A'
@@ -60,7 +74,7 @@ const MAP_STYLE: StyleSpecification = {
     { id: 'satellite', type: 'raster', source: 'satellite' },
     { id: 'satellite_labels', type: 'raster', source: 'satellite_labels', paint: { 'raster-opacity': 0.8 } },
   ],
-  terrain: { source: 'terrain-dem', exaggeration: 1.3 },
+  terrain: { source: 'terrain-dem', exaggeration: 2.0 },
 }
 
 // --- Types --------------------------------------------------------------------
@@ -139,7 +153,44 @@ function saveLS<T>(key: string, val: T) {
 
 // --- OSM XML parsing ---------------------------------------------------------
 
-function parseOsmXmlToGeoJSON(xmlText: string): BuildingFeature[] {
+/** Surface approx d'un polygone lng/lat en m² (projection locale plane). */
+function ringAreaM2(ring: number[][]): number {
+  if (ring.length < 4) return 0
+  const latRef = ring[0][1]
+  const mPerDegLat = 111320
+  const mPerDegLng = 111320 * Math.cos((latRef * Math.PI) / 180)
+  let area = 0
+  for (let i = 0; i < ring.length - 1; i++) {
+    const x1 = ring[i][0] * mPerDegLng
+    const y1 = ring[i][1] * mPerDegLat
+    const x2 = ring[i + 1][0] * mPerDegLng
+    const y2 = ring[i + 1][1] * mPerDegLat
+    area += x1 * y2 - x2 * y1
+  }
+  return Math.abs(area) / 2
+}
+
+/** Tire un entier déterministe 0..max-1 à partir d'une graine string. */
+function seededInt(seed: string, max: number): number {
+  let h = 0
+  for (let i = 0; i < seed.length; i++) h = (h * 31 + seed.charCodeAt(i)) | 0
+  return Math.abs(h) % max
+}
+
+type VegetationKind = 'forest' | 'wood' | 'scrub' | 'grass'
+interface VegetationPolygon {
+  id: string
+  kind: VegetationKind
+  ring: [number, number][]
+  areaM2: number
+}
+
+interface OsmParseResult {
+  buildings: BuildingFeature[]
+  vegetation: VegetationPolygon[]
+}
+
+function parseOsmXmlToGeoJSON(xmlText: string): OsmParseResult {
   const parser = new DOMParser()
   const xml = parser.parseFromString(xmlText, 'application/xml')
 
@@ -151,21 +202,26 @@ function parseOsmXmlToGeoJSON(xmlText: string): BuildingFeature[] {
     if (id && lat && lon) nodes.set(id, [parseFloat(lon), parseFloat(lat)])
   }
 
-  const features: BuildingFeature[] = []
+  const buildings: BuildingFeature[] = []
+  const vegetation: VegetationPolygon[] = []
+
   for (const way of xml.querySelectorAll('way')) {
     const wayId = way.getAttribute('id') || ''
     const tags = way.querySelectorAll('tag')
     let isBuilding = false
     let heightTag: number | null = null
     let levelsTag: number | null = null
+    let landuse: string | null = null
+    let natural: string | null = null
     for (const tag of tags) {
       const k = tag.getAttribute('k')
       const v = tag.getAttribute('v')
       if (k === 'building') isBuilding = true
       if (k === 'height' && v) { const h = parseFloat(v); if (!isNaN(h) && h > 0) heightTag = h }
       if (k === 'building:levels' && v) { const l = parseInt(v, 10); if (!isNaN(l) && l > 0) levelsTag = l }
+      if (k === 'landuse' && v) landuse = v
+      if (k === 'natural' && v) natural = v
     }
-    if (!isBuilding) continue
 
     const ring: number[][] = []
     for (const nd of way.querySelectorAll('nd')) {
@@ -178,17 +234,91 @@ function parseOsmXmlToGeoJSON(xmlText: string): BuildingFeature[] {
     const first = ring[0], last = ring[ring.length - 1]
     if (first[0] !== last[0] || first[1] !== last[1]) ring.push([first[0], first[1]])
 
-    let height = 10
-    if (levelsTag) height = levelsTag * 3.5
-    if (heightTag) height = heightTag
+    if (isBuilding) {
+      // Hauteur : tags OSM prioritaires, sinon variation 4-12m selon la surface
+      let height: number
+      if (heightTag) height = heightTag
+      else if (levelsTag) height = levelsTag * 3.5
+      else {
+        const area = ringAreaM2(ring)
+        // Petits bâtiments (<100 m²) ~4-6m, grands (>1000 m²) ~10-12m
+        const base = 4 + Math.min(8, Math.log10(Math.max(20, area)) * 3)
+        const jitter = (seededInt(wayId, 1000) / 1000) * 2 - 1 // -1..1
+        height = Math.max(3.5, Math.round((base + jitter) * 10) / 10)
+      }
 
-    features.push({
-      type: 'Feature',
-      geometry: { type: 'Polygon', coordinates: [ring] },
-      properties: { height, color: buildingColor(wayId) },
-    })
+      buildings.push({
+        type: 'Feature',
+        geometry: { type: 'Polygon', coordinates: [ring] },
+        properties: { height, color: buildingColor(wayId) },
+      })
+      continue
+    }
+
+    let kind: VegetationKind | null = null
+    if (landuse === 'forest') kind = 'forest'
+    else if (natural === 'wood') kind = 'wood'
+    else if (natural === 'scrub') kind = 'scrub'
+    else if (landuse === 'grass' || landuse === 'meadow' || landuse === 'recreation_ground') kind = 'grass'
+    if (kind) {
+      vegetation.push({
+        id: wayId,
+        kind,
+        ring: ring as [number, number][],
+        areaM2: ringAreaM2(ring),
+      })
+    }
   }
-  return features
+
+  return { buildings, vegetation }
+}
+
+/** Vrai si le point (lng,lat) est à l'intérieur du polygone (ray casting). */
+function pointInRing(pt: [number, number], ring: [number, number][]): boolean {
+  let inside = false
+  const [x, y] = pt
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const xi = ring[i][0], yi = ring[i][1]
+    const xj = ring[j][0], yj = ring[j][1]
+    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi
+    if (intersect) inside = !inside
+  }
+  return inside
+}
+
+/** Génère N arbres aléatoires répartis à l'intérieur d'un polygone. */
+function sampleTreesInPolygon(
+  veg: VegetationPolygon,
+  count: number,
+  heightRange: [number, number],
+): Array<{ lng: number; lat: number; h: number }> {
+  let minLng = Infinity, maxLng = -Infinity, minLat = Infinity, maxLat = -Infinity
+  for (const [lng, lat] of veg.ring) {
+    if (lng < minLng) minLng = lng
+    if (lng > maxLng) maxLng = lng
+    if (lat < minLat) minLat = lat
+    if (lat > maxLat) maxLat = lat
+  }
+  const out: Array<{ lng: number; lat: number; h: number }> = []
+  let attempts = 0
+  const maxAttempts = count * 12
+  // PRNG déterministe à partir de l'id
+  let seed = 0
+  for (let i = 0; i < veg.id.length; i++) seed = (seed * 31 + veg.id.charCodeAt(i)) | 0
+  const rnd = () => {
+    seed = (seed * 1664525 + 1013904223) | 0
+    return ((seed >>> 0) % 100000) / 100000
+  }
+  while (out.length < count && attempts < maxAttempts) {
+    attempts++
+    const lng = minLng + rnd() * (maxLng - minLng)
+    const lat = minLat + rnd() * (maxLat - minLat)
+    if (pointInRing([lng, lat], veg.ring)) {
+      const h = heightRange[0] + rnd() * (heightRange[1] - heightRange[0])
+      out.push({ lng, lat, h: Math.round(h * 10) / 10 })
+    }
+  }
+  return out
 }
 
 function genId(prefix: string): string {
@@ -206,12 +336,28 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   const pendingSelectionRef = useRef<string | null>(null)
 
   const [selectedSourceId, setSelectedSourceId] = useState<string | null>(null)
-  const [pitch, setPitch] = useState<number>(scene3D?.view?.pitch ?? INITIAL_PITCH)
-  const [bearing, setBearing] = useState<number>(scene3D?.view?.bearing ?? 0)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_pitch, setPitch] = useState<number>(scene3D?.view?.pitch ?? INITIAL_PITCH)
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [_bearing, setBearing] = useState<number>(scene3D?.view?.bearing ?? 0)
   const [osmStatus, setOsmStatus] = useState<OsmStatus>('idle')
   const [buildingCount, setBuildingCount] = useState(0)
   const [searchQuery, setSearchQuery] = useState('')
   const [searching, setSearching] = useState(false)
+  const [vegetationCount, setVegetationCount] = useState(0)
+  const [topoExaggeration, setTopoExaggeration] = useState(2.0)
+
+  // Outil de mesure de distance
+  const [measureTool, setMeasureTool] = useState(false)
+  const measurePendingRef = useRef<[number, number] | null>(null)
+  const [measurements, setMeasurements] = useState<
+    Array<{ id: string; a: [number, number]; b: [number, number]; dMeters: number }>
+  >(() => {
+    try {
+      const raw = localStorage.getItem(LS_MEASUREMENTS)
+      return raw ? JSON.parse(raw) : []
+    } catch { return [] }
+  })
 
   const [sources3D, setSources3D] = useState<Source3D[]>(() => {
     if (scene3D?.sources) return scene3D.sources.map((s) => ({
@@ -226,6 +372,8 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
 
   const [drawing, setDrawing] = useState(false)
   const drawingRef = useRef(false)
+  const measureToolRef = useRef(false)
+  const rightDragMovedRef = useRef(false)
   const drawStartRef = useRef<[number, number] | null>(null)
   const drawEndRef = useRef<[number, number] | null>(null)
   const [drawVersion, setDrawVersion] = useState(0) // bump to trigger draft GeoJSON refresh
@@ -235,6 +383,7 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
 
   pendingSelectionRef.current = selectedSourceId
   drawingRef.current = drawing
+  measureToolRef.current = measureTool
 
   // Sync sources3D when lwSources changes
   useEffect(() => {
@@ -268,6 +417,7 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   useEffect(() => { saveLS(LS_ZONES, zones) }, [zones])
   useEffect(() => { saveLS(LS_MPOINTS, mpoints) }, [mpoints])
   useEffect(() => { saveLS(LS_ANNOTATIONS, annotations) }, [annotations])
+  useEffect(() => { saveLS(LS_MEASUREMENTS, measurements) }, [measurements])
 
   // --- GeoJSON builders ---
   const buildSourcesGeoJSON = useCallback((): GeoJSON.FeatureCollection => {
@@ -362,12 +512,57 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
       clearTimeout(timer)
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const text = await res.text()
-      const features = parseOsmXmlToGeoJSON(text)
+      const { buildings, vegetation } = parseOsmXmlToGeoJSON(text)
 
       const source = map.getSource('osm-buildings') as GeoJSONSource | undefined
-      if (source) source.setData({ type: 'FeatureCollection', features } as GeoJSON.FeatureCollection)
-      setBuildingCount(features.length)
-      setOsmStatus(features.length === 0 ? 'empty' : 'loaded')
+      if (source) source.setData({ type: 'FeatureCollection', features: buildings } as GeoJSON.FeatureCollection)
+      setBuildingCount(buildings.length)
+
+      // Sample trees from vegetation polygons (cap 200 globally)
+      const trees: Array<{ lng: number; lat: number; h: number; kind: VegetationKind }> = []
+      const MAX_TREES = 200
+      // Densités : 1/20m² forêt dense, 1/50m² arbustes/bois clair
+      for (const veg of vegetation) {
+        if (trees.length >= MAX_TREES) break
+        if (veg.kind === 'grass') continue
+        const density =
+          veg.kind === 'forest' ? 1 / 20 :
+          veg.kind === 'wood'   ? 1 / 30 :
+          veg.kind === 'scrub'  ? 1 / 50 : 0
+        const desired = Math.min(
+          MAX_TREES - trees.length,
+          Math.round(veg.areaM2 * density),
+        )
+        if (desired <= 0) continue
+        const heightRange: [number, number] =
+          veg.kind === 'forest' || veg.kind === 'wood' ? [12, 18] : [2, 4]
+        const pts = sampleTreesInPolygon(veg, desired, heightRange)
+        for (const p of pts) trees.push({ ...p, kind: veg.kind })
+      }
+      const treeSrc = map.getSource('vegetation-trees') as GeoJSONSource | undefined
+      if (treeSrc) {
+        treeSrc.setData({
+          type: 'FeatureCollection',
+          features: trees.map((t) => ({
+            type: 'Feature',
+            geometry: { type: 'Point', coordinates: [t.lng, t.lat] },
+            properties: { h: t.h, kind: t.kind },
+          })),
+        } as GeoJSON.FeatureCollection)
+      }
+      const vegPolySrc = map.getSource('vegetation-polygons') as GeoJSONSource | undefined
+      if (vegPolySrc) {
+        vegPolySrc.setData({
+          type: 'FeatureCollection',
+          features: vegetation.map((v) => ({
+            type: 'Feature',
+            geometry: { type: 'Polygon', coordinates: [v.ring] },
+            properties: { kind: v.kind },
+          })),
+        } as GeoJSON.FeatureCollection)
+      }
+      setVegetationCount(trees.length)
+      setOsmStatus(buildings.length === 0 ? 'empty' : 'loaded')
     } catch (err) {
       clearTimeout(timer)
       if (err instanceof DOMException && err.name === 'AbortError') return
@@ -439,6 +634,77 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     map.addControl(new maplibregl.NavigationControl({ visualizePitch: true }), 'top-left')
     map.addControl(new maplibregl.ScaleControl({ maxWidth: 120, unit: 'metric' }), 'bottom-left')
 
+    // Navigation 3D standard : gauche = rotation, droite = pan, double-clic = centrer.
+    // On désactive les gestionnaires MapLibre par défaut et on câble nos propres
+    // événements mousedown/move/up sur le canvas.
+    map.dragPan.disable()
+    map.dragRotate.disable()
+    map.doubleClickZoom.disable()
+
+    type NavState =
+      | { mode: 'rotate'; sx: number; sy: number; sBearing: number; sPitch: number }
+      | { mode: 'pan'; sx: number; sy: number; sCenter: { lng: number; lat: number }; moved: boolean }
+      | { mode: 'idle' }
+    const nav: { current: NavState } = { current: { mode: 'idle' } }
+
+    const canvas = map.getCanvas()
+    const onCanvasMouseDown = (e: MouseEvent) => {
+      if (drawingRef.current || measureToolRef.current) return
+      if (e.button === 0) {
+        nav.current = {
+          mode: 'rotate', sx: e.clientX, sy: e.clientY,
+          sBearing: map.getBearing(), sPitch: map.getPitch(),
+        }
+      } else if (e.button === 2) {
+        const c = map.getCenter()
+        nav.current = {
+          mode: 'pan', sx: e.clientX, sy: e.clientY,
+          sCenter: { lng: c.lng, lat: c.lat },
+          moved: false,
+        }
+      }
+    }
+    const onWindowMouseMove = (e: MouseEvent) => {
+      const s = nav.current
+      if (s.mode === 'rotate') {
+        const dx = e.clientX - s.sx
+        const dy = e.clientY - s.sy
+        map.jumpTo({
+          bearing: s.sBearing - dx * 0.3,
+          pitch: Math.max(0, Math.min(60, s.sPitch - dy * 0.3)),
+        })
+      } else if (s.mode === 'pan') {
+        const dx = e.clientX - s.sx
+        const dy = e.clientY - s.sy
+        if (Math.abs(dx) + Math.abs(dy) > 5) s.moved = true
+        const rect = canvas.getBoundingClientRect()
+        const startPx: [number, number] = [rect.width / 2 - dx, rect.height / 2 - dy]
+        const endPx: [number, number] = [rect.width / 2, rect.height / 2]
+        const startLL = map.unproject(startPx)
+        const endLL = map.unproject(endPx)
+        map.jumpTo({
+          center: [
+            s.sCenter.lng + (startLL.lng - endLL.lng),
+            s.sCenter.lat + (startLL.lat - endLL.lat),
+          ],
+        })
+      }
+    }
+    const onWindowMouseUp = () => {
+      const s = nav.current
+      // Si le drag droit a bougé, on mémorise pour annuler le menu contextuel.
+      if (s.mode === 'pan' && s.moved) rightDragMovedRef.current = true
+      nav.current = { mode: 'idle' }
+    }
+    canvas.addEventListener('mousedown', onCanvasMouseDown)
+    window.addEventListener('mousemove', onWindowMouseMove)
+    window.addEventListener('mouseup', onWindowMouseUp)
+
+    // Double-clic gauche = centrer la vue sur ce point
+    map.on('dblclick', (e) => {
+      map.flyTo({ center: [e.lngLat.lng, e.lngLat.lat], duration: 500 })
+    })
+
     map.on('load', () => {
       // Buildings
       map.addSource('osm-buildings', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
@@ -450,6 +716,115 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
           'fill-extrusion-base': 0,
           'fill-extrusion-opacity': 0.92,
           'fill-extrusion-vertical-gradient': true,
+        },
+      })
+      // Toit : deuxième extrusion 0.5m plus haute, couleur légèrement plus sombre
+      map.addLayer({
+        id: 'buildings-roof', type: 'fill-extrusion', source: 'osm-buildings',
+        paint: {
+          'fill-extrusion-color': '#9ca3af',
+          'fill-extrusion-height': ['+', ['get', 'height'], 0.5],
+          'fill-extrusion-base': ['get', 'height'],
+          'fill-extrusion-opacity': 0.9,
+        },
+      })
+      // Arêtes : contour au sol en noir fin (subtil)
+      map.addLayer({
+        id: 'buildings-outline', type: 'line', source: 'osm-buildings',
+        paint: {
+          'line-color': '#000000',
+          'line-opacity': 0.15,
+          'line-width': 1,
+        },
+      })
+
+      // Végétation : polygones remplis en vert translucide + arbres ponctuels
+      map.addSource('vegetation-polygons', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      map.addLayer({
+        id: 'vegetation-fill', type: 'fill', source: 'vegetation-polygons',
+        paint: {
+          'fill-color': [
+            'match', ['get', 'kind'],
+            'forest', '#166534',
+            'wood',   '#16a34a',
+            'scrub',  '#65a30d',
+            'grass',  '#84cc16',
+            '#22c55e',
+          ],
+          'fill-opacity': 0.15,
+        },
+      }, 'buildings-3d')
+
+      map.addSource('vegetation-trees', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      // Tronc : extrusion fine brune (cylindre simulé)
+      map.addLayer({
+        id: 'tree-trunk', type: 'circle', source: 'vegetation-trees',
+        paint: {
+          'circle-radius': 2,
+          'circle-color': '#78350f',
+          'circle-opacity': 0.9,
+          'circle-stroke-color': '#1c1917',
+          'circle-stroke-width': 0.5,
+        },
+      })
+      // Houppier : halo vert
+      map.addLayer({
+        id: 'tree-crown', type: 'circle', source: 'vegetation-trees',
+        paint: {
+          'circle-radius': [
+            'interpolate', ['linear'], ['get', 'h'],
+            2, 4,
+            4, 6,
+            12, 10,
+            18, 14,
+          ],
+          'circle-color': [
+            'match', ['get', 'kind'],
+            'forest', '#15803d',
+            'wood',   '#22c55e',
+            'scrub',  '#a3e635',
+            '#16a34a',
+          ],
+          'circle-opacity': 0.7,
+          'circle-stroke-color': '#14532d',
+          'circle-stroke-width': 0.75,
+        },
+      })
+
+      // Outil de mesure de distance : lignes + labels
+      map.addSource('measurements', { type: 'geojson', data: { type: 'FeatureCollection', features: [] } })
+      map.addLayer({
+        id: 'measurement-line', type: 'line', source: 'measurements',
+        filter: ['==', '$type', 'LineString'],
+        paint: {
+          'line-color': '#fbbf24',
+          'line-width': 2,
+          'line-dasharray': [2, 1.5],
+        },
+      })
+      map.addLayer({
+        id: 'measurement-dot', type: 'circle', source: 'measurements',
+        filter: ['==', '$type', 'Point'],
+        paint: {
+          'circle-radius': 4,
+          'circle-color': '#fbbf24',
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#422006',
+        },
+      })
+      map.addLayer({
+        id: 'measurement-label', type: 'symbol', source: 'measurements',
+        filter: ['==', '$type', 'Point'],
+        layout: {
+          'text-field': ['get', 'label'],
+          'text-size': 11,
+          'text-offset': [0, 1.2],
+          'text-anchor': 'top',
+        },
+        paint: {
+          'text-color': '#fbbf24',
+          'text-halo-color': 'rgba(0,0,0,0.9)',
+          'text-halo-width': 1.5,
         },
       })
 
@@ -577,6 +952,26 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
       setContextMenu(null)
       if (drawingRef.current) return // le tracé se fait via mousedown/move/up
 
+      // Outil de mesure : premier clic = ancrage, deuxième clic = finalisation
+      if (measureToolRef.current) {
+        const pending = measurePendingRef.current
+        if (!pending) {
+          measurePendingRef.current = [e.lngLat.lng, e.lngLat.lat]
+          // Affichage d'un point provisoire
+        } else {
+          const b: [number, number] = [e.lngLat.lng, e.lngLat.lat]
+          const d = haversineMeters(pending, b)
+          setMeasurements((prev) => [...prev, {
+            id: genId('m'),
+            a: pending,
+            b,
+            dMeters: d,
+          }])
+          measurePendingRef.current = null
+        }
+        return
+      }
+
       const features = map.queryRenderedFeatures(e.point, { layers: ['src-dot', 'src-halo'] })
       if (features.length > 0) {
         const id = features[0].properties?.id as string | undefined
@@ -654,6 +1049,11 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     // --- Right-click: context menu ---
     const onContextMenu = (e: MapMouseEvent) => {
       e.preventDefault()
+      // Si un pan clic-droit vient d'être effectué, ne pas ouvrir le menu.
+      if (rightDragMovedRef.current) {
+        rightDragMovedRef.current = false
+        return
+      }
       if (drawingRef.current) return // right-click does nothing while drawing
 
       const feats = map.queryRenderedFeatures(e.point, {
@@ -686,6 +1086,9 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
       if (osmAbortRef.current) osmAbortRef.current.abort()
       if (moveTimerRef.current) clearTimeout(moveTimerRef.current)
       container.removeEventListener('contextmenu', suppressNative)
+      canvas.removeEventListener('mousedown', onCanvasMouseDown)
+      window.removeEventListener('mousemove', onWindowMouseMove)
+      window.removeEventListener('mouseup', onWindowMouseUp)
       map.off('click', onClick)
       map.off('mousedown', onMouseDown)
       map.off('mousemove', onMouseMove)
@@ -709,9 +1112,9 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   useEffect(() => {
     const map = mapRef.current
     if (!map) return
-    if (drawing) map.getCanvas().style.cursor = 'crosshair'
+    if (drawing || measureTool) map.getCanvas().style.cursor = 'crosshair'
     else map.getCanvas().style.cursor = selectedSourceId ? 'crosshair' : ''
-  }, [selectedSourceId, drawing])
+  }, [selectedSourceId, drawing, measureTool])
 
   // --- Keyboard: Esc closes menu / cancels drawing ---
   useEffect(() => {
@@ -719,11 +1122,16 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
       if (e.key === 'Escape') {
         if (contextMenu) { setContextMenu(null); return }
         if (drawing) { cancelDrawing(); return }
+        if (measureTool) {
+          setMeasureTool(false)
+          measurePendingRef.current = null
+          return
+        }
       }
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [contextMenu, drawing, cancelDrawing])
+  }, [contextMenu, drawing, cancelDrawing, measureTool])
 
   // --- GeoJSON updates on state change ---
   useEffect(() => {
@@ -756,12 +1164,48 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     ;(map.getSource('annotations') as GeoJSONSource | undefined)?.setData(buildAnnotationsGeoJSON())
   }, [buildAnnotationsGeoJSON])
 
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map || !map.isStyleLoaded()) return
+    const features: GeoJSON.Feature[] = []
+    for (const m of measurements) {
+      const label = m.dMeters >= 1000
+        ? `${(m.dMeters / 1000).toFixed(2)} km`
+        : `${m.dMeters.toFixed(1)} m`
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'LineString', coordinates: [m.a, m.b] },
+        properties: { id: m.id, label },
+      })
+      const mid: [number, number] = [(m.a[0] + m.b[0]) / 2, (m.a[1] + m.b[1]) / 2]
+      features.push({
+        type: 'Feature',
+        geometry: { type: 'Point', coordinates: mid },
+        properties: { id: m.id, label },
+      })
+    }
+    ;(map.getSource('measurements') as GeoJSONSource | undefined)?.setData({
+      type: 'FeatureCollection', features,
+    } as GeoJSON.FeatureCollection)
+  }, [measurements])
+
   // Clear focus si la zone ciblée n'existe plus
   useEffect(() => {
     if (focusedZoneId && !zones.some((z) => z.id === focusedZoneId)) {
       setFocusedZoneId(null)
     }
   }, [zones, focusedZoneId])
+
+  // Synchroniser l'exagération topo avec le terrain
+  useEffect(() => {
+    const map = mapRef.current
+    if (!map) return
+    try {
+      map.setTerrain({ source: 'terrain-dem', exaggeration: topoExaggeration })
+    } catch {
+      /* style pas encore prêt */
+    }
+  }, [topoExaggeration])
 
   // Mask focus 3D : outer monde + zone en trou
   useEffect(() => {
@@ -793,10 +1237,6 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
       }],
     })
   }, [focusedZoneId, zones])
-
-  // --- Navigation controls ---
-  const handlePitchChange = (v: number) => { setPitch(v); mapRef.current?.easeTo({ pitch: v, duration: 200 }) }
-  const handleBearingChange = (v: number) => { setBearing(v); mapRef.current?.easeTo({ bearing: v, duration: 200 }) }
 
   const handleCenterOnSources = () => {
     const map = mapRef.current
@@ -1043,22 +1483,9 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
           <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
             <Compass size={12} /> Navigation
           </h3>
-          <div>
-            <div className="flex items-center justify-between text-[10px] text-gray-500 mb-0.5">
-              <span>Inclinaison</span><span>{Math.round(pitch)}°</span>
-            </div>
-            <input type="range" min={0} max={60} step={1} value={pitch}
-              onChange={(e) => handlePitchChange(parseFloat(e.target.value))}
-              className="w-full h-1 accent-blue-500" />
-          </div>
-          <div>
-            <div className="flex items-center justify-between text-[10px] text-gray-500 mb-0.5">
-              <span>Rotation</span><span>{Math.round(bearing)}°</span>
-            </div>
-            <input type="range" min={-180} max={180} step={1} value={bearing}
-              onChange={(e) => handleBearingChange(parseFloat(e.target.value))}
-              className="w-full h-1 accent-blue-500" />
-          </div>
+          <p className="text-[10px] text-gray-500 leading-tight">
+            Clic gauche = rotation · Clic droit = pan · Molette = zoom · Double-clic = centrer
+          </p>
           <div className="flex gap-1.5 pt-1">
             <button onClick={handleCenterOnSources} disabled={placedCount === 0}
               className="flex-1 flex items-center justify-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded px-2 py-1 disabled:opacity-40 disabled:cursor-not-allowed transition-colors">
@@ -1069,6 +1496,71 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
               <Eye size={11} /> Vue dessus
             </button>
           </div>
+        </div>
+
+        {/* Topographie */}
+        <div className="px-3 py-3 border-b border-gray-800 space-y-2">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+            <Mountain size={12} /> Topographie
+          </h3>
+          <div>
+            <div className="flex items-center justify-between text-[10px] text-gray-500 mb-0.5">
+              <span>Exagération topo</span>
+              <span className="font-mono">{topoExaggeration.toFixed(1)}×</span>
+            </div>
+            <input type="range" min={1} max={5} step={0.1} value={topoExaggeration}
+              onChange={(e) => setTopoExaggeration(parseFloat(e.target.value))}
+              className="w-full h-1 accent-emerald-500" />
+          </div>
+        </div>
+
+        {/* Outils de mesure */}
+        <div className="px-3 py-3 border-b border-gray-800 space-y-1.5">
+          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
+            <Ruler size={12} /> Outils
+          </h3>
+          <button
+            onClick={() => {
+              setMeasureTool((v) => {
+                if (v) measurePendingRef.current = null
+                return !v
+              })
+            }}
+            className={`w-full flex items-center justify-center gap-1.5 text-[11px] border rounded px-2 py-1.5 transition-colors ${
+              measureTool
+                ? 'bg-amber-950/60 border-amber-600 text-amber-200 hover:bg-amber-900/70'
+                : 'bg-gray-900 hover:bg-gray-800 border-gray-700 text-gray-300'
+            }`}
+          >
+            {measureTool ? <><X size={11} /> Quitter mesure</> : <><Ruler size={11} /> Mesurer distance</>}
+          </button>
+          {measurements.length > 0 && (
+            <>
+              <div className="space-y-0.5 max-h-36 overflow-y-auto">
+                {measurements.map((m, i) => (
+                  <div key={m.id} className="flex items-center gap-1 text-[10px] text-gray-400 bg-gray-900 rounded px-1.5 py-0.5">
+                    <span className="text-amber-300 shrink-0">#{i + 1}</span>
+                    <span className="flex-1 truncate font-mono">
+                      {m.dMeters >= 1000 ? `${(m.dMeters / 1000).toFixed(2)} km` : `${m.dMeters.toFixed(1)} m`}
+                    </span>
+                    <button
+                      onClick={() => setMeasurements((prev) => prev.filter((x) => x.id !== m.id))}
+                      className="text-gray-600 hover:text-red-400"
+                      aria-label="Supprimer mesure"
+                    >
+                      <X size={10} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button
+                onClick={() => setMeasurements([])}
+                className="w-full flex items-center justify-center gap-1 text-[10px] text-gray-500 hover:text-gray-300 bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded px-2 py-1 transition-colors"
+              >
+                <Trash2 size={10} /> Effacer toutes les mesures
+              </button>
+            </>
+          )}
         </div>
 
         {/* Drawing tool */}
@@ -1197,7 +1689,15 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
             </span>
           )}
           {osmStatus === 'loaded' && (
-            <span className="text-green-500/70">{buildingCount} bâtiment{buildingCount > 1 ? 's' : ''} chargé{buildingCount > 1 ? 's' : ''}</span>
+            <div className="space-y-0.5">
+              <div className="text-green-500/70">{buildingCount} bâtiment{buildingCount > 1 ? 's' : ''} chargé{buildingCount > 1 ? 's' : ''}</div>
+              {vegetationCount > 0 && (
+                <div className="flex items-center gap-1 text-emerald-500/70">
+                  <TreePine size={10} />
+                  {vegetationCount} arbre{vegetationCount > 1 ? 's' : ''} (OSM)
+                </div>
+              )}
+            </div>
           )}
           {osmStatus === 'empty' && <span className="text-amber-500/70">Aucun bâtiment OSM dans cette zone</span>}
           {osmStatus === 'error' && <span className="text-red-400/80">Erreur OSM — données indisponibles</span>}

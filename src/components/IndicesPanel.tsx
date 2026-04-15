@@ -6,7 +6,7 @@ import { useState, useMemo } from 'react'
 import * as XLSX from 'xlsx'
 import { Download, TrendingDown, ChevronRight, Sun } from 'lucide-react'
 import HelpTooltip from './HelpTooltip'
-import type { MeasurementFile, MeteoData } from '../types'
+import type { MeasurementFile, MeteoData, Period } from '../types'
 import {
   laeqAvg,
   computeL10,
@@ -15,6 +15,7 @@ import {
   computeLAFmax,
   computeLAFmin,
   detectKt,
+  filterDataByPeriods,
 } from '../utils/acoustics'
 
 /** Calcule LAeq sur une plage horaire (en heures) ; gère le passage minuit. */
@@ -86,9 +87,11 @@ interface Props {
   meteo?: MeteoData
   /** Pas d'agrégation en secondes pour l'export "Données brutes" (par défaut 300) */
   aggregationSeconds?: number
+  /** Périodes nommées — filtre les données avant calcul des indices */
+  periods?: Period[]
 }
 
-export default function IndicesPanel({ files, pointMap, selectedDate, meteo, aggregationSeconds = 300 }: Props) {
+export default function IndicesPanel({ files, pointMap, selectedDate, meteo, aggregationSeconds = 300, periods }: Props) {
   const [mode, setMode] = useState<'full' | 'custom'>('full')
   const [startTime, setStartTime] = useState('00:00')
   const [endTime, setEndTime] = useState('23:59')
@@ -108,7 +111,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
       pointNames.map((pt) => {
         const data = files
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-          .flatMap((f) => f.data)
+          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods))
         return [
           pt,
           {
@@ -130,7 +133,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
       pointNames.map((pt) => {
         const dps = files
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-          .flatMap((f) => f.data)
+          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods))
           .filter((dp) => dp.t >= startMin && dp.t <= endMin)
         const specs = dps.map((d) => d.spectra).filter((s): s is number[] => !!s)
         if (specs.length === 0) return [pt, null]
@@ -154,7 +157,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
       pointNames.map((pt) => {
         const values = files
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-          .flatMap((f) => f.data)
+          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods))
           .filter((dp) => dp.t >= startMin && dp.t <= endMin)
           .map((dp) => dp.laeq)
 
@@ -512,10 +515,11 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         pointNames={pointNames}
         startMin={mode === 'custom' ? hhmmToMin(startTime) : -Infinity}
         endMin={mode === 'custom' ? hhmmToMin(endTime) : Infinity}
+        periods={periods}
       />
 
       {/* Analyse bruit de fond (L90 horaire) */}
-      <AmbientNoiseSection files={files} pointMap={pointMap} selectedDate={selectedDate} pointNames={pointNames} />
+      <AmbientNoiseSection files={files} pointMap={pointMap} selectedDate={selectedDate} pointNames={pointNames} periods={periods} />
     </div>
   )
 }
@@ -525,7 +529,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
 // ────────────────────────────────────────────────────────────────────────────
 
 function DistributionSection({
-  files, pointMap, selectedDate, pointNames, startMin, endMin,
+  files, pointMap, selectedDate, pointNames, startMin, endMin, periods,
 }: {
   files: MeasurementFile[]
   pointMap: Record<string, string>
@@ -533,6 +537,7 @@ function DistributionSection({
   pointNames: string[]
   startMin: number
   endMin: number
+  periods?: Period[]
 }) {
   const [showSection, setShowSection] = useState(true)
 
@@ -541,7 +546,7 @@ function DistributionSection({
     return pointNames.map((pt) => {
       const values = files
         .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-        .flatMap((f) => f.data)
+        .flatMap((f) => filterDataByPeriods(f.data, f.date, periods))
         .filter((dp) => dp.t >= startMin && dp.t <= endMin)
         .map((dp) => dp.laeq)
       if (values.length === 0) return { pt, percentiles: null as number[] | null, min: 0, max: 0 }
@@ -555,7 +560,7 @@ function DistributionSection({
       }
       return { pt, percentiles, min: sorted[0], max: sorted[n - 1] }
     })
-  }, [files, pointMap, selectedDate, pointNames, startMin, endMin])
+  }, [files, pointMap, selectedDate, pointNames, startMin, endMin, periods])
 
   if (pointNames.length === 0) return null
 
@@ -690,11 +695,12 @@ function DistributionMini({
 }
 
 /** Tableau L90 horaire avec identification de l'heure la plus calme */
-function AmbientNoiseSection({ files, pointMap, selectedDate, pointNames }: {
+function AmbientNoiseSection({ files, pointMap, selectedDate, pointNames, periods }: {
   files: MeasurementFile[]
   pointMap: Record<string, string>
   selectedDate: string
   pointNames: string[]
+  periods?: Period[]
 }) {
   const [showSection, setShowSection] = useState(false)
 
@@ -706,7 +712,7 @@ function AmbientNoiseSection({ files, pointMap, selectedDate, pointNames }: {
       for (const pt of pointNames) {
         const values = files
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-          .flatMap((f) => f.data)
+          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods))
           .filter((dp) => Math.floor(dp.t / 60) === h)
           .map((dp) => dp.laeq)
         if (values.length >= 3) {

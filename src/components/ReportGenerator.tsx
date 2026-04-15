@@ -23,6 +23,7 @@ import type {
   ConcordanceState,
   ConformiteSummary,
   MeteoData,
+  Period,
 } from '../types'
 import {
   laeqAvg,
@@ -31,6 +32,7 @@ import {
   computeL90,
   computeLAFmax,
   computeLAFmin,
+  filterDataByPeriods,
 } from '../utils/acoustics'
 
 interface Props {
@@ -43,6 +45,7 @@ interface Props {
   conformiteSummary: ConformiteSummary | null
   companyName: string
   meteo?: MeteoData
+  periods?: Period[]
 }
 
 function fmt(n: number): string {
@@ -61,6 +64,7 @@ export default function ReportGenerator({
   conformiteSummary,
   companyName,
   meteo,
+  periods,
 }: Props) {
   const [projectName, setProjectName] = useState('Étude d\'impact acoustique')
   const [copied, setCopied] = useState(false)
@@ -71,7 +75,7 @@ export default function ReportGenerator({
       assignedPoints.map((pt) => {
         const values = files
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-          .flatMap((f) => f.data)
+          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods))
           .map((dp) => dp.laeq)
 
         if (values.length === 0) return [pt, null]
@@ -89,7 +93,7 @@ export default function ReportGenerator({
         ]
       }),
     )
-  }, [files, pointMap, selectedDate, assignedPoints])
+  }, [files, pointMap, selectedDate, assignedPoints, periods])
 
   // Événements du jour
   const dayEvents = useMemo(

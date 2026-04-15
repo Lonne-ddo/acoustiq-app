@@ -39,6 +39,27 @@ export interface SourceEvent {
 
 export type ConcordanceState = 'Confirmé' | 'Incertain' | 'Non visible'
 
+/** Statut d'une période : inclure ou exclure du calcul des indices. */
+export type PeriodStatus = 'include' | 'exclude'
+
+/**
+ * Période nommée — sélectionnée par l'utilisateur sur le graphique, elle
+ * filtre les données utilisées pour le calcul des indices acoustiques
+ * (LAeq, L10…). Les timestamps sont stockés en epoch ms pour gérer
+ * naturellement les plages qui traversent minuit.
+ */
+export interface Period {
+  id: string
+  name: string
+  /** Epoch ms (inclus) */
+  startMs: number
+  /** Epoch ms (exclus) */
+  endMs: number
+  status: PeriodStatus
+  /** Couleur d'affichage (auto-assignée) — pas utilisée pour le statut */
+  color?: string
+}
+
 /** Candidat d'événement issu de la détection automatique (émergence sur bruit de fond local) */
 export interface CandidateEvent {
   id: string

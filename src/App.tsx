@@ -45,6 +45,7 @@ import type {
   ChecklistState,
   LwSourceSummary,
   Scene3DData,
+  Period,
 } from './types'
 import { DEFAULT_METEO } from './types'
 import ChecklistModal, { DEFAULT_CHECKLIST } from './components/ChecklistModal'
@@ -85,6 +86,7 @@ import { loadSettings, saveSettings } from './modules/settings'
 import { t, setLanguage } from './modules/i18n'
 import TimeSeriesChart from './components/TimeSeriesChart'
 import IndicesPanel from './components/IndicesPanel'
+import PeriodsPanel from './components/PeriodsPanel'
 import EventsPanel from './components/EventsPanel'
 import ConcordanceTable from './components/ConcordanceTable'
 import Spectrogram from './components/Spectrogram'
@@ -1050,6 +1052,10 @@ interface MainPanelProps {
   onPresentationToggle: () => void
   hiddenPoints: Set<string>
   onTogglePointVisibility: (pt: string) => void
+  periods: Period[]
+  onPeriodAdd: (p: Period) => void
+  onPeriodUpdate: (id: string, patch: Partial<Period>) => void
+  onPeriodRemove: (id: string) => void
   onDateChange: (date: string) => void
   onTabChange: (tab: Tab) => void
   onCellChange: (eventId: string, point: string, state: ConcordanceState) => void
@@ -1081,6 +1087,7 @@ function MainPanel({
   lwSources, onLwSourcesChange, scene3D, onScene3DChange,
   presentationMode, onPresentationToggle,
   hiddenPoints, onTogglePointVisibility,
+  periods, onPeriodAdd, onPeriodUpdate, onPeriodRemove,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
@@ -1311,6 +1318,10 @@ function MainPanel({
                   pointLabels={pointLabels}
                   hiddenPoints={hiddenPoints}
                   onTogglePointVisibility={onTogglePointVisibility}
+                  periods={periods}
+                  onPeriodAdd={onPeriodAdd}
+                  onPeriodUpdate={onPeriodUpdate}
+                  onPeriodRemove={onPeriodRemove}
                 />
               </div>
 
@@ -1360,9 +1371,27 @@ function MainPanel({
 
               </div>
               {!presentationMode && (
-                <div className="shrink-0">
-                  <IndicesPanel files={visibleChartFiles} pointMap={pointMap} selectedDate={selectedDate} meteo={meteo} aggregationSeconds={aggregationSeconds} />
-                </div>
+                <>
+                  <div className="shrink-0">
+                    <PeriodsPanel
+                      periods={periods}
+                      onAdd={onPeriodAdd}
+                      onUpdate={onPeriodUpdate}
+                      onRemove={onPeriodRemove}
+                      selectedDate={selectedDate}
+                    />
+                  </div>
+                  <div className="shrink-0">
+                    <IndicesPanel
+                      files={visibleChartFiles}
+                      pointMap={pointMap}
+                      selectedDate={selectedDate}
+                      meteo={meteo}
+                      aggregationSeconds={aggregationSeconds}
+                      periods={periods}
+                    />
+                  </div>
+                </>
               )}
             </>
           ) : (
@@ -1424,6 +1453,7 @@ function MainPanel({
               conformiteSummary={conformiteSummary}
               companyName={settings.companyName}
               meteo={meteo}
+              periods={periods}
             />
           ) : (
             <EmptyState
@@ -1486,6 +1516,7 @@ function MainPanel({
               onReceptorChange={onConformiteReceptorChange}
               period={conformitePeriod}
               onPeriodChange={onConformitePeriodChange}
+              periods={periods}
             />
           ) : (
             <EmptyState
@@ -1614,6 +1645,18 @@ export default function App() {
 
   // Mode présentation : masque sidebar + barre d'onglets
   const [presentationMode, setPresentationMode] = useState(false)
+
+  // Périodes nommées — filtre les données pour le calcul des indices
+  const [periods, setPeriods] = useState<Period[]>([])
+  const handlePeriodAdd = useCallback((p: Period) => {
+    setPeriods((prev) => [...prev, p])
+  }, [])
+  const handlePeriodUpdate = useCallback((id: string, patch: Partial<Period>) => {
+    setPeriods((prev) => prev.map((p) => (p.id === id ? { ...p, ...patch } : p)))
+  }, [])
+  const handlePeriodRemove = useCallback((id: string) => {
+    setPeriods((prev) => prev.filter((p) => p.id !== id))
+  }, [])
 
   // Visibilité des courbes par point (toggle via légende/sidebar)
   const [hiddenPoints, setHiddenPoints] = useState<Set<string>>(new Set())
@@ -2043,6 +2086,7 @@ export default function App() {
     setMapImage(null); setMapMarkers({})
     setOverlayDate(null); setCandidates([])
     setAnnotations([]); setPendingAnnotationText(null)
+    setPeriods([])
     setMeteo(DEFAULT_METEO)
     setChecklist(DEFAULT_CHECKLIST)
     setProjectId(crypto.randomUUID()); setProjectName(t('project.untitled'))
@@ -2074,6 +2118,7 @@ export default function App() {
       setFiles([]); setPointMap({}); setZoomRange(null); setAudioFile(null); setConformiteSummary(null)
       setOverlayDate(null); setCandidates([])
       setAnnotations([]); setPendingAnnotationText(null)
+      setPeriods([])
       setMeteo(parsed.meteo ?? DEFAULT_METEO)
       setChecklist(parsed.checklist ?? DEFAULT_CHECKLIST)
       if (parsed.files?.length > 0) {
@@ -2381,6 +2426,10 @@ export default function App() {
         onPresentationToggle={() => setPresentationMode((v) => !v)}
         hiddenPoints={hiddenPoints}
         onTogglePointVisibility={togglePointVisibility}
+        periods={periods}
+        onPeriodAdd={handlePeriodAdd}
+        onPeriodUpdate={handlePeriodUpdate}
+        onPeriodRemove={handlePeriodRemove}
         onDateChange={setSelectedDate}
         onTabChange={setActiveTab}
         onCellChange={handleCellChange}

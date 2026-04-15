@@ -32,7 +32,7 @@ import {
 } from 'lucide-react'
 import { loadAll as loadRegulationDocs, OFFICIAL_SOURCES } from '../modules/regulationDB'
 import HelpTooltip from './HelpTooltip'
-import type { MeasurementFile, DataPoint, ConformiteSummary } from '../types'
+import type { MeasurementFile, DataPoint, ConformiteSummary, Period as NamedPeriod } from '../types'
 import {
   laeqAvg,
   computeL90,
@@ -41,6 +41,7 @@ import {
   computeKb,
   computeKi,
   computeLar1h,
+  filterDataByPeriods,
 } from '../utils/acoustics'
 import type { KtAnalysis } from '../utils/acoustics'
 
@@ -87,6 +88,8 @@ interface Props {
   onReceptorChange?: (r: ReceptorType) => void
   period?: Period
   onPeriodChange?: (p: Period) => void
+  /** Périodes nommées globales — filtrent les données pour Ba/LAeq, Br... */
+  periods?: NamedPeriod[]
 }
 
 interface PointResult {
@@ -135,6 +138,7 @@ export default function Conformite2026({
   files, pointMap, selectedDate, onSummaryChange,
   receptor: receptorProp, onReceptorChange,
   period: periodProp, onPeriodChange,
+  periods,
 }: Props) {
   // Référentiel sélectionné — contrôlé si props fournies, sinon état local
   const [receptorLocal, setReceptorLocal] = useState<ReceptorType>('I')
@@ -186,17 +190,17 @@ export default function Conformite2026({
     return [...pts].sort()
   }, [files, pointMap, selectedDate])
 
-  /** Données brutes regroupées par point */
+  /** Données brutes regroupées par point (pré-filtrées par les périodes actives) */
   const dataByPoint = useMemo(() => {
     const map = new Map<string, DataPoint[]>()
     for (const pt of pointNames) {
       const dps = files
         .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-        .flatMap((f) => f.data)
+        .flatMap((f) => filterDataByPeriods(f.data, f.date, periods))
       map.set(pt, dps)
     }
     return map
-  }, [files, pointMap, selectedDate, pointNames])
+  }, [files, pointMap, selectedDate, pointNames, periods])
 
   /** Auto-calcul de Br jour/nuit à partir du L90 sur la période calme. */
   function computeBrFromQuietPeriod() {

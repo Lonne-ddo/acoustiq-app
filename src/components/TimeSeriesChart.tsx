@@ -28,7 +28,7 @@ import { drawQrBadge } from '../utils/qrBadge'
 import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3 } from 'lucide-react'
 import ContextMenu from './ContextMenu'
 import { ReferenceDot } from 'recharts'
-import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData } from '../types'
+import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData, Period } from '../types'
 import type { ClassifiedSegment } from '../utils/yamnetProcessor'
 import { laeqAvg, computeL90 } from '../utils/acoustics'
 
@@ -96,6 +96,17 @@ function longFrDate(iso: string): string {
   if (!m) return iso
   const d = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10))
   return `${DOW_FR[d.getDay()]} ${m[3]} ${MON_FR[parseInt(m[2], 10) - 1]}`
+}
+
+/** Epoch ms à minuit local pour une date ISO YYYY-MM-DD */
+function dateMsMidnight(iso: string): number {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return NaN
+  return new Date(
+    parseInt(m[1], 10),
+    parseInt(m[2], 10) - 1,
+    parseInt(m[3], 10),
+  ).getTime()
 }
 
 /** "2026-03-09" → "09/03" */
@@ -252,6 +263,11 @@ interface Props {
   hiddenPoints?: Set<string>
   /** Toggle visibilité d'un point (légende cliquable) */
   onTogglePointVisibility?: (pt: string) => void
+  /** Périodes nommées (affichées comme bandes vertes/rouges) */
+  periods?: Period[]
+  onPeriodAdd?: (p: Period) => void
+  onPeriodUpdate?: (id: string, patch: Partial<Period>) => void
+  onPeriodRemove?: (id: string) => void
 }
 
 /** Format court d'une date ISO en français : "2026-03-09" → "09 mars" */
@@ -295,6 +311,10 @@ export default function TimeSeriesChart({
   pointLabels = {},
   hiddenPoints,
   onTogglePointVisibility,
+  periods,
+  onPeriodAdd,
+  onPeriodUpdate,
+  onPeriodRemove,
 }: Props) {
   // Affichage des données météo (vent) sur le graphique
   const [showWind, setShowWind] = useState(false)
@@ -305,11 +325,17 @@ export default function TimeSeriesChart({
   const aggSec = aggregationSeconds
   const chartRef = useRef<HTMLDivElement>(null)
   const chartAreaRef = useRef<HTMLDivElement>(null)
-  const [dragging, setDragging] = useState(false)
   const [exporting, setExporting] = useState(false)
+
+  // ── Sélection non-Shift : création d'une période nommée ─────────────────
+  const [periodPx, setPeriodPx] = useState<{ startX: number; endX: number } | null>(null)
+  const periodStartRef = useRef<number | null>(null)
+  const [periodPopup, setPeriodPopup] = useState<
+    | { tStart: number; tEnd: number; name: string; x: number; y: number }
+    | null
+  >(null)
+
   const [localHiddenLines, setLocalHiddenLines] = useState<Set<string>>(new Set())
-  const dragStartX = useRef(0)
-  const dragStartRange = useRef<ZoomRange | null>(null)
 
   // ── Sélection Shift+drag ──────────────────────────────────────────────────
   const [selectionPx, setSelectionPx] = useState<{ startX: number; endX: number } | null>(null)
@@ -809,6 +835,31 @@ export default function TimeSeriesChart({
     return out
   }, [visibleData, lineSpecs])
 
+  /** Ancre epoch ms correspondant à l'axe X du graphique (minute 0 = ancre). */
+  const chartAnchorMs = useMemo(() => {
+    const iso = isMultiDay ? anchorDate : selectedDate
+    return dateMsMidnight(iso)
+  }, [isMultiDay, anchorDate, selectedDate])
+
+  /** Pour une période, retourne ses bornes dans la coord X du graphique, ou null. */
+  const periodBounds = useCallback((p: Period): [number, number] | null => {
+    if (!Number.isFinite(chartAnchorMs)) return null
+    const startMin = (p.startMs - chartAnchorMs) / 60_000
+    const endMin = (p.endMs - chartAnchorMs) / 60_000
+    if (endMin < fullRange.startMin || startMin > fullRange.endMin) return null
+    return [Math.max(fullRange.startMin, startMin), Math.min(fullRange.endMin, endMin)]
+  }, [chartAnchorMs, fullRange])
+
+  /** Retourne la période couvrant un temps (en minutes chart X), ou null. */
+  const periodAtChartMin = useCallback((tMin: number): Period | null => {
+    if (!periods || !Number.isFinite(chartAnchorMs)) return null
+    const ts = chartAnchorMs + tMin * 60_000
+    for (const p of periods) {
+      if (ts >= p.startMs && ts < p.endMs) return p
+    }
+    return null
+  }, [periods, chartAnchorMs])
+
   // Événements filtrés pour la journée affichée (multi-jours : toutes les dates visibles)
   const activeEvents = useMemo(
     () => isMultiDay
@@ -936,10 +987,11 @@ export default function TimeSeriesChart({
       return
     }
 
-    setDragging(true)
-    dragStartX.current = e.clientX
-    dragStartRange.current = { ...effectiveRange }
-  }, [effectiveRange, compPhase, pendingAnnotationText, xPxToMinutes, chartData, lineSpecs, yDomain, selectedDate, onAnnotationPlace, onPendingAnnotationCleared])
+    // Drag sans Shift : création d'une période nommée
+    periodStartRef.current = xLocal
+    setPeriodPx({ startX: xLocal, endX: xLocal })
+    setPeriodPopup(null)
+  }, [compPhase, pendingAnnotationText, xPxToMinutes, chartData, lineSpecs, yDomain, selectedDate, onAnnotationPlace, onPendingAnnotationCleared])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const rect = chartAreaRef.current?.getBoundingClientRect()
@@ -954,7 +1006,7 @@ export default function TimeSeriesChart({
       return
     }
 
-    // En cours de sélection ?
+    // En cours de sélection Shift (mesure LAeq/L90) ?
     if (selectionStartRef.current !== null) {
       setSelectionPx({
         startX: selectionStartRef.current,
@@ -963,25 +1015,15 @@ export default function TimeSeriesChart({
       return
     }
 
-    if (!dragging || !dragStartRange.current) return
-    const dx = e.clientX - dragStartX.current
-    const span = dragStartRange.current.endMin - dragStartRange.current.startMin
-    const minutesDelta = -(dx / rect.width) * span
-
-    let newStart = dragStartRange.current.startMin + minutesDelta
-    let newEnd = dragStartRange.current.endMin + minutesDelta
-
-    if (newStart < fullRange.startMin) {
-      newStart = fullRange.startMin
-      newEnd = newStart + span
+    // En cours de sélection de période (drag sans Shift) ?
+    if (periodStartRef.current !== null) {
+      setPeriodPx({
+        startX: periodStartRef.current,
+        endX: e.clientX - rect.left,
+      })
+      return
     }
-    if (newEnd > fullRange.endMin) {
-      newEnd = fullRange.endMin
-      newStart = newEnd - span
-    }
-
-    onZoomChange({ startMin: newStart, endMin: newEnd })
-  }, [dragging, fullRange, onZoomChange])
+  }, [])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     // Finaliser une sélection ON/OFF
@@ -1044,13 +1086,30 @@ export default function TimeSeriesChart({
       return
     }
 
-    setDragging(false)
-    dragStartRange.current = null
-  }, [selectionPx, xPxToMinutes, filesByPoint, compPx, compPhase, laeqOverRange])
+    // Finaliser une sélection de période
+    if (periodStartRef.current !== null && periodPx) {
+      const rect = chartAreaRef.current?.getBoundingClientRect()
+      const xA = periodPx.startX
+      const xB = periodPx.endX
+      periodStartRef.current = null
+      if (Math.abs(xB - xA) < 4) {
+        setPeriodPx(null)
+        return
+      }
+      const tA = xPxToMinutes(Math.min(xA, xB))
+      const tB = xPxToMinutes(Math.max(xA, xB))
+      const midX = (xA + xB) / 2
+      const popupY = rect ? Math.max(8, e.clientY - rect.top - 4) : 40
+      setPeriodPopup({
+        tStart: tA, tEnd: tB,
+        name: `Période ${(periods?.length ?? 0) + 1}`,
+        x: midX, y: popupY,
+      })
+      return
+    }
+  }, [selectionPx, periodPx, xPxToMinutes, filesByPoint, compPx, compPhase, laeqOverRange, periods])
 
   const handleMouseLeave = useCallback(() => {
-    setDragging(false)
-    dragStartRange.current = null
     // Ne pas annuler une sélection en cours : l'utilisateur peut sortir de la zone
   }, [])
 
@@ -1353,9 +1412,9 @@ export default function TimeSeriesChart({
         className={`relative flex-1 min-h-0 ${
           pendingAnnotationText || compPhase === 'pickON' || compPhase === 'pickOFF'
             ? 'cursor-crosshair'
-            : dragging
-            ? 'cursor-grabbing'
-            : 'cursor-grab'
+            : periodStartRef.current !== null || selectionStartRef.current !== null
+            ? 'cursor-col-resize'
+            : 'cursor-default'
         }`}
         onWheel={handleWheel}
         onMouseDown={handleMouseDown}
@@ -1618,6 +1677,35 @@ export default function TimeSeriesChart({
                 />
               )}
 
+              {/* Périodes nommées : bandes vertes (include) / rouges (exclude) */}
+              {periods && periods.map((p) => {
+                const bounds = periodBounds(p)
+                if (!bounds) return null
+                const [s, eMin] = bounds
+                const isInclude = p.status === 'include'
+                return (
+                  <ReferenceArea
+                    key={`period-${p.id}`}
+                    yAxisId="left"
+                    x1={s}
+                    x2={eMin}
+                    fill={isInclude ? '#10b981' : '#ef4444'}
+                    fillOpacity={0.15}
+                    stroke={isInclude ? '#10b981' : '#ef4444'}
+                    strokeOpacity={0.6}
+                    strokeDasharray="3 3"
+                    ifOverflow="hidden"
+                    label={{
+                      value: isInclude ? p.name : `✕ ${p.name}`,
+                      position: 'insideTopLeft',
+                      fill: isInclude ? '#6ee7b7' : '#fca5a5',
+                      fontSize: 10,
+                      offset: 4,
+                    }}
+                  />
+                )
+              })}
+
               {/* Multi-jours : séparateurs de minuit + label du jour */}
               {isMultiDay && sortedDates.map((iso, i) => {
                 // Une ligne à chaque minuit (sauf la première qui est le début)
@@ -1843,7 +1931,7 @@ export default function TimeSeriesChart({
           </div>
         )}
 
-        {/* Overlay sélection (rectangle) */}
+        {/* Overlay sélection Shift (rectangle) */}
         {selectionPx && (
           <div
             className="pointer-events-none absolute top-0 bottom-0 bg-emerald-400/15
@@ -1853,6 +1941,89 @@ export default function TimeSeriesChart({
               width: Math.abs(selectionPx.endX - selectionPx.startX),
             }}
           />
+        )}
+
+        {/* Overlay période en cours de création */}
+        {periodPx && (
+          <div
+            className="pointer-events-none absolute top-0 bottom-0 bg-blue-400/15
+                       border-l border-r border-blue-400/70"
+            style={{
+              left: Math.min(periodPx.startX, periodPx.endX),
+              width: Math.abs(periodPx.endX - periodPx.startX),
+            }}
+          />
+        )}
+
+        {/* Popup création de période */}
+        {periodPopup && (
+          <div
+            className="absolute bg-gray-900 border border-gray-700 rounded-md shadow-xl p-2 z-30 min-w-[220px]"
+            style={{
+              left: Math.min(Math.max(0, periodPopup.x - 110), (chartAreaRef.current?.clientWidth ?? 500) - 220),
+              top: Math.max(8, periodPopup.y),
+            }}
+          >
+            <p className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Nouvelle période</p>
+            <input
+              autoFocus
+              value={periodPopup.name}
+              onChange={(e) => setPeriodPopup((prev) => prev && { ...prev, name: e.target.value })}
+              onKeyDown={(e) => {
+                if (e.key === 'Escape') { setPeriodPopup(null); setPeriodPx(null) }
+              }}
+              className="w-full text-xs bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            />
+            <div className="mt-1 text-[10px] text-gray-500 font-mono">
+              {minutesToHHMMSS(periodPopup.tStart)} → {minutesToHHMMSS(periodPopup.tEnd)}
+            </div>
+            <div className="flex gap-1.5 mt-1.5">
+              <button
+                onClick={() => {
+                  if (!onPeriodAdd) { setPeriodPopup(null); setPeriodPx(null); return }
+                  const base = chartAnchorMs
+                  if (!Number.isFinite(base)) { setPeriodPopup(null); setPeriodPx(null); return }
+                  onPeriodAdd({
+                    id: crypto.randomUUID(),
+                    name: periodPopup.name.trim() || `Période ${(periods?.length ?? 0) + 1}`,
+                    startMs: base + periodPopup.tStart * 60_000,
+                    endMs: base + periodPopup.tEnd * 60_000,
+                    status: 'include',
+                  })
+                  setPeriodPopup(null)
+                  setPeriodPx(null)
+                }}
+                className="flex-1 text-[11px] bg-emerald-600 hover:bg-emerald-500 text-white rounded px-2 py-1"
+              >
+                Inclure
+              </button>
+              <button
+                onClick={() => {
+                  if (!onPeriodAdd) { setPeriodPopup(null); setPeriodPx(null); return }
+                  const base = chartAnchorMs
+                  if (!Number.isFinite(base)) { setPeriodPopup(null); setPeriodPx(null); return }
+                  onPeriodAdd({
+                    id: crypto.randomUUID(),
+                    name: periodPopup.name.trim() || `Période ${(periods?.length ?? 0) + 1}`,
+                    startMs: base + periodPopup.tStart * 60_000,
+                    endMs: base + periodPopup.tEnd * 60_000,
+                    status: 'exclude',
+                  })
+                  setPeriodPopup(null)
+                  setPeriodPx(null)
+                }}
+                className="flex-1 text-[11px] bg-rose-600 hover:bg-rose-500 text-white rounded px-2 py-1"
+              >
+                Exclure
+              </button>
+              <button
+                onClick={() => { setPeriodPopup(null); setPeriodPx(null) }}
+                className="text-[11px] text-gray-400 hover:text-gray-200 bg-gray-800 hover:bg-gray-700 rounded px-2 py-1"
+              >
+                Annuler
+              </button>
+            </div>
+          </div>
         )}
 
         {/* Popup résultats sélection */}
@@ -1920,7 +2091,55 @@ export default function TimeSeriesChart({
                   },
                 ]
               }
+              const hoveredPeriod = periodAtChartMin(tMin)
+              const baseMs = chartAnchorMs
+              if (hoveredPeriod && onPeriodUpdate && onPeriodRemove) {
+                return [
+                  {
+                    label: `Renommer « ${hoveredPeriod.name} »`,
+                    icon: <Edit3 size={12} />,
+                    action: () => {
+                      const name = window.prompt('Nouveau nom :', hoveredPeriod.name)
+                      if (!name || !name.trim()) return
+                      onPeriodUpdate(hoveredPeriod.id, { name: name.trim() })
+                    },
+                  },
+                  {
+                    label: hoveredPeriod.status === 'include' ? 'Exclure du calcul' : 'Inclure au calcul',
+                    icon: <Flag size={12} />,
+                    action: () => onPeriodUpdate(hoveredPeriod.id, {
+                      status: hoveredPeriod.status === 'include' ? 'exclude' : 'include',
+                    }),
+                  },
+                  {
+                    label: 'Supprimer cette période',
+                    icon: <Trash2 size={12} />,
+                    danger: true,
+                    action: () => onPeriodRemove(hoveredPeriod.id),
+                  },
+                ]
+              }
               return [
+                {
+                  label: `Ajouter une période à partir de ${timeHHMMSS}`,
+                  icon: <Edit3 size={12} />,
+                  disabled: !onPeriodAdd || !Number.isFinite(baseMs),
+                  action: () => {
+                    if (!onPeriodAdd || !Number.isFinite(baseMs)) return
+                    const durStr = window.prompt('Durée (minutes) :', '60')
+                    if (!durStr) return
+                    const dur = parseFloat(durStr)
+                    if (!Number.isFinite(dur) || dur <= 0) return
+                    const statusStr = window.confirm('OK = Inclure, Annuler = Exclure')
+                    onPeriodAdd({
+                      id: crypto.randomUUID(),
+                      name: `Période ${(periods?.length ?? 0) + 1}`,
+                      startMs: baseMs + tMin * 60_000,
+                      endMs: baseMs + (tMin + dur) * 60_000,
+                      status: statusStr ? 'include' : 'exclude',
+                    })
+                  },
+                },
                 {
                   label: `Annoter ce moment (${timeHHMMSS})`,
                   icon: <StickyNote size={12} />,
@@ -1965,12 +2184,6 @@ export default function TimeSeriesChart({
                     const text = `${selectedDate} ${timeHHMMSS} · ${parts}`
                     navigator.clipboard?.writeText(text).catch(() => { /* ignore */ })
                   },
-                },
-                {
-                  label: 'Ajouter période (bientôt)',
-                  icon: <Edit3 size={12} />,
-                  disabled: true,
-                  action: () => { /* #3 à venir */ },
                 },
               ]
             })()}

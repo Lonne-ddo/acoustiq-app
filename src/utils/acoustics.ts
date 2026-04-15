@@ -1,6 +1,7 @@
 /**
  * Utilitaires de calcul acoustique
  */
+import type { Period } from '../types'
 
 /**
  * Détecte des candidats d'événement = montées de LAeq ≥ `minDeltaDb`
@@ -203,6 +204,80 @@ export function detectEmergenceEvents(
   }
 
   return out
+}
+
+/**
+ * Convertit une date ISO (YYYY-MM-DD) et un temps en minutes depuis minuit
+ * en timestamp epoch ms (fuseau local du navigateur).
+ */
+export function dpTimestampMs(isoDate: string, tMinutes: number): number {
+  const m = isoDate.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return NaN
+  const d = new Date(
+    parseInt(m[1], 10),
+    parseInt(m[2], 10) - 1,
+    parseInt(m[3], 10),
+  )
+  return d.getTime() + tMinutes * 60_000
+}
+
+/** Période pour filtrage (sous-ensemble de src/types Period). */
+interface PeriodFilter {
+  startMs: number
+  endMs: number
+  status: 'include' | 'exclude'
+}
+
+/**
+ * Vrai si au moins un intervalle [startMs, endMs) d'une liste de périodes
+ * contient `tsMs`.
+ */
+function anyRangeContains(ranges: PeriodFilter[], tsMs: number): boolean {
+  for (const r of ranges) {
+    if (tsMs >= r.startMs && tsMs < r.endMs) return true
+  }
+  return false
+}
+
+/**
+ * Filtre un tableau de DataPoints selon une liste de périodes.
+ *
+ * Règle de sélection :
+ *   - Aucune période → garde tout (comportement par défaut).
+ *   - Uniquement « exclude » → garde tout SAUF ce qui tombe dans un exclude.
+ *   - Au moins une « include » → garde uniquement ce qui est dans un include,
+ *     puis retire les points tombant aussi dans un exclude (intersection).
+ *
+ * `isoDate` est la date du fichier (YYYY-MM-DD). `tMinutes` est dp.t.
+ * Le filtre ne dépend pas de dp.t modulo 1440 : les périodes multi-jours
+ * sont gérées nativement par l'epoch ms.
+ */
+export function filterDataByPeriods<T extends { t: number }>(
+  data: T[],
+  isoDate: string,
+  periods: Period[] | undefined | null,
+): T[] {
+  if (!periods || periods.length === 0) return data
+  const includes: PeriodFilter[] = []
+  const excludes: PeriodFilter[] = []
+  for (const p of periods) {
+    const rng: PeriodFilter = { startMs: p.startMs, endMs: p.endMs, status: p.status }
+    if (p.status === 'include') includes.push(rng)
+    else excludes.push(rng)
+  }
+  if (includes.length === 0 && excludes.length === 0) return data
+
+  const baseMs = dpTimestampMs(isoDate, 0)
+  if (!Number.isFinite(baseMs)) return data
+
+  return data.filter((dp) => {
+    const ts = baseMs + dp.t * 60_000
+    if (includes.length > 0) {
+      if (!anyRangeContains(includes, ts)) return false
+    }
+    if (anyRangeContains(excludes, ts)) return false
+    return true
+  })
 }
 
 /**

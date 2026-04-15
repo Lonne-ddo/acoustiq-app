@@ -1571,7 +1571,7 @@ export default function App() {
 
   // Pas d'agrégation lifté ici pour partage entre chart, spectrogramme embarqué et plein écran
   // Défaut : 5 secondes (compromis lisibilité / résolution)
-  const [aggregationSeconds, setAggregationSeconds] = useState<number>(5)
+  const [aggregationSeconds, setAggregationSeconds] = useState<number>(30)
   const [spectrogramExpanded, setSpectrogramExpanded] = useState<boolean>(true)
 
   // Plan de site

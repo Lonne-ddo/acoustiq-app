@@ -74,6 +74,38 @@ function snapToBucket(time: string, aggSec: number): string {
   return minutesToHHMM(snappedSec / 60)
 }
 
+/** Convertit HH:MM en minutes depuis minuit */
+function hhmmToMin(time: string): number {
+  const [h = '0', m = '0'] = time.split(':')
+  return parseInt(h, 10) * 60 + parseInt(m, 10)
+}
+
+/** Arrondit un nombre de minutes au bucket d'agrégation inférieur (en s) */
+function snapBucketMin(totalMin: number, aggSec: number): number {
+  const totalSec = totalMin * 60
+  return (Math.floor(totalSec / aggSec) * aggSec) / 60
+}
+
+const DOW_FR = ['Dim', 'Lun', 'Mar', 'Mer', 'Jeu', 'Ven', 'Sam']
+const MON_FR = ['janv.', 'févr.', 'mars', 'avril', 'mai', 'juin',
+  'juil.', 'août', 'sept.', 'oct.', 'nov.', 'déc.']
+
+/** "2026-03-09" → "Lun 09 mars" (date en fuseau local) */
+function longFrDate(iso: string): string {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return iso
+  const d = new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10))
+  return `${DOW_FR[d.getDay()]} ${m[3]} ${MON_FR[parseInt(m[2], 10) - 1]}`
+}
+
+/** "2026-03-09" → "09/03" */
+function shortSlashDate(iso: string): string {
+  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return iso
+  return `${m[3]}/${m[2]}`
+}
+
+
 /**
  * Calcule des ticks adaptatifs pour l'axe X selon la plage visible.
  * Retourne la liste des labels (sous-ensemble de ceux présents dans visibleData)
@@ -413,12 +445,32 @@ export default function TimeSeriesChart({
     }
   }, [files, pointMap, selectedDate, projectName])
 
-  /** Dates effectivement affichées : la principale + l'overlay éventuel (max 2). */
+  /** Mode multi-jours continu : concatène toutes les dates disponibles sur un
+   *  axe temporel absolu (dayOffset × 1440 min + t). Désactivé dès qu'un
+   *  overlay manuel est sélectionné ou qu'il n'y a qu'une date. */
+  const isMultiDay = availableDates.length > 1 && !overlayDate
+
+  const sortedDates = useMemo(() => [...availableDates].sort(), [availableDates])
+
+  /** Anchor : première date de la série multi-jours (ou selectedDate sinon) */
+  const anchorDate = isMultiDay ? sortedDates[0] : selectedDate
+
+  /** Index de jour pour une date ISO donnée (0 = anchor). Utilisé pour calculer
+   *  les offsets en minutes sur l'axe X absolu. */
+  const dayIndexOf = useCallback((date: string): number => {
+    if (!isMultiDay) return 0
+    const idx = sortedDates.indexOf(date)
+    return idx < 0 ? 0 : idx
+  }, [isMultiDay, sortedDates])
+
+  /** Dates effectivement affichées : toutes en mode multi-jours, sinon la
+   *  principale + l'overlay éventuel (max 2). */
   const renderedDates = useMemo(() => {
+    if (isMultiDay) return sortedDates
     const out = [selectedDate]
     if (overlayDate && overlayDate !== selectedDate) out.push(overlayDate)
     return out
-  }, [selectedDate, overlayDate])
+  }, [isMultiDay, sortedDates, selectedDate, overlayDate])
 
   /** Map clé `${pt}|${date}` → fichiers correspondants */
   const filesByPointDate = useMemo(() => {
@@ -451,6 +503,22 @@ export default function TimeSeriesChart({
   }
   const lineSpecs = useMemo<LineSpec[]>(() => {
     const out: LineSpec[] = []
+    // En mode multi-jours continu : une seule ligne par point (agrège toutes les dates).
+    if (isMultiDay) {
+      pointNames.forEach((pt, i) => {
+        const color = getPointColor(pt, i, pointColors)
+        const label = pointLabels[pt] || pt
+        out.push({
+          key: pt,
+          pt,
+          date: anchorDate,
+          isOverlay: false,
+          displayName: label,
+          color,
+        })
+      })
+      return out
+    }
     pointNames.forEach((pt, i) => {
       const color = getPointColor(pt, i, pointColors)
       for (const d of renderedDates) {
@@ -469,7 +537,7 @@ export default function TimeSeriesChart({
       }
     })
     return out
-  }, [pointNames, renderedDates, filesByPointDate, selectedDate, pointColors, pointLabels])
+  }, [isMultiDay, anchorDate, pointNames, renderedDates, filesByPointDate, selectedDate, pointColors, pointLabels])
 
   // Set des keys masquées : dérivé du set "par point" lifté à App, fusionné
   // avec l'état local (legacy si pas de prop).
@@ -520,18 +588,39 @@ export default function TimeSeriesChart({
   const chartData = useMemo((): ChartEntry[] => {
     const buckets = new Map<number, Map<string, number[]>>()
 
-    for (const spec of lineSpecs) {
-      const fs = filesByPointDate.get(`${spec.pt}|${spec.date}`) ?? []
-      for (const f of fs) {
-        for (const dp of f.data) {
-          // Garde défensive : ignorer les datapoints sans temps ou laeq valides
-          if (!Number.isFinite(dp.t) || !Number.isFinite(dp.laeq)) continue
-          const tSec = Math.round(dp.t * 60)
-          const bucketSec = Math.floor(tSec / aggSec) * aggSec
-          if (!buckets.has(bucketSec)) buckets.set(bucketSec, new Map())
-          const keyBucket = buckets.get(bucketSec)!
-          if (!keyBucket.has(spec.key)) keyBucket.set(spec.key, [])
-          keyBucket.get(spec.key)!.push(dp.laeq)
+    if (isMultiDay) {
+      // Mode multi-jours : agrège toutes les dates sur un axe absolu (dayOffset*1440 + dp.t)
+      for (const spec of lineSpecs) {
+        for (const d of sortedDates) {
+          const fs = filesByPointDate.get(`${spec.pt}|${d}`) ?? []
+          const offset = dayIndexOf(d) * 1440
+          for (const f of fs) {
+            for (const dp of f.data) {
+              if (!Number.isFinite(dp.t) || !Number.isFinite(dp.laeq)) continue
+              const tSec = Math.round((dp.t + offset) * 60)
+              const bucketSec = Math.floor(tSec / aggSec) * aggSec
+              if (!buckets.has(bucketSec)) buckets.set(bucketSec, new Map())
+              const keyBucket = buckets.get(bucketSec)!
+              if (!keyBucket.has(spec.key)) keyBucket.set(spec.key, [])
+              keyBucket.get(spec.key)!.push(dp.laeq)
+            }
+          }
+        }
+      }
+    } else {
+      for (const spec of lineSpecs) {
+        const fs = filesByPointDate.get(`${spec.pt}|${spec.date}`) ?? []
+        for (const f of fs) {
+          for (const dp of f.data) {
+            // Garde défensive : ignorer les datapoints sans temps ou laeq valides
+            if (!Number.isFinite(dp.t) || !Number.isFinite(dp.laeq)) continue
+            const tSec = Math.round(dp.t * 60)
+            const bucketSec = Math.floor(tSec / aggSec) * aggSec
+            if (!buckets.has(bucketSec)) buckets.set(bucketSec, new Map())
+            const keyBucket = buckets.get(bucketSec)!
+            if (!keyBucket.has(spec.key)) keyBucket.set(spec.key, [])
+            keyBucket.get(spec.key)!.push(dp.laeq)
+          }
         }
       }
     }
@@ -549,7 +638,7 @@ export default function TimeSeriesChart({
         }
         return entry
       })
-  }, [lineSpecs, filesByPointDate, aggSec])
+  }, [lineSpecs, filesByPointDate, aggSec, isMultiDay, sortedDates, dayIndexOf])
 
   // ── Données vent injectées dans chartData (clé "_wind") ──────────────────
   // Modèle simple : une seule valeur saisie → ligne plate sur toute la période.
@@ -562,14 +651,20 @@ export default function TimeSeriesChart({
     return chartData.map((row) => ({ ...row, _wind: windSpeed } as ChartEntry))
   }, [chartData, windSpeed])
 
-  // Plage temporelle globale des données (en minutes)
+  // Plage temporelle globale des données (en minutes).
+  // En mode multi-jours, étend à l'intervalle complet [0, N*1440] pour que
+  // les séparateurs de minuit et les zones de gap soient toujours visibles.
   const fullRange = useMemo((): ZoomRange => {
+    if (isMultiDay) {
+      const span = Math.max(1, sortedDates.length) * 1440
+      return { startMin: 0, endMin: span }
+    }
     if (chartData.length === 0) return { startMin: 0, endMin: 1440 }
     return {
       startMin: chartData[0].t,
       endMin: chartData[chartData.length - 1].t,
     }
-  }, [chartData])
+  }, [chartData, isMultiDay, sortedDates.length])
 
   // Plage effective (zoom ou pleine)
   const effectiveRange = zoomRange ?? fullRange
@@ -646,6 +741,59 @@ export default function TimeSeriesChart({
     [visibleData, effectiveRange, aggSec],
   )
 
+  /** Formate un temps absolu (minutes) en HH:MM ou DD/MM HH:MM selon le mode
+   *  et la portée visible. En multi-jours et vue large (> 1 j) : DD/MM HH:MM.
+   *  Sinon : HH:MM. */
+  const formatAxisLabel = useCallback((tMin: number): string => {
+    const hhmm = minutesToHHMM(((tMin % 1440) + 1440) % 1440)
+    if (!isMultiDay) return hhmm
+    const spanMin = effectiveRange.endMin - effectiveRange.startMin
+    if (spanMin <= 1440 * 1.1) return hhmm
+    const dayIdx = Math.floor(tMin / 1440)
+    const dateIso = sortedDates[dayIdx] ?? sortedDates[0]
+    return `${shortSlashDate(dateIso)} ${hhmm}`
+  }, [isMultiDay, sortedDates, effectiveRange])
+
+  /** Ticks numériques (minutes absolues) pour l'axe numeric. Fallback sur les
+   *  ticks adaptatifs HH:MM si pas en multi-jours. */
+  const numericTicks = useMemo<number[]>(() => {
+    if (!isMultiDay) return []
+    const span = effectiveRange.endMin - effectiveRange.startMin
+    // Stride en minutes : 1h, 3h, 6h, 12h, 24h selon la portée
+    let stride: number
+    if (span <= 60 * 2) stride = 10
+    else if (span <= 60 * 6) stride = 30
+    else if (span <= 60 * 12) stride = 60
+    else if (span <= 60 * 24) stride = 120
+    else if (span <= 60 * 72) stride = 360
+    else stride = 720
+    const out: number[] = []
+    const start = Math.ceil(effectiveRange.startMin / stride) * stride
+    for (let t = start; t <= effectiveRange.endMin; t += stride) out.push(t)
+    if (out.length > 16) return out.filter((_, i) => i % Math.ceil(out.length / 16) === 0)
+    return out
+  }, [isMultiDay, effectiveRange])
+
+  /** Zones de discontinuité : périodes > 60 min sans données entre deux buckets.
+   *  Ne s'applique qu'en mode multi-jours (utile typiquement pour les gaps de
+   *  nuit entre des sessions consécutives). */
+  const gapZones = useMemo<Array<{ start: number; end: number; gapMin: number }>>(() => {
+    if (!isMultiDay || chartData.length < 2) return []
+    const GAP_THRESHOLD = 60 // minutes
+    const out: Array<{ start: number; end: number; gapMin: number }> = []
+    for (let i = 1; i < chartData.length; i++) {
+      const delta = chartData[i].t - chartData[i - 1].t
+      if (delta > GAP_THRESHOLD) {
+        out.push({
+          start: chartData[i - 1].t + aggSec / 60,
+          end: chartData[i].t,
+          gapMin: delta,
+        })
+      }
+    }
+    return out
+  }, [isMultiDay, chartData, aggSec])
+
   // Dernière valeur visible par ligne — pour les étiquettes "collantes"
   const lastValueByKey = useMemo(() => {
     const out: Record<string, number> = {}
@@ -661,10 +809,12 @@ export default function TimeSeriesChart({
     return out
   }, [visibleData, lineSpecs])
 
-  // Événements filtrés pour la journée affichée
+  // Événements filtrés pour la journée affichée (multi-jours : toutes les dates visibles)
   const activeEvents = useMemo(
-    () => events.filter((ev) => ev.day === selectedDate),
-    [events, selectedDate],
+    () => isMultiDay
+      ? events.filter((ev) => sortedDates.includes(ev.day))
+      : events.filter((ev) => ev.day === selectedDate),
+    [events, selectedDate, isMultiDay, sortedDates],
   )
 
   // Niveau de zoom (×n) — global span / visible span
@@ -1245,15 +1395,72 @@ export default function TimeSeriesChart({
             <LineChart data={visibleData} margin={{ top: 8, right: 24, left: 0, bottom: 8 }}>
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
 
-              <XAxis
-                dataKey="label"
-                tick={{ fontSize: 11, fill: '#9ca3af' }}
-                tickLine={false}
-                axisLine={{ stroke: '#374151' }}
-                interval={0}
-                ticks={adaptiveTicks.ticks}
-                tickFormatter={adaptiveTicks.formatter}
-              />
+              {/* Multi-jours : fond alterné subtil un jour sur deux (jours pairs = transparent, impairs = blanc 2%) */}
+              {isMultiDay && sortedDates.map((_, i) => {
+                if (i % 2 === 0) return null
+                return (
+                  <ReferenceArea
+                    key={`day-bg-${i}`}
+                    yAxisId="left"
+                    x1={i * 1440}
+                    x2={(i + 1) * 1440}
+                    fill="#ffffff"
+                    fillOpacity={0.02}
+                    stroke="none"
+                    ifOverflow="hidden"
+                  />
+                )
+              })}
+
+              {/* Multi-jours : zones grisées pour les discontinuités > 1h sans données */}
+              {isMultiDay && gapZones.map((g, i) => {
+                const hours = Math.floor(g.gapMin / 60)
+                const mins = Math.round(g.gapMin % 60)
+                const dur = hours > 0 ? `${hours}h${mins > 0 ? String(mins).padStart(2, '0') : ''}` : `${mins} min`
+                return (
+                  <ReferenceArea
+                    key={`gap-${i}`}
+                    yAxisId="left"
+                    x1={g.start}
+                    x2={g.end}
+                    fill="#6b7280"
+                    fillOpacity={0.3}
+                    stroke="none"
+                    ifOverflow="hidden"
+                    label={{
+                      value: `↕ ${dur} sans données`,
+                      position: 'insideTop',
+                      fill: '#d1d5db',
+                      fontSize: 10,
+                    }}
+                  />
+                )
+              })}
+
+              {isMultiDay ? (
+                <XAxis
+                  dataKey="t"
+                  type="number"
+                  domain={[effectiveRange.startMin, effectiveRange.endMin]}
+                  allowDataOverflow
+                  tick={{ fontSize: 11, fill: '#9ca3af' }}
+                  tickLine={false}
+                  axisLine={{ stroke: '#374151' }}
+                  ticks={numericTicks}
+                  tickFormatter={(v) => formatAxisLabel(Number(v))}
+                  scale="linear"
+                />
+              ) : (
+                <XAxis
+                  dataKey="label"
+                  tick={{ fontSize: 11, fill: '#9ca3af' }}
+                  tickLine={false}
+                  axisLine={{ stroke: '#374151' }}
+                  interval={0}
+                  ticks={adaptiveTicks.ticks}
+                  tickFormatter={adaptiveTicks.formatter}
+                />
+              )}
 
               <YAxis
                 yAxisId="left"
@@ -1293,6 +1500,14 @@ export default function TimeSeriesChart({
                 labelStyle={{ color: '#e5e7eb', marginBottom: 4 }}
                 itemStyle={{ color: '#d1d5db' }}
                 formatter={(value) => [`${value} dB(A)`, undefined]}
+                labelFormatter={(label) => {
+                  if (!isMultiDay) return String(label)
+                  const t = typeof label === 'number' ? label : Number(label)
+                  if (!Number.isFinite(t)) return String(label)
+                  const dayIdx = Math.floor(t / 1440)
+                  const dateIso = sortedDates[dayIdx] ?? sortedDates[0]
+                  return `${longFrDate(dateIso)} · ${minutesToHHMM(((t % 1440) + 1440) % 1440)}`
+                }}
               />
 
               <Legend
@@ -1403,69 +1618,112 @@ export default function TimeSeriesChart({
                 />
               )}
 
-              {/* Lignes verticales des événements */}
-              {activeEvents.map((ev) => (
-                <ReferenceLine
-                  key={ev.id}
-                  yAxisId="left"
-                  x={snapToBucket(ev.time, aggSec)}
-                  stroke={ev.color}
-                  strokeDasharray="4 3"
-                  strokeWidth={1.5}
-                  label={{
-                    value: ev.label,
-                    position: 'insideTopRight',
-                    fill: ev.color,
-                    fontSize: 9,
-                    offset: 4,
-                  }}
-                />
-              ))}
-
-              {/* Candidats détectés (orange pointillé) */}
-              {candidates
-                .filter((c) => c.day === selectedDate)
-                .map((c) => (
+              {/* Multi-jours : séparateurs de minuit + label du jour */}
+              {isMultiDay && sortedDates.map((iso, i) => {
+                // Une ligne à chaque minuit (sauf la première qui est le début)
+                const xMidnight = i * 1440
+                const label = longFrDate(iso)
+                // Label centré sur la zone du jour (au début du jour + 12h approx, mais on utilise insideTop sur la ligne)
+                // Pour centrer le label, on ajoute une ReferenceLine invisible à day+12h.
+                return (
                   <ReferenceLine
-                    key={`cand-${c.id}`}
+                    key={`midnight-${i}`}
                     yAxisId="left"
-                    x={snapToBucket(c.time, aggSec)}
-                    stroke="#fb923c"
-                    strokeDasharray="2 3"
-                    strokeWidth={1.25}
+                    x={xMidnight}
+                    stroke={i === 0 ? 'transparent' : '#ffffff'}
+                    strokeOpacity={i === 0 ? 0 : 0.4}
+                    strokeDasharray="3 4"
+                    strokeWidth={1}
                     label={{
-                      value: `+${c.delta.toFixed(0)}dB`,
-                      position: 'insideBottomRight',
-                      fill: '#fb923c',
+                      value: label,
+                      position: 'insideTopLeft',
+                      fill: '#d1d5db',
+                      fontSize: 11,
+                      offset: 8,
+                    }}
+                    ifOverflow="hidden"
+                  />
+                )
+              })}
+
+              {/* Lignes verticales des événements */}
+              {activeEvents.map((ev) => {
+                const xVal = isMultiDay
+                  ? snapBucketMin(dayIndexOf(ev.day) * 1440 + hhmmToMin(ev.time), aggSec)
+                  : snapToBucket(ev.time, aggSec)
+                return (
+                  <ReferenceLine
+                    key={ev.id}
+                    yAxisId="left"
+                    x={xVal}
+                    stroke={ev.color}
+                    strokeDasharray="4 3"
+                    strokeWidth={1.5}
+                    label={{
+                      value: ev.label,
+                      position: 'insideTopRight',
+                      fill: ev.color,
                       fontSize: 9,
                       offset: 4,
                     }}
                   />
-                ))}
+                )
+              })}
+
+              {/* Candidats détectés (orange pointillé) */}
+              {candidates
+                .filter((c) => isMultiDay ? sortedDates.includes(c.day) : c.day === selectedDate)
+                .map((c) => {
+                  const xVal = isMultiDay
+                    ? snapBucketMin(dayIndexOf(c.day) * 1440 + hhmmToMin(c.time), aggSec)
+                    : snapToBucket(c.time, aggSec)
+                  return (
+                    <ReferenceLine
+                      key={`cand-${c.id}`}
+                      yAxisId="left"
+                      x={xVal}
+                      stroke="#fb923c"
+                      strokeDasharray="2 3"
+                      strokeWidth={1.25}
+                      label={{
+                        value: `+${c.delta.toFixed(0)}dB`,
+                        position: 'insideBottomRight',
+                        fill: '#fb923c',
+                        fontSize: 9,
+                        offset: 4,
+                      }}
+                    />
+                  )
+                })}
 
               {/* Annotations textuelles (ReferenceDot + label) */}
               {annotations
-                .filter((a) => a.day === selectedDate)
-                .map((a) => (
-                  <ReferenceDot
-                    key={`ann-${a.id}`}
-                    yAxisId="left"
-                    x={snapToBucket(a.time, aggSec)}
-                    y={a.laeq}
-                    r={3.5}
-                    fill={a.color ?? '#fbbf24'}
-                    stroke="#fff"
-                    strokeWidth={1}
-                    ifOverflow="extendDomain"
-                    label={{
-                      value: a.text,
-                      position: 'top',
-                      fill: a.color ?? '#fbbf24',
-                      fontSize: 10,
-                      offset: 6,
-                    }}
-                  />
-                ))}
+                .filter((a) => isMultiDay ? sortedDates.includes(a.day) : a.day === selectedDate)
+                .map((a) => {
+                  const xVal = isMultiDay
+                    ? snapBucketMin(dayIndexOf(a.day) * 1440 + hhmmToMin(a.time), aggSec)
+                    : snapToBucket(a.time, aggSec)
+                  return (
+                    <ReferenceDot
+                      key={`ann-${a.id}`}
+                      yAxisId="left"
+                      x={xVal}
+                      y={a.laeq}
+                      r={3.5}
+                      fill={a.color ?? '#fbbf24'}
+                      stroke="#fff"
+                      strokeWidth={1}
+                      ifOverflow="extendDomain"
+                      label={{
+                        value: a.text,
+                        position: 'top',
+                        fill: a.color ?? '#fbbf24',
+                        fontSize: 10,
+                        offset: 6,
+                      }}
+                    />
+                  )
+                })}
             </LineChart>
           </ResponsiveContainer>
         </div>

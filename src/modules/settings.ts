@@ -16,7 +16,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   yAxisMin: 30,
   yAxisMax: 90,
-  aggregationInterval: 5,
+  aggregationInterval: 30,
   companyName: '',
   language: 'fr',
 }

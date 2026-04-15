@@ -9,7 +9,7 @@ import 'maplibre-gl/dist/maplibre-gl.css'
 import {
   RotateCcw, Target, Eye, Compass, Loader2, Search, Pencil, X, Trash2,
   MapPin, StickyNote, Plus, Info, Edit3, Crosshair, Box, ArrowLeft,
-  Ruler, Mountain, Building2, Minus,
+  Ruler, Building2, Minus,
 } from 'lucide-react'
 import type { LwSourceSummary, Scene3DData } from '../types'
 import ContextMenu from './ContextMenu'
@@ -262,7 +262,6 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
   const [buildingCount, setBuildingCount] = useState(0)
   const [searchQuery, setSearchQuery] = useState('')
   const [searching, setSearching] = useState(false)
-  const [topoExaggeration, setTopoExaggeration] = useState(1.3)
 
   // Outil de mesure de distance
   const [measureTool, setMeasureTool] = useState(false)
@@ -1114,16 +1113,6 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
     }
   }, [zones, focusedZoneId])
 
-  // Synchroniser l'exagération topo avec le terrain
-  useEffect(() => {
-    const map = mapRef.current
-    if (!map) return
-    try {
-      map.setTerrain({ source: 'terrain-dem', exaggeration: topoExaggeration })
-    } catch {
-      /* style pas encore prêt */
-    }
-  }, [topoExaggeration])
 
   // Mask focus 3D : outer monde + zone en trou
   useEffect(() => {
@@ -1442,22 +1431,6 @@ export default function Vue3DTab({ lwSources, scene3D, onScene3DChange }: Props)
               className="flex-1 flex items-center justify-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded px-2 py-1 transition-colors">
               <Eye size={11} /> Vue dessus
             </button>
-          </div>
-        </div>
-
-        {/* Topographie */}
-        <div className="px-3 py-3 border-b border-gray-800 space-y-2">
-          <h3 className="text-xs font-semibold text-gray-400 uppercase tracking-wide flex items-center gap-1.5">
-            <Mountain size={12} /> Topographie
-          </h3>
-          <div>
-            <div className="flex items-center justify-between text-[10px] text-gray-500 mb-0.5">
-              <span>Exagération topo</span>
-              <span className="font-mono">{topoExaggeration.toFixed(1)}×</span>
-            </div>
-            <input type="range" min={1} max={5} step={0.1} value={topoExaggeration}
-              onChange={(e) => setTopoExaggeration(parseFloat(e.target.value))}
-              className="w-full h-1 accent-emerald-500" />
           </div>
         </div>
 

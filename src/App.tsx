@@ -92,6 +92,7 @@ import ConcordanceTable from './components/ConcordanceTable'
 import Spectrogram from './components/Spectrogram'
 import LwCalculator from './components/LwCalculator'
 const Vue3DTab = lazy(() => import('./components/Vue3DTab'))
+const IsolementPage = lazy(() => import('./pages/IsolementPage'))
 import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
 import Conformite2026 from './components/Conformite2026'
@@ -176,7 +177,7 @@ function saveRecent(projects: RecentProject[]) {
   localStorage.setItem(RECENT_KEY, JSON.stringify(projects.slice(0, MAX_RECENT)))
 }
 
-type Tab = 'chart' | 'map' | 'lw' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation' | 'carriere' | 'yamnet' | 'ecme' | 'vue3d'
+type Tab = 'chart' | 'map' | 'lw' | 'isolement' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation' | 'carriere' | 'yamnet' | 'ecme' | 'vue3d'
 
 /**
  * Regroupement des onglets en 4 catégories principales pour réduire le bruit
@@ -191,6 +192,7 @@ const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
   reafie: 'conformite',
   report: 'rapport',
   lw: 'analyse',
+  isolement: 'analyse',
   concordance: 'analyse',
   map: 'outils',
   regulation: 'outils',
@@ -205,6 +207,7 @@ const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
   analyse: [
     { id: 'chart', label: 'Visualisation' },
     { id: 'lw', label: 'Calcul Lw' },
+    { id: 'isolement', label: 'Isolement' },
     { id: 'concordance', label: 'Concordance' },
   ],
   conformite: [{ id: 'reafie', label: 'Conformité 2026' }],
@@ -1427,6 +1430,14 @@ function MainPanel({
 
       {effectiveTab === 'lw' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]"><LwCalculator onSourcesChange={onLwSourcesChange} /></div>
+      )}
+
+      {effectiveTab === 'isolement' && (
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+          <Suspense fallback={<LazyTabFallback label="Isolement" />}>
+            <IsolementPage files={files} selectedDate={selectedDate} pointMap={pointMap} />
+          </Suspense>
+        </div>
       )}
 
       {effectiveTab === 'concordance' && (

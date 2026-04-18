@@ -98,6 +98,7 @@ import AudioPlayer from './components/AudioPlayer'
 import Conformite2026 from './components/Conformite2026'
 import SiteMap from './components/SiteMap'
 import Settings from './components/Settings'
+import UserMenu from './components/UserMenu'
 import ShortcutsModal from './components/ShortcutsModal'
 import Onboarding, { shouldShowOnboarding, resetOnboarding } from './components/Onboarding'
 import Changelog from './components/Changelog'
@@ -1249,6 +1250,7 @@ function MainPanel({
           >
             <SettingsIcon size={14} />
           </button>
+          <UserMenu />
         </div>
       </header>
       )}

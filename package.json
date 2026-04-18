@@ -10,6 +10,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@supabase/supabase-js": "^2.103.3",
     "@tailwindcss/vite": "^4.2.2",
     "@tensorflow/tfjs": "^4.22.0",
     "@types/html2canvas": "^0.5.35",

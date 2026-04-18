@@ -1,8 +1,11 @@
 import { StrictMode, useState } from 'react'
 import { createRoot } from 'react-dom/client'
+import { Loader2 } from 'lucide-react'
 import './index.css'
 import App from './App.tsx'
 import LandingPage from './components/LandingPage.tsx'
+import AuthPage from './pages/AuthPage.tsx'
+import { AuthProvider, useAuth } from './contexts/AuthContext.tsx'
 
 const APP_VERSION = '1.0.0'
 
@@ -20,6 +23,27 @@ function Root() {
   if (!showApp) {
     return <LandingPage onEnter={handleEnter} version={APP_VERSION} />
   }
+
+  return (
+    <AuthProvider>
+      <AuthGate />
+    </AuthProvider>
+  )
+}
+
+function AuthGate() {
+  const { user, loading } = useAuth()
+
+  if (loading) {
+    return (
+      <div className="min-h-screen bg-gray-950 text-gray-400 flex flex-col items-center justify-center gap-3">
+        <Loader2 size={22} className="animate-spin text-emerald-400" />
+        <span className="text-sm">Chargement…</span>
+      </div>
+    )
+  }
+
+  if (!user) return <AuthPage />
 
   return <App />
 }

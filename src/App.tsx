@@ -203,6 +203,10 @@ const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
   vue3d: 'outils',
 }
 
+// Feature flags — modules masqués temporairement sans suppression du code.
+// Passer à `true` pour réactiver le module (+ décommenter l'entrée correspondante dans SUBTABS).
+const ENABLED_CARRIERE = false
+
 const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
   analyse: [
     { id: 'chart', label: 'Visualisation' },
@@ -216,7 +220,7 @@ const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
   ],
   outils: [
     { id: 'vue3d', label: 'Vue 3D' },
-    { id: 'carriere', label: 'Carrière / Sablière' },
+    ...(ENABLED_CARRIERE ? [{ id: 'carriere' as Tab, label: 'Carrière / Sablière' }] : []),
     { id: 'yamnet', label: 'Audio IA' },
     { id: 'ecme', label: 'Parc ECME' },
     { id: 'map', label: 'Carte' },
@@ -1487,7 +1491,7 @@ function MainPanel({
         </div>
       )}
 
-      {effectiveTab === 'carriere' && (
+      {ENABLED_CARRIERE && effectiveTab === 'carriere' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           <Suspense fallback={<LazyTabFallback label="Carrière" />}>
             <CarrierePage state={carriereState} setState={setCarriereState} />

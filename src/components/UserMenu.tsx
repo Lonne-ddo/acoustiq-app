@@ -5,6 +5,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ChevronDown, LogOut, User } from 'lucide-react'
 import { useAuth } from '../contexts/AuthContext'
+import { AUTH_ENABLED } from '../config/auth'
 
 function truncate(email: string, max = 28): string {
   if (email.length <= max) return email
@@ -38,6 +39,8 @@ export default function UserMenu() {
     }
   }, [open])
 
+  // En mode développement (auth bypass), on masque complètement ce menu.
+  if (!AUTH_ENABLED) return null
   if (!user) return null
   const email = user.email ?? '(utilisateur)'
 

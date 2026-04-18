@@ -6,6 +6,7 @@ import App from './App.tsx'
 import LandingPage from './components/LandingPage.tsx'
 import AuthPage from './pages/AuthPage.tsx'
 import { AuthProvider, useAuth } from './contexts/AuthContext.tsx'
+import { AUTH_ENABLED } from './config/auth.ts'
 
 const APP_VERSION = '1.0.0'
 
@@ -24,6 +25,8 @@ function Root() {
     return <LandingPage onEnter={handleEnter} version={APP_VERSION} />
   }
 
+  // AuthProvider est toujours monté pour que useAuth() ne plante pas dans les
+  // composants qui l'utilisent (UserMenu, futurs hooks). AuthGate gère la bascule.
   return (
     <AuthProvider>
       <AuthGate />
@@ -33,6 +36,10 @@ function Root() {
 
 function AuthGate() {
   const { user, loading } = useAuth()
+
+  // Mode développement : on court-circuite complètement le parcours d'auth
+  // (pas de spinner, pas d'AuthPage). Cf. src/config/auth.ts.
+  if (!AUTH_ENABLED) return <App />
 
   if (loading) {
     return (

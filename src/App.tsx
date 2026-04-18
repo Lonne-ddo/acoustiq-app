@@ -99,6 +99,7 @@ import Conformite2026 from './components/Conformite2026'
 import SiteMap from './components/SiteMap'
 import Settings from './components/Settings'
 import UserMenu from './components/UserMenu'
+import { AUTH_ENABLED } from './config/auth'
 import ShortcutsModal from './components/ShortcutsModal'
 import Onboarding, { shouldShowOnboarding, resetOnboarding } from './components/Onboarding'
 import Changelog from './components/Changelog'
@@ -1229,6 +1230,14 @@ function MainPanel({
           >
             v{APP_VERSION}
           </button>
+          {!AUTH_ENABLED && (
+            <span
+              className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-gray-400 bg-gray-800 border border-gray-700 rounded"
+              title="Authentification désactivée (src/config/auth.ts → AUTH_ENABLED)"
+            >
+              Dev mode
+            </span>
+          )}
           <button
             onClick={onOpenOnboarding}
             className="p-1.5 text-gray-600 hover:text-emerald-400 hover:bg-gray-800 rounded transition-colors"

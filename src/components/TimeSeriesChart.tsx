@@ -291,8 +291,12 @@ interface Props {
   audioLabels?: Record<string, string>
   /** Position actuelle de lecture (minutes absolues axe X) */
   audioPlayheadMin?: number | null
+  /** Vrai pendant la lecture audio — bascule le clic en mode « seek » */
+  audioPlaying?: boolean
   /** Demande à jouer une entrée audio à une position donnée */
   onAudioPlayAt?: (entryId: string, minutes: number) => void
+  /** Seek de l'entrée actuellement chargée à une minute absolue */
+  onAudioSeekMin?: (minutes: number) => void
   /** Mode "pick" pour le calage audio (feature calage) : le prochain clic
    *  remonte la minute absolue au callback au lieu de créer une période. */
   chartPickArmed?: boolean
@@ -347,7 +351,9 @@ export default function TimeSeriesChart({
   audioCoverage,
   audioLabels,
   audioPlayheadMin,
+  audioPlaying,
   onAudioPlayAt,
+  onAudioSeekMin,
   chartPickArmed,
   onChartPicked,
 }: Props) {
@@ -1018,6 +1024,17 @@ export default function TimeSeriesChart({
       return
     }
 
+    // Si l'audio joue et qu'on clique dans une plage couverte → seek au lieu
+    // de démarrer une sélection de période.
+    if (audioPlaying && audioCoverage && audioCoverage.length > 0 && !e.shiftKey) {
+      const tMin = xPxToMinutes(xLocal)
+      const r = findCoveringRange(audioCoverage, tMin)
+      if (r && onAudioSeekMin) {
+        onAudioSeekMin(tMin)
+        return
+      }
+    }
+
     // Placement d'annotation en attente : transformer le clic en placement
     if (pendingAnnotationText) {
       const tMin = xPxToMinutes(xLocal)
@@ -1068,7 +1085,7 @@ export default function TimeSeriesChart({
     periodStartRef.current = xLocal
     setPeriodPx({ startX: xLocal, endX: xLocal })
     setPeriodPopup(null)
-  }, [compPhase, pendingAnnotationText, xPxToMinutes, chartData, lineSpecs, yDomain, selectedDate, onAnnotationPlace, onPendingAnnotationCleared, chartPickArmed, onChartPicked])
+  }, [compPhase, pendingAnnotationText, xPxToMinutes, chartData, lineSpecs, yDomain, selectedDate, onAnnotationPlace, onPendingAnnotationCleared, chartPickArmed, onChartPicked, audioPlaying, audioCoverage, onAudioSeekMin])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const rect = chartAreaRef.current?.getBoundingClientRect()
@@ -1278,6 +1295,19 @@ export default function TimeSeriesChart({
       document.removeEventListener('acoustiq:zoom-out', onZoomOutE)
     }
   }, [handleZoomIn, handleZoomOut])
+
+  // Auto-scroll : si le curseur de lecture sort de la plage visible (zoomée),
+  // recentrer la plage autour du curseur en préservant le span.
+  useEffect(() => {
+    if (!isZoomed || audioPlayheadMin === null || audioPlayheadMin === undefined) return
+    if (audioPlayheadMin >= effectiveRange.startMin && audioPlayheadMin <= effectiveRange.endMin) return
+    const span = effectiveRange.endMin - effectiveRange.startMin
+    let newStart = audioPlayheadMin - span / 2
+    let newEnd = newStart + span
+    if (newStart < fullRange.startMin) { newStart = fullRange.startMin; newEnd = newStart + span }
+    if (newEnd > fullRange.endMin) { newEnd = fullRange.endMin; newStart = newEnd - span }
+    onZoomChange({ startMin: newStart, endMin: newEnd })
+  }, [audioPlayheadMin, effectiveRange.startMin, effectiveRange.endMin, fullRange.startMin, fullRange.endMin, isZoomed, onZoomChange])
 
   // Fermer la popup au clic extérieur ou à Échap
   useEffect(() => {
@@ -2044,8 +2074,9 @@ export default function TimeSeriesChart({
           />
         )}
 
-        {/* Curseur de lecture audio — vertical, suit audioPlayheadMin
-            converti en px via xPxToMinutes (inverse). */}
+        {/* Curseur de lecture audio — ligne 1px blanc translucide + disque
+            au sommet + label HH:MM:SS. Suit audioPlayheadMin converti en
+            pixels via la même conversion que xPxToMinutes (inverse). */}
         {audioPlayheadMin !== null && audioPlayheadMin !== undefined &&
          audioPlayheadMin >= effectiveRange.startMin && audioPlayheadMin <= effectiveRange.endMin &&
          chartAreaRef.current && (() => {
@@ -2059,13 +2090,33 @@ export default function TimeSeriesChart({
              <div
                key="audio-playhead"
                className="pointer-events-none absolute top-0 bottom-0"
-               style={{ left: px, width: 0, borderLeft: '2px solid rgba(59, 130, 246, 0.85)', zIndex: 5 }}
+               style={{
+                 left: px,
+                 width: 0,
+                 borderLeft: '1px solid rgba(255, 255, 255, 0.8)',
+                 zIndex: 5,
+               }}
              >
+               {/* Disque au sommet */}
                <div
-                 className="absolute -top-1 left-0 px-1 py-0.5 rounded bg-blue-600 text-[9px] text-white font-mono"
+                 className="absolute"
+                 style={{
+                   top: 0,
+                   left: 0,
+                   width: 8,
+                   height: 8,
+                   borderRadius: 9999,
+                   backgroundColor: 'white',
+                   transform: 'translate(-50%, -2px)',
+                   boxShadow: '0 0 0 2px rgba(0, 0, 0, 0.4)',
+                 }}
+               />
+               {/* Label HH:MM:SS */}
+               <div
+                 className="absolute -top-5 left-0 px-1.5 py-0.5 rounded bg-gray-900/95 border border-white/30 text-[10px] text-white font-mono tabular-nums whitespace-nowrap"
                  style={{ transform: 'translateX(-50%)' }}
                >
-                 ▶
+                 {minutesToHHMMSS(((audioPlayheadMin % 1440) + 1440) % 1440)}
                </div>
              </div>
            )

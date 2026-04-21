@@ -256,6 +256,8 @@ interface SingleSpectrogramProps {
   /** Pas d'agrégation en secondes (largeur de chaque bucket) */
   aggSec: number
   compact?: boolean
+  /** Position du curseur de lecture audio en minutes (axe X chart) */
+  playheadMin?: number | null
 }
 
 function SingleSpectrogram({
@@ -263,6 +265,7 @@ function SingleSpectrogram({
   tMin, tMax, nBands, freqBands,
   minDb, maxDb, hoverTime, events, onHoverTime,
   canvasHeight, aggSec, compact,
+  playheadMin,
 }: SingleSpectrogramProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -333,6 +336,9 @@ function SingleSpectrogram({
 
   const tRange = tMax - tMin || 1
   const cursorPct = hoverTime !== null ? ((hoverTime - tMin) / tRange) * 100 : null
+  const playheadPct = playheadMin !== null && playheadMin !== undefined
+    ? ((playheadMin - tMin) / tRange) * 100
+    : null
 
   function handleMouseMove(e: React.MouseEvent<HTMLDivElement>) {
     const rect = e.currentTarget.getBoundingClientRect()
@@ -383,7 +389,7 @@ function SingleSpectrogram({
             style={{ height: canvasHeight, backgroundColor: '#030712' }}
           />
 
-          {/* Curseur temps */}
+          {/* Curseur temps (survol) */}
           {cursorPct !== null && (
             <div
               className="pointer-events-none absolute inset-y-0"
@@ -399,6 +405,25 @@ function SingleSpectrogram({
               >
                 {minutesToHHMM(hoverTime!)}
               </span>
+            </div>
+          )}
+
+          {/* Curseur de lecture audio — synchronisé avec le chart LAeq */}
+          {playheadPct !== null && playheadPct >= 0 && playheadPct <= 100 && (
+            <div
+              className="pointer-events-none absolute inset-y-0"
+              style={{ left: `${playheadPct}%`, width: 1, backgroundColor: 'rgba(255,255,255,0.85)' }}
+            >
+              <div
+                className="absolute"
+                style={{
+                  top: -3, left: 0,
+                  width: 6, height: 6, borderRadius: 9999,
+                  backgroundColor: 'white',
+                  transform: 'translateX(-50%)',
+                  boxShadow: '0 0 0 1px rgba(0,0,0,0.5)',
+                }}
+              />
             </div>
           )}
 
@@ -445,6 +470,9 @@ interface Props {
   height?: number
   /** Multi-jours : aligne l'axe X sur le chart (0..N·1440 min, séparateurs à minuit) */
   multiDay?: boolean
+  /** Position du curseur de lecture audio (minutes axe X chart) — affichée
+   *  comme une ligne verticale blanche fine sur chaque canvas. */
+  playheadMin?: number | null
 }
 
 /**
@@ -468,6 +496,7 @@ export default function Spectrogram({
   compact = false,
   height,
   multiDay,
+  playheadMin,
 }: Props) {
   const [minDb, setMinDb] = useState(30)
   const [maxDb, setMaxDb] = useState(90)
@@ -743,6 +772,7 @@ export default function Spectrogram({
                   canvasHeight={perCanvasHeight}
                   aggSec={effectiveAggSec}
                   compact
+                  playheadMin={playheadMin}
                 />
               ))}
               <XAxis tMin={tMin} tMax={tMax} />
@@ -838,6 +868,7 @@ export default function Spectrogram({
                 onHoverTime={setHoverTime}
                 canvasHeight={DEFAULT_CANVAS_HEIGHT}
                 aggSec={effectiveAggSec}
+                playheadMin={playheadMin}
               />
             ))}
             <XAxis tMin={tMin} tMax={tMax} />

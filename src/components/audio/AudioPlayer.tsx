@@ -6,7 +6,7 @@
  * Affichage : panneau sous le graphique LAeq, collapsible, visible
  * uniquement quand une entrée audio est associée au point actif.
  */
-import { Play, Pause, Square, Volume2, Gauge, ChevronDown, ChevronUp } from 'lucide-react'
+import { Play, Pause, Square, Volume2, Gauge, ChevronDown, ChevronUp, Clock, AlertTriangle } from 'lucide-react'
 import { useState } from 'react'
 import type { AudioFileEntry } from '../../types'
 import type { UseAudioSyncResult } from '../../hooks/useAudioSync'
@@ -22,27 +22,46 @@ function fmtSec(s: number): string {
   return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
 }
 
+function statusDot(s: AudioFileEntry['caleStatus']): { color: string; label: string } {
+  if (s === 'calibrated') return { color: 'bg-emerald-500', label: 'Calé' }
+  if (s === 'date_only') return { color: 'bg-amber-400', label: 'Date estimée, non calé' }
+  return { color: 'bg-rose-500', label: 'Non calé' }
+}
+
 interface Props {
   /** Entrées audio disponibles pour le point actif, triées chronologiquement */
   entries: AudioFileEntry[]
   sync: UseAudioSyncResult
   pointName: string | null
   defaultCollapsed?: boolean
+  /** Ouvre le panneau de calage pour un fichier donné */
+  onOpenCalage: (entryId: string) => void
 }
 
-export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed = false }: Props) {
+export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed = false, onOpenCalage }: Props) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
+  // Modal de confirmation quand on essaie de lire un fichier non calé.
+  const [warnUncaled, setWarnUncaled] = useState<AudioFileEntry | null>(null)
+
   const active = entries.find((e) => e.id === sync.activeEntryId) ?? null
   const currentSec = active && sync.currentMin !== null
     ? Math.max(0, (sync.currentMin - active.startMin) * 60)
     : 0
   const totalSec = active?.durationSec ?? 0
 
+  /** Tente de jouer une entrée, ouvre le warning si pas calée. */
+  function playOrWarn(e: AudioFileEntry) {
+    if (e.caleStatus === 'none') {
+      setWarnUncaled(e)
+      return
+    }
+    sync.playAt(e.id, e.startMin)
+  }
+
   function handlePlayPause() {
     if (!active) {
-      // Rien n'est chargé → lancer la première entrée du point
       const first = entries[0]
-      if (first) sync.playAt(first.id, first.startMin)
+      if (first) playOrWarn(first)
       return
     }
     sync.togglePlayPause()
@@ -68,10 +87,10 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
         {collapsed ? <ChevronUp size={11} className="text-gray-500" /> : <ChevronDown size={11} className="text-gray-500" />}
         <Volume2 size={12} className="text-blue-400" />
         <span className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Audio</span>
-        <span className="text-[10px] text-gray-500">
+        <span className="text-[10px] text-gray-500 truncate">
           {pointName ? `${pointName} · ` : ''}{entries.length} fichier{entries.length > 1 ? 's' : ''}
           {active && (
-            <> · <span className="font-mono text-gray-400">{active.name}</span></>
+            <> · <span className={`inline-block w-1.5 h-1.5 rounded-full align-middle mx-1 ${statusDot(active.caleStatus).color}`} /><span className="font-mono text-gray-400">{active.name}</span></>
           )}
         </span>
         {sync.playing && (
@@ -135,6 +154,18 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
               {fmtSec(currentSec)} / {fmtSec(totalSec)}
             </span>
 
+            {/* Caler le fichier actif (raccourci global) */}
+            {active && (
+              <button
+                onClick={() => onOpenCalage(active.id)}
+                className="flex items-center gap-1 text-[11px] text-amber-300 hover:text-amber-200 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded px-2 py-1"
+                title="Caler ce fichier sur la courbe LAeq"
+              >
+                <Clock size={11} />
+                Caler
+              </button>
+            )}
+
             <div className="flex items-center gap-1">
               <Volume2 size={11} className="text-gray-500" />
               <input
@@ -167,25 +198,93 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
             </div>
           </div>
 
-          {/* Liste des fichiers audio — permet de basculer rapidement */}
+          {/* Liste des fichiers audio — bascule rapide + indicateur ●  + bouton ⏱ par onglet */}
           {entries.length > 1 && (
             <div className="flex flex-wrap gap-1 mt-1">
-              {entries.map((e) => (
-                <button
-                  key={e.id}
-                  onClick={() => sync.playAt(e.id, e.startMin)}
-                  className={`text-[10px] rounded px-1.5 py-0.5 border transition-colors ${
-                    sync.activeEntryId === e.id
-                      ? 'bg-blue-950/60 border-blue-600 text-blue-200'
-                      : 'bg-gray-900 border-gray-700 text-gray-400 hover:text-gray-200'
-                  }`}
-                  title={`${e.name} · ${fmtSec(e.durationSec)}`}
-                >
-                  {e.name}
-                </button>
-              ))}
+              {entries.map((e) => {
+                const dot = statusDot(e.caleStatus)
+                const isActive = sync.activeEntryId === e.id
+                return (
+                  <div
+                    key={e.id}
+                    className={`flex items-stretch rounded border overflow-hidden transition-colors ${
+                      isActive
+                        ? 'bg-blue-950/60 border-blue-600'
+                        : 'bg-gray-900 border-gray-700'
+                    }`}
+                    title={`${e.name} · ${fmtSec(e.durationSec)} · ${dot.label}`}
+                  >
+                    <button
+                      onClick={() => playOrWarn(e)}
+                      className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 transition-colors ${
+                        isActive ? 'text-blue-200' : 'text-gray-400 hover:text-gray-200'
+                      }`}
+                    >
+                      <span className={`w-1.5 h-1.5 rounded-full ${dot.color}`} />
+                      {e.name}
+                    </button>
+                    <button
+                      onClick={() => onOpenCalage(e.id)}
+                      className="flex items-center px-1 border-l border-gray-700/70 text-[10px] text-amber-400 hover:text-amber-200 hover:bg-gray-800/60"
+                      title="Caler ce fichier"
+                      aria-label={`Caler ${e.name}`}
+                    >
+                      <Clock size={9} />
+                    </button>
+                  </div>
+                )
+              })}
             </div>
           )}
+        </div>
+      )}
+
+      {/* Modal d'avertissement : tentative de lecture d'un fichier non calé */}
+      {warnUncaled && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm"
+          onClick={() => setWarnUncaled(null)}
+        >
+          <div
+            className="w-[420px] max-w-[88vw] bg-gray-900 border border-rose-700/60 rounded-lg shadow-2xl p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-2">
+              <AlertTriangle size={18} className="text-rose-400 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <p className="text-sm text-gray-100 font-semibold">Fichier non calé</p>
+                <p className="mt-1 text-[11px] text-gray-400 leading-snug">
+                  <span className="font-mono text-gray-300">{warnUncaled.name}</span> n'est
+                  pas encore calé avec la courbe LAeq. Le début est forcé à 00:00, donc
+                  l'écoute ne sera pas synchronisée avec le bon instant. Caler maintenant ?
+                </p>
+              </div>
+            </div>
+            <div className="mt-3 flex justify-end gap-2">
+              <button
+                onClick={() => {
+                  // Lire quand même (sync à 00:00, hors phase)
+                  const e = warnUncaled
+                  setWarnUncaled(null)
+                  sync.playAt(e.id, e.startMin)
+                }}
+                className="text-[11px] text-gray-300 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-3 py-1.5"
+              >
+                Lire quand même
+              </button>
+              <button
+                onClick={() => {
+                  const id = warnUncaled.id
+                  setWarnUncaled(null)
+                  onOpenCalage(id)
+                }}
+                className="text-[11px] text-white bg-amber-600 hover:bg-amber-500 rounded px-3 py-1.5 flex items-center gap-1"
+              >
+                <Clock size={11} />
+                Caler maintenant
+              </button>
+            </div>
+          </div>
         </div>
       )}
     </div>

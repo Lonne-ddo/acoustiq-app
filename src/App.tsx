@@ -1219,6 +1219,7 @@ interface MainPanelProps {
   audioCoverage: AudioCoverageRange[]
   chartPickArmed: boolean
   onChartPicked: (tMin: number) => void
+  onOpenAudioCalage: (entryId: string) => void
   onDateChange: (date: string) => void
   onTabChange: (tab: Tab) => void
   onCellChange: (eventId: string, point: string, state: ConcordanceState) => void
@@ -1252,7 +1253,7 @@ function MainPanel({
   hiddenPoints, onTogglePointVisibility,
   periods, onPeriodAdd, onPeriodUpdate, onPeriodRemove,
   audioEntries, audioPointMap, audioSync, audioCoverage,
-  chartPickArmed, onChartPicked,
+  chartPickArmed, onChartPicked, onOpenAudioCalage,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
@@ -1549,6 +1550,8 @@ function MainPanel({
                     return offset + audioSync.currentMin
                   })()}
                   onAudioPlayAt={audioSync.playAt}
+                  audioPlaying={audioSync.playing}
+                  onAudioSeekMin={audioSync.seekMin}
                   chartPickArmed={chartPickArmed}
                   onChartPicked={onChartPicked}
                 />
@@ -1595,6 +1598,15 @@ function MainPanel({
                       compact
                       height={spectrogramHeight}
                       multiDay={availableDates.length > 1 && !overlayDate}
+                      playheadMin={(() => {
+                        const a = audioEntries.find((e) => e.id === audioSync.activeEntryId)
+                        if (!a || audioSync.currentMin === null) return null
+                        const isMulti = availableDates.length > 1 && !overlayDate
+                        const offset = isMulti
+                          ? Math.max(0, availableDates.indexOf(a.date)) * 1440
+                          : 0
+                        return offset + audioSync.currentMin
+                      })()}
                     />
                   </div>
                 )}
@@ -1612,6 +1624,7 @@ function MainPanel({
                     })}
                     sync={audioSync}
                     pointName={assignedPoints[0] ?? null}
+                    onOpenCalage={onOpenAudioCalage}
                   />
                 </div>
               )}
@@ -2881,6 +2894,7 @@ export default function App() {
         audioCoverage={audioCoverage}
         chartPickArmed={chartPickArmed}
         onChartPicked={handleChartPicked}
+        onOpenAudioCalage={setCalageEntryId}
         onDateChange={setSelectedDate}
         onTabChange={setActiveTab}
         onCellChange={handleCellChange}

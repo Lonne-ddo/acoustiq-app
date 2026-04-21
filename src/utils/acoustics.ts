@@ -261,9 +261,12 @@ export function filterDataByPeriods<T extends { t: number }>(
   const includes: PeriodFilter[] = []
   const excludes: PeriodFilter[] = []
   for (const p of periods) {
+    // Les annotations sont purement documentaires : elles n'affectent pas
+    // le calcul des indices acoustiques.
+    if (p.status === 'annotate') continue
     const rng: PeriodFilter = { startMs: p.startMs, endMs: p.endMs, status: p.status }
     if (p.status === 'include') includes.push(rng)
-    else excludes.push(rng)
+    else if (p.status === 'exclude') excludes.push(rng)
   }
   if (includes.length === 0 && excludes.length === 0) return data
 

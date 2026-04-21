@@ -28,7 +28,8 @@ import { drawQrBadge } from '../utils/qrBadge'
 import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3 } from 'lucide-react'
 import ContextMenu from './ContextMenu'
 import { ReferenceDot } from 'recharts'
-import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData, Period } from '../types'
+import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData, Period, PeriodStatus } from '../types'
+import { PERIOD_PALETTE } from '../types'
 import type { ClassifiedSegment } from '../utils/yamnetProcessor'
 import { laeqAvg, computeL90 } from '../utils/acoustics'
 
@@ -61,6 +62,19 @@ function minutesToHHMMSS(minutes: number): string {
   const m = Math.floor((totalSec % 3600) / 60)
   const s = totalSec % 60
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
+/** Durée d'une plage en minutes (float) → chaîne « Xh Ym Zs » compacte. */
+function formatDurationMin(minutes: number): string {
+  const totalSec = Math.max(0, Math.round(Math.abs(minutes) * 60))
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  const parts: string[] = []
+  if (h > 0) parts.push(`${h}h`)
+  if (m > 0 || h > 0) parts.push(`${m}m`)
+  parts.push(`${s}s`)
+  return parts.join(' ')
 }
 
 /**
@@ -331,7 +345,21 @@ export default function TimeSeriesChart({
   const [periodPx, setPeriodPx] = useState<{ startX: number; endX: number } | null>(null)
   const periodStartRef = useRef<number | null>(null)
   const [periodPopup, setPeriodPopup] = useState<
-    | { tStart: number; tEnd: number; name: string; x: number; y: number }
+    | {
+        tStart: number
+        tEnd: number
+        name: string
+        status: PeriodStatus
+        color: string
+        comment: string
+        x: number
+        y: number
+      }
+    | null
+  >(null)
+  /** Hover sur une période existante — pour afficher le commentaire d'une annotation */
+  const [periodHover, setPeriodHover] = useState<
+    | { period: Period; x: number; y: number }
     | null
   >(null)
 
@@ -996,12 +1024,14 @@ export default function TimeSeriesChart({
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const rect = chartAreaRef.current?.getBoundingClientRect()
     if (!rect) return
+    const xLocal = e.clientX - rect.left
+    const yLocal = e.clientY - rect.top
 
     // Comparaison ON/OFF en cours ?
     if (compStartRef.current !== null) {
       setCompPx({
         startX: compStartRef.current,
-        endX: e.clientX - rect.left,
+        endX: xLocal,
       })
       return
     }
@@ -1010,7 +1040,7 @@ export default function TimeSeriesChart({
     if (selectionStartRef.current !== null) {
       setSelectionPx({
         startX: selectionStartRef.current,
-        endX: e.clientX - rect.left,
+        endX: xLocal,
       })
       return
     }
@@ -1019,11 +1049,20 @@ export default function TimeSeriesChart({
     if (periodStartRef.current !== null) {
       setPeriodPx({
         startX: periodStartRef.current,
-        endX: e.clientX - rect.left,
+        endX: xLocal,
       })
       return
     }
-  }, [])
+
+    // Survol d'une période annotée → affichage du commentaire
+    const tMin = xPxToMinutes(xLocal)
+    const p = periodAtChartMin(tMin)
+    if (p && p.status === 'annotate') {
+      setPeriodHover({ period: p, x: xLocal, y: yLocal })
+    } else if (periodHover) {
+      setPeriodHover(null)
+    }
+  }, [xPxToMinutes, periodAtChartMin, periodHover])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     // Finaliser une sélection ON/OFF
@@ -1103,6 +1142,9 @@ export default function TimeSeriesChart({
       setPeriodPopup({
         tStart: tA, tEnd: tB,
         name: `Période ${(periods?.length ?? 0) + 1}`,
+        status: 'include',
+        color: PERIOD_PALETTE[((periods?.length ?? 0)) % PERIOD_PALETTE.length],
+        comment: '',
         x: midX, y: popupY,
       })
       return
@@ -1111,6 +1153,7 @@ export default function TimeSeriesChart({
 
   const handleMouseLeave = useCallback(() => {
     // Ne pas annuler une sélection en cours : l'utilisateur peut sortir de la zone
+    setPeriodHover(null)
   }, [])
 
   // Double-clic = reset zoom
@@ -1677,28 +1720,40 @@ export default function TimeSeriesChart({
                 />
               )}
 
-              {/* Périodes nommées : bandes vertes (include) / rouges (exclude) */}
+              {/* Périodes nommées :
+                   - include  → vert
+                   - exclude  → rouge
+                   - annotate → couleur choisie (p.color) */}
               {periods && periods.map((p) => {
                 const bounds = periodBounds(p)
                 if (!bounds) return null
                 const [s, eMin] = bounds
                 const isInclude = p.status === 'include'
+                const isExclude = p.status === 'exclude'
+                const isAnnotate = p.status === 'annotate'
+                const baseColor = isInclude
+                  ? '#10b981'
+                  : isExclude
+                  ? '#ef4444'
+                  : (p.color ?? '#3b82f6')
+                const fillOp = isAnnotate ? 0.12 : 0.15
+                const labelPrefix = isExclude ? '✕ ' : isAnnotate ? '✎ ' : ''
                 return (
                   <ReferenceArea
                     key={`period-${p.id}`}
                     yAxisId="left"
                     x1={s}
                     x2={eMin}
-                    fill={isInclude ? '#10b981' : '#ef4444'}
-                    fillOpacity={0.15}
-                    stroke={isInclude ? '#10b981' : '#ef4444'}
-                    strokeOpacity={0.6}
-                    strokeDasharray="3 3"
+                    fill={baseColor}
+                    fillOpacity={fillOp}
+                    stroke={baseColor}
+                    strokeOpacity={0.55}
+                    strokeDasharray={isAnnotate ? '4 3' : '3 3'}
                     ifOverflow="hidden"
                     label={{
-                      value: isInclude ? p.name : `✕ ${p.name}`,
-                      position: 'insideTopLeft',
-                      fill: isInclude ? '#6ee7b7' : '#fca5a5',
+                      value: `${labelPrefix}${p.name}`,
+                      position: 'insideTop',
+                      fill: baseColor,
                       fontSize: 10,
                       offset: 4,
                     }}
@@ -1943,26 +1998,106 @@ export default function TimeSeriesChart({
           />
         )}
 
-        {/* Overlay période en cours de création */}
-        {periodPx && (
+        {/* Tooltip au survol d'une période « Annoter » — affiche le commentaire */}
+        {periodHover && (
           <div
-            className="pointer-events-none absolute top-0 bottom-0 bg-blue-400/15
-                       border-l border-r border-blue-400/70"
+            className="pointer-events-none absolute px-2 py-1.5 rounded-md bg-gray-900/95
+                       border shadow-lg z-30 max-w-[280px] select-none"
             style={{
-              left: Math.min(periodPx.startX, periodPx.endX),
-              width: Math.abs(periodPx.endX - periodPx.startX),
+              left: Math.min(periodHover.x + 12, (chartAreaRef.current?.clientWidth ?? 500) - 290),
+              top: Math.max(8, periodHover.y - 16),
+              borderColor: periodHover.period.color ?? '#3b82f6',
             }}
-          />
+          >
+            <div
+              className="flex items-center gap-1 text-[11px] font-semibold mb-0.5"
+              style={{ color: periodHover.period.color ?? '#93c5fd' }}
+            >
+              <StickyNote size={11} />
+              {periodHover.period.name}
+            </div>
+            {periodHover.period.comment ? (
+              <p className="text-[11px] text-gray-200 whitespace-pre-wrap leading-snug">
+                {periodHover.period.comment}
+              </p>
+            ) : (
+              <p className="text-[11px] text-gray-500 italic">Aucun commentaire</p>
+            )}
+            <div className="mt-1 text-[9px] text-gray-500 font-mono">
+              {minutesToHHMMSS((periodHover.period.startMs - chartAnchorMs) / 60_000)} → {minutesToHHMMSS((periodHover.period.endMs - chartAnchorMs) / 60_000)}
+            </div>
+          </div>
         )}
 
-        {/* Popup création de période */}
+        {/* Overlay période en cours de création : bandeau bleu 0.20 + bordures
+            verticales pointillées 2px + label flottant avec début/fin/durée */}
+        {periodPx && (() => {
+          const left = Math.min(periodPx.startX, periodPx.endX)
+          const width = Math.abs(periodPx.endX - periodPx.startX)
+          const tA = xPxToMinutes(Math.min(periodPx.startX, periodPx.endX))
+          const tB = xPxToMinutes(Math.max(periodPx.startX, periodPx.endX))
+          return (
+            <>
+              {/* Fond bleu semi-transparent */}
+              <div
+                className="pointer-events-none absolute top-0 bottom-0"
+                style={{
+                  left,
+                  width,
+                  backgroundColor: 'rgba(59, 130, 246, 0.20)',
+                }}
+              />
+              {/* Bordure verticale gauche — pointillés 2px */}
+              <div
+                className="pointer-events-none absolute top-0 bottom-0"
+                style={{
+                  left,
+                  width: 0,
+                  borderLeft: '2px dashed #3b82f6',
+                }}
+              />
+              {/* Bordure verticale droite — pointillés 2px */}
+              <div
+                className="pointer-events-none absolute top-0 bottom-0"
+                style={{
+                  left: left + width,
+                  width: 0,
+                  borderLeft: '2px dashed #3b82f6',
+                }}
+              />
+              {/* Label flottant au centre de la zone */}
+              {width > 40 && (
+                <div
+                  className="pointer-events-none absolute top-1 px-2 py-0.5 rounded
+                             bg-gray-900/90 border border-blue-500/60 text-[11px]
+                             font-mono text-blue-100 whitespace-nowrap select-none"
+                  style={{
+                    left: left + width / 2,
+                    transform: 'translateX(-50%)',
+                  }}
+                >
+                  {minutesToHHMMSS(tA)} → {minutesToHHMMSS(tB)}
+                  <span className="ml-2 text-blue-300">
+                    · {formatDurationMin(tB - tA)}
+                  </span>
+                </div>
+              )}
+            </>
+          )
+        })()}
+
+        {/* Popup création de période — Nom + Statut (3) + Couleur + Valider/Annuler */}
         {periodPopup && (
           <div
-            className="absolute bg-gray-900 border border-gray-700 rounded-md shadow-xl p-2 z-30 min-w-[220px]"
+            className="absolute bg-gray-900 border border-gray-700 rounded-md shadow-xl p-3 z-30 w-[300px]"
             style={{
-              left: Math.min(Math.max(0, periodPopup.x - 110), (chartAreaRef.current?.clientWidth ?? 500) - 220),
+              left: Math.min(
+                Math.max(8, periodPopup.x - 150),
+                (chartAreaRef.current?.clientWidth ?? 500) - 308,
+              ),
               top: Math.max(8, periodPopup.y),
             }}
+            onMouseDown={(e) => e.stopPropagation()}
           >
             <p className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Nouvelle période</p>
             <input
@@ -1971,15 +2106,8 @@ export default function TimeSeriesChart({
               onChange={(e) => setPeriodPopup((prev) => prev && { ...prev, name: e.target.value })}
               onKeyDown={(e) => {
                 if (e.key === 'Escape') { setPeriodPopup(null); setPeriodPx(null) }
-              }}
-              className="w-full text-xs bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-            />
-            <div className="mt-1 text-[10px] text-gray-500 font-mono">
-              {minutesToHHMMSS(periodPopup.tStart)} → {minutesToHHMMSS(periodPopup.tEnd)}
-            </div>
-            <div className="flex gap-1.5 mt-1.5">
-              <button
-                onClick={() => {
+                if (e.key === 'Enter') {
+                  e.preventDefault()
                   if (!onPeriodAdd) { setPeriodPopup(null); setPeriodPx(null); return }
                   const base = chartAnchorMs
                   if (!Number.isFinite(base)) { setPeriodPopup(null); setPeriodPx(null); return }
@@ -1988,16 +2116,103 @@ export default function TimeSeriesChart({
                     name: periodPopup.name.trim() || `Période ${(periods?.length ?? 0) + 1}`,
                     startMs: base + periodPopup.tStart * 60_000,
                     endMs: base + periodPopup.tEnd * 60_000,
-                    status: 'include',
+                    status: periodPopup.status,
+                    color: periodPopup.color,
+                    comment: periodPopup.status === 'annotate' ? periodPopup.comment : undefined,
                   })
                   setPeriodPopup(null)
                   setPeriodPx(null)
-                }}
-                className="flex-1 text-[11px] bg-emerald-600 hover:bg-emerald-500 text-white rounded px-2 py-1"
+                }
+              }}
+              className="w-full text-xs bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+            />
+            <div className="mt-1.5 text-[10px] text-gray-500 font-mono">
+              {minutesToHHMMSS(periodPopup.tStart)} → {minutesToHHMMSS(periodPopup.tEnd)}
+              <span className="ml-2 text-gray-600">· {formatDurationMin(periodPopup.tEnd - periodPopup.tStart)}</span>
+            </div>
+
+            {/* Statut : Inclure / Exclure / Annoter */}
+            <div className="mt-2 grid grid-cols-3 gap-1">
+              <button
+                onClick={() => setPeriodPopup((p) => p && { ...p, status: 'include' })}
+                className={`text-[10px] rounded px-1 py-1 border transition-colors ${
+                  periodPopup.status === 'include'
+                    ? 'bg-emerald-700 border-emerald-500 text-white'
+                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+                }`}
               >
                 Inclure
               </button>
               <button
+                onClick={() => setPeriodPopup((p) => p && { ...p, status: 'exclude' })}
+                className={`text-[10px] rounded px-1 py-1 border transition-colors ${
+                  periodPopup.status === 'exclude'
+                    ? 'bg-rose-700 border-rose-500 text-white'
+                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                Exclure
+              </button>
+              <button
+                onClick={() => setPeriodPopup((p) => p && { ...p, status: 'annotate' })}
+                className={`text-[10px] rounded px-1 py-1 border transition-colors ${
+                  periodPopup.status === 'annotate'
+                    ? 'bg-blue-700 border-blue-500 text-white'
+                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+                }`}
+              >
+                Annoter
+              </button>
+            </div>
+
+            {/* Palette de couleurs — utilisée pour les annotations */}
+            <div className="mt-2">
+              <p className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
+                Couleur {periodPopup.status !== 'annotate' && (
+                  <span className="normal-case text-gray-600">(non utilisée pour inclure/exclure)</span>
+                )}
+              </p>
+              <div className="flex gap-1.5">
+                {PERIOD_PALETTE.map((c) => (
+                  <button
+                    key={c}
+                    onClick={() => setPeriodPopup((p) => p && { ...p, color: c })}
+                    className={`w-5 h-5 rounded-full border-2 transition-transform ${
+                      periodPopup.color === c
+                        ? 'border-white scale-110'
+                        : 'border-gray-700 hover:border-gray-500'
+                    }`}
+                    style={{ backgroundColor: c }}
+                    aria-label={`Couleur ${c}`}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Commentaire — uniquement pour les annotations */}
+            {periodPopup.status === 'annotate' && (
+              <div className="mt-2">
+                <p className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
+                  Commentaire (optionnel)
+                </p>
+                <textarea
+                  value={periodPopup.comment}
+                  onChange={(e) => setPeriodPopup((p) => p && { ...p, comment: e.target.value })}
+                  rows={2}
+                  placeholder="Note libre qui apparaîtra au survol…"
+                  className="w-full text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
+                />
+              </div>
+            )}
+
+            <div className="flex gap-1.5 mt-2.5">
+              <button
+                onClick={() => { setPeriodPopup(null); setPeriodPx(null) }}
+                className="flex-1 text-[11px] text-gray-300 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1"
+              >
+                Annuler
+              </button>
+              <button
                 onClick={() => {
                   if (!onPeriodAdd) { setPeriodPopup(null); setPeriodPx(null); return }
                   const base = chartAnchorMs
@@ -2007,20 +2222,17 @@ export default function TimeSeriesChart({
                     name: periodPopup.name.trim() || `Période ${(periods?.length ?? 0) + 1}`,
                     startMs: base + periodPopup.tStart * 60_000,
                     endMs: base + periodPopup.tEnd * 60_000,
-                    status: 'exclude',
+                    status: periodPopup.status,
+                    color: periodPopup.color,
+                    comment: periodPopup.status === 'annotate' ? periodPopup.comment.trim() || undefined : undefined,
                   })
                   setPeriodPopup(null)
                   setPeriodPx(null)
                 }}
-                className="flex-1 text-[11px] bg-rose-600 hover:bg-rose-500 text-white rounded px-2 py-1"
+                className="flex-1 text-[11px] bg-emerald-600 hover:bg-emerald-500 text-white rounded px-2 py-1 flex items-center justify-center gap-1"
               >
-                Exclure
-              </button>
-              <button
-                onClick={() => { setPeriodPopup(null); setPeriodPx(null) }}
-                className="text-[11px] text-gray-400 hover:text-gray-200 bg-gray-800 hover:bg-gray-700 rounded px-2 py-1"
-              >
-                Annuler
+                <Plus size={11} />
+                Valider
               </button>
             </div>
           </div>

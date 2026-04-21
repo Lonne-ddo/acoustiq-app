@@ -1,15 +1,18 @@
 /**
  * Panneau de gestion des périodes nommées — pilote le filtre des indices.
  *
- * Une période a un statut include/exclude :
- *   - S'il y a ≥ 1 « include », seules les données dans l'union des includes
- *     sont utilisées.
- *   - Les « exclude » retirent systématiquement leurs points.
- *   - Aucune période → calcul sur tout.
+ * Trois statuts possibles :
+ *   - include  : seules les données dans l'union des includes sont utilisées
+ *                pour les indices (s'il y en a au moins un).
+ *   - exclude  : retire systématiquement les points tombant dans la plage.
+ *   - annotate : purement documentaire — n'affecte aucun calcul.
+ *
+ * Aucune période → calcul sur tout.
  */
 import { useMemo, useState } from 'react'
-import { ChevronDown, Plus, Trash2, Check, X } from 'lucide-react'
-import type { Period } from '../types'
+import { ChevronDown, Plus, Trash2, Check, X, StickyNote, MessageSquare } from 'lucide-react'
+import type { Period, PeriodStatus } from '../types'
+import { PERIOD_PALETTE } from '../types'
 
 interface Props {
   periods: Period[]
@@ -58,23 +61,49 @@ function dateToMsAtMidnight(iso: string): number {
   return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10)).getTime()
 }
 
+/** Cycle include → exclude → annotate → include */
+function nextStatus(s: PeriodStatus): PeriodStatus {
+  if (s === 'include') return 'exclude'
+  if (s === 'exclude') return 'annotate'
+  return 'include'
+}
+
+function statusLabel(s: PeriodStatus): string {
+  if (s === 'include') return 'Inclure'
+  if (s === 'exclude') return 'Exclure'
+  return 'Annotation'
+}
+
+function statusClass(s: PeriodStatus): string {
+  if (s === 'include') return 'bg-emerald-950/60 border-emerald-700 text-emerald-300 hover:bg-emerald-900/80'
+  if (s === 'exclude') return 'bg-rose-950/60 border-rose-700 text-rose-300 hover:bg-rose-900/80 line-through'
+  return 'bg-blue-950/60 border-blue-700 text-blue-300 hover:bg-blue-900/80'
+}
+
 export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selectedDate }: Props) {
   const [open, setOpen] = useState(true)
   const [adding, setAdding] = useState(false)
   const [formName, setFormName] = useState('')
   const [formStart, setFormStart] = useState('09:00:00')
   const [formEnd, setFormEnd] = useState('17:00:00')
-  const [formStatus, setFormStatus] = useState<'include' | 'exclude'>('include')
+  const [formStatus, setFormStatus] = useState<PeriodStatus>('include')
+  const [formColor, setFormColor] = useState<string>(PERIOD_PALETTE[0])
+  const [formComment, setFormComment] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
+  const [commentEditId, setCommentEditId] = useState<string | null>(null)
+  const [commentDraft, setCommentDraft] = useState('')
 
   const totals = useMemo(() => {
     const includes = periods.filter((p) => p.status === 'include')
-    const anchors = includes.length > 0 ? includes : periods.filter((p) => p.status === 'exclude')
+    const excludes = periods.filter((p) => p.status === 'exclude')
+    const annotations = periods.filter((p) => p.status === 'annotate')
+    const anchors = includes.length > 0 ? includes : excludes
     const totalMs = anchors.reduce((sum, p) => sum + Math.max(0, p.endMs - p.startMs), 0)
     return {
       includeCount: includes.length,
-      excludeCount: periods.length - includes.length,
+      excludeCount: excludes.length,
+      annotateCount: annotations.length,
       totalMs,
     }
   }, [periods])
@@ -94,9 +123,12 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
       startMs,
       endMs,
       status: formStatus,
+      color: formColor,
+      comment: formStatus === 'annotate' ? formComment.trim() || undefined : undefined,
     })
     setAdding(false)
     setFormName('')
+    setFormComment('')
   }
 
   function updateBounds(p: Period, field: 'start' | 'end', hhmmss: string) {
@@ -129,7 +161,7 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
         <span className="text-[10px] text-gray-500">
           {periods.length === 0
             ? 'aucune — calcul sur tout'
-            : `${totals.includeCount} incluse${totals.includeCount > 1 ? 's' : ''} · ${totals.excludeCount} exclue${totals.excludeCount > 1 ? 's' : ''}`}
+            : `${totals.includeCount} incluse${totals.includeCount > 1 ? 's' : ''} · ${totals.excludeCount} exclue${totals.excludeCount > 1 ? 's' : ''} · ${totals.annotateCount} annotation${totals.annotateCount > 1 ? 's' : ''}`}
         </span>
         <button
           onClick={(e) => { e.stopPropagation(); setAdding((v) => !v) }}
@@ -144,7 +176,7 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
         <div className="px-4 pb-3">
           {adding && (
             <div className="mb-2 p-2 rounded border border-gray-700/60 bg-gray-900/70 space-y-2">
-              <div className="grid grid-cols-4 gap-2">
+              <div className="grid grid-cols-[2fr_1fr_1fr_1.2fr] gap-2">
                 <input
                   type="text"
                   value={formName}
@@ -166,10 +198,10 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
                   placeholder="HH:MM:SS"
                   className="text-[11px] font-mono bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
-                <div className="flex gap-1">
+                <div className="grid grid-cols-3 gap-1">
                   <button
                     onClick={() => setFormStatus('include')}
-                    className={`flex-1 text-[10px] rounded px-1 py-1 border ${
+                    className={`text-[10px] rounded px-1 py-1 border ${
                       formStatus === 'include'
                         ? 'bg-emerald-950/60 border-emerald-600 text-emerald-200'
                         : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
@@ -179,7 +211,7 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
                   </button>
                   <button
                     onClick={() => setFormStatus('exclude')}
-                    className={`flex-1 text-[10px] rounded px-1 py-1 border ${
+                    className={`text-[10px] rounded px-1 py-1 border ${
                       formStatus === 'exclude'
                         ? 'bg-rose-950/60 border-rose-600 text-rose-200'
                         : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
@@ -187,8 +219,43 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
                   >
                     Exclure
                   </button>
+                  <button
+                    onClick={() => setFormStatus('annotate')}
+                    className={`text-[10px] rounded px-1 py-1 border ${
+                      formStatus === 'annotate'
+                        ? 'bg-blue-950/60 border-blue-600 text-blue-200'
+                        : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+                    }`}
+                  >
+                    Annoter
+                  </button>
                 </div>
               </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[10px] text-gray-500 uppercase tracking-wide">Couleur</span>
+                <div className="flex gap-1">
+                  {PERIOD_PALETTE.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setFormColor(c)}
+                      className={`w-4 h-4 rounded-full border-2 ${
+                        formColor === c ? 'border-white' : 'border-gray-700 hover:border-gray-500'
+                      }`}
+                      style={{ backgroundColor: c }}
+                      aria-label={`Couleur ${c}`}
+                    />
+                  ))}
+                </div>
+              </div>
+              {formStatus === 'annotate' && (
+                <textarea
+                  value={formComment}
+                  onChange={(e) => setFormComment(e.target.value)}
+                  rows={2}
+                  placeholder="Commentaire (optionnel)"
+                  className="w-full text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
+                />
+              )}
               <div className="flex gap-1 justify-end">
                 <button
                   onClick={() => setAdding(false)}
@@ -216,7 +283,9 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
                     <th className="text-left px-2 py-1 font-semibold">Début</th>
                     <th className="text-left px-2 py-1 font-semibold">Fin</th>
                     <th className="text-left px-2 py-1 font-semibold">Durée</th>
-                    <th className="text-left px-2 py-1 font-semibold">Statut</th>
+                    <th className="text-left px-2 py-1 font-semibold">Type</th>
+                    <th className="text-left px-2 py-1 font-semibold">Couleur</th>
+                    <th className="text-left px-2 py-1 font-semibold">Commentaire</th>
                     <th className="text-right px-2 py-1 font-semibold">Actions</th>
                   </tr>
                 </thead>
@@ -224,8 +293,10 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
                   {periods.map((p) => {
                     const dur = Math.max(0, p.endMs - p.startMs)
                     const isEditing = editingId === p.id
+                    const isCommenting = commentEditId === p.id
+                    const color = p.color ?? PERIOD_PALETTE[0]
                     return (
-                      <tr key={p.id} className="border-b border-gray-900 last:border-0">
+                      <tr key={p.id} className="border-b border-gray-900 last:border-0 align-top">
                         <td className="px-2 py-1 text-gray-200">
                           {isEditing ? (
                             <input
@@ -273,16 +344,66 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
                         <td className="px-2 py-1 font-mono text-gray-400">{fmtDuration(dur)}</td>
                         <td className="px-2 py-1">
                           <button
-                            onClick={() => onUpdate(p.id, { status: p.status === 'include' ? 'exclude' : 'include' })}
-                            className={`text-[10px] rounded px-2 py-0.5 border ${
-                              p.status === 'include'
-                                ? 'bg-emerald-950/60 border-emerald-700 text-emerald-300 hover:bg-emerald-900/80'
-                                : 'bg-rose-950/60 border-rose-700 text-rose-300 hover:bg-rose-900/80 line-through'
-                            }`}
-                            title="Basculer Inclure / Exclure"
+                            onClick={() => onUpdate(p.id, { status: nextStatus(p.status) })}
+                            className={`text-[10px] rounded px-2 py-0.5 border transition-colors ${statusClass(p.status)}`}
+                            title="Cliquer pour basculer Inclure → Exclure → Annotation"
                           >
-                            {p.status === 'include' ? 'Inclure' : 'Exclure'}
+                            {statusLabel(p.status)}
                           </button>
+                        </td>
+                        <td className="px-2 py-1">
+                          <div className="flex items-center gap-0.5">
+                            {PERIOD_PALETTE.map((c) => (
+                              <button
+                                key={c}
+                                onClick={() => onUpdate(p.id, { color: c })}
+                                className={`w-3.5 h-3.5 rounded-full border transition-transform ${
+                                  color === c
+                                    ? 'border-white scale-110'
+                                    : 'border-gray-800 hover:border-gray-500'
+                                }`}
+                                style={{ backgroundColor: c }}
+                                aria-label={`Couleur ${c}`}
+                                title={c}
+                              />
+                            ))}
+                          </div>
+                        </td>
+                        <td className="px-2 py-1 text-gray-300 max-w-[240px]">
+                          {p.status !== 'annotate' ? (
+                            <span className="text-gray-600 italic text-[10px]">—</span>
+                          ) : isCommenting ? (
+                            <textarea
+                              autoFocus
+                              rows={2}
+                              value={commentDraft}
+                              onChange={(e) => setCommentDraft(e.target.value)}
+                              onBlur={() => {
+                                onUpdate(p.id, { comment: commentDraft.trim() || undefined })
+                                setCommentEditId(null)
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Escape') setCommentEditId(null)
+                                else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+                                  onUpdate(p.id, { comment: commentDraft.trim() || undefined })
+                                  setCommentEditId(null)
+                                }
+                              }}
+                              className="w-full text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
+                              placeholder="Note libre…"
+                            />
+                          ) : (
+                            <button
+                              onClick={() => { setCommentEditId(p.id); setCommentDraft(p.comment ?? '') }}
+                              className="text-left w-full text-[11px] text-gray-300 hover:text-blue-300 truncate flex items-center gap-1"
+                              title={p.comment || 'Cliquer pour ajouter un commentaire'}
+                            >
+                              <MessageSquare size={10} className="shrink-0 opacity-60" />
+                              {p.comment
+                                ? <span className="truncate">{p.comment}</span>
+                                : <span className="italic text-gray-500">Ajouter…</span>}
+                            </button>
+                          )}
                         </td>
                         <td className="px-2 py-1 text-right">
                           <button
@@ -305,6 +426,12 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
                   {' — durée totale '}
                   <span className="font-mono text-gray-400">{fmtDuration(totals.totalMs)}</span>
                 </span>
+                {totals.annotateCount > 0 && (
+                  <span className="ml-auto flex items-center gap-1 text-blue-300">
+                    <StickyNote size={10} />
+                    {totals.annotateCount} annotation{totals.annotateCount > 1 ? 's' : ''} (n'affecte pas les calculs)
+                  </span>
+                )}
               </div>
             </div>
           )}

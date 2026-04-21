@@ -1106,21 +1106,38 @@ function MainPanel({
   const hasChart = chartFiles.length > 0
   const [showRecent, setShowRecent] = useState(false)
 
-  // --- Resize chart / spectrogram split (percentage of container height for chart) ---
-  const [chartPct, setChartPct] = useState(55)
-  const resizeRef = useRef<{ startY: number; startPct: number } | null>(null)
+  // --- Hauteur du spectrogramme en pixels (défaut 120, min 80, max 400) ---
+  // Mémorisée pendant la session via sessionStorage pour survivre aux
+  // changements d'onglet sans polluer localStorage.
+  const SPECTRO_MIN = 80
+  const SPECTRO_MAX = 400
+  const SPECTRO_DEFAULT = 120
+  const [spectrogramHeight, setSpectrogramHeight] = useState<number>(() => {
+    try {
+      const v = sessionStorage.getItem('acoustiq_spectro_height')
+      if (v) {
+        const n = parseInt(v, 10)
+        if (Number.isFinite(n)) return Math.max(SPECTRO_MIN, Math.min(SPECTRO_MAX, n))
+      }
+    } catch { /* sessionStorage indisponible */ }
+    return SPECTRO_DEFAULT
+  })
+  useEffect(() => {
+    try { sessionStorage.setItem('acoustiq_spectro_height', String(spectrogramHeight)) } catch { /* ignore */ }
+  }, [spectrogramHeight])
+
+  const resizeRef = useRef<{ startY: number; startH: number } | null>(null)
   const containerRef = useRef<HTMLDivElement>(null)
 
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
     e.preventDefault()
-    resizeRef.current = { startY: e.clientY, startPct: chartPct }
+    resizeRef.current = { startY: e.clientY, startH: spectrogramHeight }
     const onMove = (ev: MouseEvent) => {
-      if (!resizeRef.current || !containerRef.current) return
-      const containerH = containerRef.current.getBoundingClientRect().height
-      if (containerH <= 0) return
+      if (!resizeRef.current) return
+      // Glisser vers le haut → spectrogramme plus grand (hauteur augmente)
       const deltaY = ev.clientY - resizeRef.current.startY
-      const deltaPct = (deltaY / containerH) * 100
-      setChartPct(Math.max(20, Math.min(80, resizeRef.current.startPct + deltaPct)))
+      const newH = resizeRef.current.startH - deltaY
+      setSpectrogramHeight(Math.max(SPECTRO_MIN, Math.min(SPECTRO_MAX, newH)))
     }
     const onUp = () => {
       resizeRef.current = null
@@ -1129,7 +1146,7 @@ function MainPanel({
     }
     document.addEventListener('mousemove', onMove)
     document.addEventListener('mouseup', onUp)
-  }, [chartPct])
+  }, [spectrogramHeight])
 
   // En mode présentation, on force l'onglet Visualisation
   const effectiveTab: Tab = presentationMode ? 'chart' : activeTab
@@ -1304,9 +1321,12 @@ function MainPanel({
               <div
                 ref={containerRef}
                 className="flex flex-col shrink-0"
-                style={{ height: 'min(70vh, 720px)', minHeight: 380 }}
+                style={{
+                  height: `max(min(70vh, 720px), ${spectrogramHeight + 280}px)`,
+                  minHeight: Math.max(380, spectrogramHeight + 280),
+                }}
               >
-              <div style={{ height: `${chartPct}%` }} className="min-h-0 shrink-0">
+              <div className="flex-1 min-h-0">
                 <TimeSeriesChart
                   files={chartFiles}
                   pointMap={pointMap}
@@ -1352,10 +1372,10 @@ function MainPanel({
                 <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
               </div>
 
-              {/* Spectrogramme embarqué (collapsible) */}
+              {/* Spectrogramme embarqué (collapsible, hauteur en px mémorisée) */}
               <div
-                className="border-t border-gray-800 bg-gray-900/40 flex-1 min-h-0 flex flex-col"
-                style={{ minHeight: spectrogramExpanded ? 140 : undefined }}
+                className="border-t border-gray-800 bg-gray-900/40 flex flex-col shrink-0"
+                style={{ height: spectrogramExpanded ? spectrogramHeight + 28 /* header */ : undefined }}
               >
                 <button
                   onClick={onSpectrogramToggle}
@@ -1367,11 +1387,11 @@ function MainPanel({
                   <Layers size={12} />
                   <span className="font-semibold uppercase tracking-wider">Spectrogramme</span>
                   <span className="text-gray-600 normal-case font-normal">
-                    — synchronisé avec le graphique
+                    — synchronisé avec le graphique ({spectrogramHeight}px)
                   </span>
                 </button>
                 {spectrogramExpanded && (
-                  <div className="flex-1 min-h-0" style={{ minHeight: 120 }}>
+                  <div className="flex-1 min-h-0" style={{ minHeight: SPECTRO_MIN }}>
                     <Spectrogram
                       files={visibleChartFiles}
                       pointMap={pointMap}
@@ -1382,6 +1402,8 @@ function MainPanel({
                       zoomRange={zoomRange}
                       aggregationSeconds={aggregationSeconds}
                       compact
+                      height={spectrogramHeight}
+                      multiDay={availableDates.length > 1 && !overlayDate}
                     />
                   </div>
                 )}

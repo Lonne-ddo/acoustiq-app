@@ -5,6 +5,11 @@
  */
 import { useRef, useEffect, useMemo, useState } from 'react'
 import type { MeasurementFile, SourceEvent, DataPoint, ZoomRange } from '../types'
+
+function hhmmToMin(t: string): number {
+  const [h = '0', m = '0'] = t.split(':')
+  return parseInt(h, 10) * 60 + parseInt(m, 10)
+}
 import { A_WEIGHT } from '../utils/acoustics'
 
 const DEFAULT_CANVAS_HEIGHT = 160  // hauteur affichée en px par spectrogramme (mode plein)
@@ -223,6 +228,15 @@ function XAxis({ tMin, tMax }: { tMin: number; tMax: number }) {
   )
 }
 
+/** Événement pré-résolu sur l'axe X absolu du spectrogramme (en minutes) —
+ *  permet le mode multi-jours sans dupliquer la logique de résolution. */
+interface ResolvedEvent {
+  id: string
+  label: string
+  color: string
+  minutes: number
+}
+
 // ---- SingleSpectrogram -----------------------------------------------------
 interface SingleSpectrogramProps {
   pointName: string
@@ -235,7 +249,7 @@ interface SingleSpectrogramProps {
   minDb: number
   maxDb: number
   hoverTime: number | null
-  events: SourceEvent[]
+  events: ResolvedEvent[]
   onHoverTime: (t: number | null) => void
   /** Hauteur du canvas en px (variable selon mode embedded/full) */
   canvasHeight: number
@@ -390,9 +404,7 @@ function SingleSpectrogram({
 
           {/* Lignes verticales des événements */}
           {events.map((ev) => {
-            const [ehStr = '0', emStr = '0'] = ev.time.split(':')
-            const evMin = parseInt(ehStr, 10) * 60 + parseInt(emStr, 10)
-            const pct = ((evMin - tMin) / tRange) * 100
+            const pct = ((ev.minutes - tMin) / tRange) * 100
             if (pct < 0 || pct > 100) return null
             return (
               <div
@@ -431,6 +443,22 @@ interface Props {
   compact?: boolean
   /** Hauteur totale du conteneur (mode compact uniquement) */
   height?: number
+  /** Multi-jours : aligne l'axe X sur le chart (0..N·1440 min, séparateurs à minuit) */
+  multiDay?: boolean
+}
+
+/**
+ * Ajuste le pas d'agrégation selon la plage temporelle visible pour garder
+ * un spectrogramme lisible à tous les niveaux de zoom :
+ *   - < 10 min visibles  → au plus fin (≤ 30 s)
+ *   - > 2 h visibles     → ≥ 5 min par bucket (évite les ralentissements)
+ *   - sinon              → suit le pas de la courbe LAeq
+ */
+function adaptiveAggSec(spanMin: number, baseAggSec: number): number {
+  if (!Number.isFinite(spanMin) || spanMin <= 0) return baseAggSec
+  if (spanMin < 10) return Math.min(baseAggSec, 30)
+  if (spanMin > 120) return Math.max(baseAggSec, 300)
+  return baseAggSec
 }
 
 export default function Spectrogram({
@@ -439,23 +467,38 @@ export default function Spectrogram({
   aggregationSeconds = 300,
   compact = false,
   height,
+  multiDay,
 }: Props) {
   const [minDb, setMinDb] = useState(30)
   const [maxDb, setMaxDb] = useState(90)
   const [mode, setMode] = useState<SpectroMode>('moyen')
   const [hoverTime, setHoverTime] = useState<number | null>(null)
 
-  // Fichiers actifs pour la journée sélectionnée, groupés par point
+  // En mode multi-jours, les dates sont triées pour permettre un axe X
+  // absolu (dayIndex × 1440 + t) cohérent avec le chart.
+  const sortedDates = useMemo(() => [...availableDates].sort(), [availableDates])
+  const isMulti = !!multiDay && sortedDates.length > 1
+
+  // Fichiers actifs groupés par point — sur la date sélectionnée uniquement
+  // (mode simple) ou sur TOUTES les dates disponibles (multi-jours).
   const filesByPoint = useMemo(() => {
-    const map = new Map<string, MeasurementFile[]>()
+    const map = new Map<string, Array<{ file: MeasurementFile; dayOffset: number }>>()
     for (const f of files) {
       const pt = pointMap[f.id]
-      if (!pt || f.date !== selectedDate) continue
+      if (!pt) continue
+      let dayOffset = 0
+      if (isMulti) {
+        const idx = sortedDates.indexOf(f.date)
+        if (idx < 0) continue
+        dayOffset = idx * 1440
+      } else {
+        if (f.date !== selectedDate) continue
+      }
       if (!map.has(pt)) map.set(pt, [])
-      map.get(pt)!.push(f)
+      map.get(pt)!.push({ file: f, dayOffset })
     }
     return map
-  }, [files, pointMap, selectedDate])
+  }, [files, pointMap, selectedDate, isMulti, sortedDates])
 
   const pointNames = [...filesByPoint.keys()].sort()
 
@@ -464,7 +507,7 @@ export default function Spectrogram({
   // 31.5 Hz–10 kHz). Fallback héritage si absent.
   const freqBandsFromFile = useMemo(() => {
     for (const fs of filesByPoint.values()) {
-      for (const f of fs) {
+      for (const { file: f } of fs) {
         if (f.spectraFreqs && f.spectraFreqs.length > 0) return f.spectraFreqs
       }
     }
@@ -477,13 +520,32 @@ export default function Spectrogram({
     return freqBandsFromFile.map((f) => A_WEIGHT[f] ?? 0)
   }, [freqBandsFromFile])
 
+  // Plage visible (avant aggregation) : utilisée pour la résolution adaptative.
+  // Si zoomRange fourni → on l'utilise ; sinon on se base sur la plage des données.
+  const visibleSpanMin = useMemo(() => {
+    if (zoomRange) return Math.max(0, zoomRange.endMin - zoomRange.startMin)
+    // Estimation globale : 1 jour ou N jours
+    return isMulti ? sortedDates.length * 1440 : 1440
+  }, [zoomRange, isMulti, sortedDates.length])
+
+  const effectiveAggSec = useMemo(
+    () => adaptiveAggSec(visibleSpanMin, aggregationSeconds),
+    [visibleSpanMin, aggregationSeconds],
+  )
+
   // Agrégation des spectres pour chaque point — applique l'A-weighting in-line
   // pour que tous les calculs aval (couleurs, légende dB, min/max) soient en
-  // dB(A) cohérents entre 831C et 821SE.
+  // dB(A) cohérents entre 831C et 821SE. En mode multi-jours, les timestamps
+  // sont décalés de dayOffset (minutes) pour l'axe X absolu du chart.
   const spectraByPoint = useMemo(() => {
     const m = new Map<string, Map<number, number[]>>()
     for (const [pt, fs] of filesByPoint) {
-      const raw = aggregateSpectra(fs.flatMap((f) => f.data), aggregationSeconds, mode)
+      const pointData = fs.flatMap(({ file: f, dayOffset }) =>
+        dayOffset === 0
+          ? f.data
+          : f.data.map((dp) => ({ ...dp, t: dp.t + dayOffset })),
+      )
+      const raw = aggregateSpectra(pointData, effectiveAggSec, mode)
       if (!aWeightVector) {
         m.set(pt, raw)
         continue
@@ -495,7 +557,7 @@ export default function Spectrogram({
       m.set(pt, weighted)
     }
     return m
-  }, [filesByPoint, aggregationSeconds, mode, aWeightVector])
+  }, [filesByPoint, effectiveAggSec, mode, aWeightVector])
 
   // Plage temporelle globale et nombre de bandes
   const { tMin, tMax, nBands } = useMemo(() => {
@@ -506,14 +568,36 @@ export default function Spectrogram({
       }
     }
     // Appliquer le zoom si fourni
+    const fallbackMax = isMulti ? sortedDates.length * 1440 : 1439
     const baseMn = mn === Infinity ? 0 : mn
-    const baseMx = mx === -Infinity ? 1439 : mx
+    const baseMx = mx === -Infinity ? fallbackMax : mx
     return {
       tMin: zoomRange ? Math.max(baseMn, zoomRange.startMin) : baseMn,
       tMax: zoomRange ? Math.min(baseMx, zoomRange.endMin) : baseMx,
       nBands: nb,
     }
-  }, [spectraByPoint, zoomRange])
+  }, [spectraByPoint, zoomRange, isMulti, sortedDates.length])
+
+  // Zones de discontinuité (> 60 min sans données) — reportées depuis le chart
+  // en mode multi-jours. Dérivées à partir de l'union des buckets.
+  const gapZones = useMemo<Array<{ start: number; end: number }>>(() => {
+    if (!isMulti) return []
+    const allTs = new Set<number>()
+    for (const buckets of spectraByPoint.values()) {
+      for (const t of buckets.keys()) allTs.add(t)
+    }
+    const sorted = [...allTs].sort((a, b) => a - b)
+    const out: Array<{ start: number; end: number }> = []
+    const aggMin = effectiveAggSec / 60
+    const threshold = 60 // minutes
+    for (let i = 1; i < sorted.length; i++) {
+      const delta = sorted[i] - sorted[i - 1]
+      if (delta > threshold) {
+        out.push({ start: sorted[i - 1] + aggMin, end: sorted[i] })
+      }
+    }
+    return out
+  }, [spectraByPoint, isMulti, effectiveAggSec])
 
   // Liste des fréquences à afficher sur l'axe Y. Priorité au parser ; sinon
   // fallback historique sur les N dernières bandes de FREQ_BANDS_ALL.
@@ -523,11 +607,29 @@ export default function Spectrogram({
     return FREQ_BANDS_ALL.slice(-Math.max(nBands, 1))
   }, [freqBandsFromFile, nBands])
 
-  // Événements du jour sélectionné
-  const activeEvents = useMemo(
-    () => events.filter((ev) => ev.day === selectedDate),
-    [events, selectedDate],
-  )
+  // Événements résolus sur l'axe X absolu du spectrogramme (en minutes).
+  // En mode simple : jour sélectionné uniquement.
+  // En mode multi-jours : tous les jours disponibles, décalés par dayIndex·1440.
+  const activeEvents = useMemo<ResolvedEvent[]>(() => {
+    if (isMulti) {
+      return events
+        .filter((ev) => sortedDates.includes(ev.day))
+        .map((ev) => ({
+          id: ev.id,
+          label: ev.label,
+          color: ev.color,
+          minutes: sortedDates.indexOf(ev.day) * 1440 + hhmmToMin(ev.time),
+        }))
+    }
+    return events
+      .filter((ev) => ev.day === selectedDate)
+      .map((ev) => ({
+        id: ev.id,
+        label: ev.label,
+        color: ev.color,
+        minutes: hhmmToMin(ev.time),
+      }))
+  }, [events, selectedDate, isMulti, sortedDates])
 
   // Hauteur par canvas : compactée si embedded (− header + axe X), sinon valeur par défaut
   const perCanvasHeight = compact
@@ -597,16 +699,32 @@ export default function Spectrogram({
     </div>
   )
 
+  // ── Overlays communs : séparateurs de minuit + zones de discontinuité ────
+  // Placés en pointer-events-none par dessus la colonne des canvas.
+  const tRangeTotal = tMax - tMin || 1
+  const midnightLines = isMulti
+    ? sortedDates.map((_, i) => i).filter((i) => i > 0).map((i) => ({
+        x: i * 1440,
+        pct: ((i * 1440 - tMin) / tRangeTotal) * 100,
+        label: sortedDates[i],
+      })).filter((m) => m.pct > 0 && m.pct < 100)
+    : []
+
   // ── Mode compact (embarqué sous le graphique) ────────────────────────────
   if (compact) {
     return (
       <div data-acoustiq-spectrogram="compact" className="flex flex-col h-full" style={height ? { height } : undefined}>
-        <div className="flex items-center justify-end px-4 py-1 border-b border-gray-800/60 shrink-0">
+        <div className="flex items-center justify-end px-4 py-1 border-b border-gray-800/60 shrink-0 gap-3">
+          {effectiveAggSec !== aggregationSeconds && (
+            <span className="text-[10px] text-amber-400" title="Agrégation ajustée selon le niveau de zoom">
+              ≈ {effectiveAggSec < 60 ? `${effectiveAggSec}s` : `${Math.round(effectiveAggSec / 60)} min`}
+            </span>
+          )}
           {headerControls}
         </div>
         <div className="flex-1 overflow-y-auto px-4 py-2">
           <div className="flex gap-0">
-            <div className="flex-1 min-w-0">
+            <div className="relative flex-1 min-w-0">
               {pointNames.map((pt, i) => (
                 <SingleSpectrogram
                   key={pt}
@@ -623,11 +741,49 @@ export default function Spectrogram({
                   events={activeEvents}
                   onHoverTime={setHoverTime}
                   canvasHeight={perCanvasHeight}
-                  aggSec={aggregationSeconds}
+                  aggSec={effectiveAggSec}
                   compact
                 />
               ))}
               <XAxis tMin={tMin} tMax={tMax} />
+
+              {/* Overlays multi-jours : séparateurs minuit + zones de discontinuité.
+                  Positionnés dans la zone du canvas uniquement (décalage Y_AXIS_W à gauche). */}
+              {isMulti && (
+                <div
+                  className="pointer-events-none absolute top-0 bottom-0"
+                  style={{ left: Y_AXIS_W, right: 0 }}
+                >
+                  {gapZones.map((g, i) => {
+                    const l = ((g.start - tMin) / tRangeTotal) * 100
+                    const w = ((g.end - g.start) / tRangeTotal) * 100
+                    if (l + w < 0 || l > 100) return null
+                    return (
+                      <div
+                        key={`gap-${i}`}
+                        className="absolute top-0 bottom-4"
+                        style={{
+                          left: `${Math.max(0, l)}%`,
+                          width: `${Math.min(100 - Math.max(0, l), w)}%`,
+                          backgroundColor: 'rgba(107, 114, 128, 0.35)',
+                        }}
+                      />
+                    )
+                  })}
+                  {midnightLines.map((m) => (
+                    <div
+                      key={`mn-${m.x}`}
+                      className="absolute top-0 bottom-4"
+                      style={{
+                        left: `${m.pct}%`,
+                        width: 0,
+                        borderLeft: '1px dashed rgba(255,255,255,0.45)',
+                      }}
+                      title={m.label}
+                    />
+                  ))}
+                </div>
+              )}
             </div>
             <ColorScaleLegend minDb={minDb} maxDb={maxDb} height={perCanvasHeight} />
           </div>
@@ -664,7 +820,7 @@ export default function Spectrogram({
       <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="flex gap-0">
           {/* Colonne principale : spectrogrammes + axe X */}
-          <div className="flex-1 min-w-0">
+          <div className="relative flex-1 min-w-0">
             {pointNames.map((pt, i) => (
               <SingleSpectrogram
                 key={pt}
@@ -681,7 +837,7 @@ export default function Spectrogram({
                 events={activeEvents}
                 onHoverTime={setHoverTime}
                 canvasHeight={DEFAULT_CANVAS_HEIGHT}
-                aggSec={aggregationSeconds}
+                aggSec={effectiveAggSec}
               />
             ))}
             <XAxis tMin={tMin} tMax={tMax} />

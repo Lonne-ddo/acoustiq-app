@@ -39,14 +39,29 @@ export interface SourceEvent {
 
 export type ConcordanceState = 'Confirmé' | 'Incertain' | 'Non visible'
 
-/** Statut d'une période : inclure ou exclure du calcul des indices. */
-export type PeriodStatus = 'include' | 'exclude'
+/** Statut d'une période :
+ *   - include / exclude : filtrent les données pour le calcul des indices
+ *   - annotate : purement documentaire, n'affecte pas les calculs
+ */
+export type PeriodStatus = 'include' | 'exclude' | 'annotate'
+
+/** Palette de couleurs proposée pour une période annotée (ou autre usage). */
+export const PERIOD_PALETTE: string[] = [
+  '#3b82f6', // bleu
+  '#f97316', // orange
+  '#a855f7', // violet
+  '#14b8a6', // teal
+  '#eab308', // jaune
+  '#ec4899', // rose
+  '#6b7280', // gris
+]
 
 /**
- * Période nommée — sélectionnée par l'utilisateur sur le graphique, elle
- * filtre les données utilisées pour le calcul des indices acoustiques
- * (LAeq, L10…). Les timestamps sont stockés en epoch ms pour gérer
- * naturellement les plages qui traversent minuit.
+ * Période nommée — sélectionnée par l'utilisateur sur le graphique. Les
+ * périodes « include » / « exclude » filtrent les données utilisées pour
+ * le calcul des indices acoustiques (LAeq, L10…) ; les périodes
+ * « annotate » documentent une zone sans l'affecter. Les timestamps
+ * sont stockés en epoch ms pour gérer les plages qui traversent minuit.
  */
 export interface Period {
   id: string
@@ -56,8 +71,10 @@ export interface Period {
   /** Epoch ms (exclus) */
   endMs: number
   status: PeriodStatus
-  /** Couleur d'affichage (auto-assignée) — pas utilisée pour le statut */
+  /** Couleur d'affichage — utilisée surtout pour les annotations */
   color?: string
+  /** Commentaire libre (uniquement pour status='annotate') */
+  comment?: string
 }
 
 /** Candidat d'événement issu de la détection automatique (émergence sur bruit de fond local) */

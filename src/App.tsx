@@ -1219,6 +1219,9 @@ interface MainPanelProps {
   audioCoverage: AudioCoverageRange[]
   chartPickArmed: boolean
   onChartPicked: (tMin: number) => void
+  chartRangePickArmed: boolean
+  onChartRangePicked: (startMin: number, endMin: number) => void
+  chartHighlightRange: { startMin: number; endMin: number } | null
   onOpenAudioCalage: (entryId: string) => void
   onDateChange: (date: string) => void
   onTabChange: (tab: Tab) => void
@@ -1253,7 +1256,9 @@ function MainPanel({
   hiddenPoints, onTogglePointVisibility,
   periods, onPeriodAdd, onPeriodUpdate, onPeriodRemove,
   audioEntries, audioPointMap, audioSync, audioCoverage,
-  chartPickArmed, onChartPicked, onOpenAudioCalage,
+  chartPickArmed, onChartPicked,
+  chartRangePickArmed, onChartRangePicked, chartHighlightRange,
+  onOpenAudioCalage,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
@@ -1554,6 +1559,9 @@ function MainPanel({
                   onAudioSeekMin={audioSync.seekMin}
                   chartPickArmed={chartPickArmed}
                   onChartPicked={onChartPicked}
+                  chartRangePickArmed={chartRangePickArmed}
+                  onChartRangePicked={onChartRangePicked}
+                  chartHighlightRange={chartHighlightRange}
                 />
               </div>
 
@@ -1961,6 +1969,32 @@ export default function App() {
     setChartPickArmed(false)
     if (cb) cb(tMin)
   }, [])
+
+  // Idem pour un PICK DE PLAGE (drag sur le chart) — utilisé par l'onglet
+  // Auto RMS du panneau de calage. Sélectionne [startMin, endMin] par drag.
+  const [chartRangePickArmed, setChartRangePickArmed] = useState(false)
+  const chartRangePickCallbackRef = useRef<((startMin: number, endMin: number) => void) | null>(null)
+  const requestChartRangePick = useCallback(
+    (cb: (startMin: number, endMin: number) => void) => {
+      chartRangePickCallbackRef.current = cb
+      setChartRangePickArmed(true)
+    },
+    [],
+  )
+  const cancelChartRangePick = useCallback(() => {
+    chartRangePickCallbackRef.current = null
+    setChartRangePickArmed(false)
+  }, [])
+  const handleChartRangePicked = useCallback((s: number, e: number) => {
+    const cb = chartRangePickCallbackRef.current
+    chartRangePickCallbackRef.current = null
+    setChartRangePickArmed(false)
+    if (cb) cb(s, e)
+  }, [])
+
+  // Fenêtre mise en évidence sur le chart (surlignage bleu pendant le mode
+  // Auto RMS). null tant qu'aucune sélection n'a été validée.
+  const [chartHighlightRange, setChartHighlightRange] = useState<{ startMin: number; endMin: number } | null>(null)
   const handleAudioCalageApply = useCallback(
     (id: string, patch: { startMin: number; date: string }) => {
       setAudioEntries((prev) => prev.map((e) => (e.id === id ? {
@@ -2894,6 +2928,9 @@ export default function App() {
         audioCoverage={audioCoverage}
         chartPickArmed={chartPickArmed}
         onChartPicked={handleChartPicked}
+        chartRangePickArmed={chartRangePickArmed}
+        onChartRangePicked={handleChartRangePicked}
+        chartHighlightRange={chartHighlightRange}
         onOpenAudioCalage={setCalageEntryId}
         onDateChange={setSelectedDate}
         onTabChange={setActiveTab}
@@ -2939,8 +2976,16 @@ export default function App() {
             laeqByMinute={laeqByMinute}
             onRequestChartPick={requestChartPick}
             onCancelChartPick={cancelChartPick}
+            onRequestChartRangePick={requestChartRangePick}
+            onCancelChartRangePick={cancelChartRangePick}
+            onHighlightRange={setChartHighlightRange}
             onApply={(patch) => handleAudioCalageApply(entry.id, patch)}
-            onClose={() => { cancelChartPick(); setCalageEntryId(null) }}
+            onClose={() => {
+              cancelChartPick()
+              cancelChartRangePick()
+              setChartHighlightRange(null)
+              setCalageEntryId(null)
+            }}
           />
         )
       })()}

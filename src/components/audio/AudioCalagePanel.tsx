@@ -20,7 +20,7 @@
  *   - la série LAeq pour le mode 3 (récupérée côté App depuis `files`)
  */
 import { useEffect, useMemo, useState } from 'react'
-import { X, Clock, MousePointerClick, Activity, Loader2, Check } from 'lucide-react'
+import { X, Clock, MousePointerClick, Activity, Loader2, Check, Target, Pencil } from 'lucide-react'
 import type { AudioFileEntry } from '../../types'
 import type { UseAudioSyncResult } from '../../hooks/useAudioSync'
 import {
@@ -40,6 +40,11 @@ interface Props {
   onRequestChartPick: (cb: (tMin: number) => void) => void
   /** Annule une requête de pick en cours */
   onCancelChartPick: () => void
+  /** Même chose pour une SÉLECTION DE PLAGE par drag (Auto RMS). */
+  onRequestChartRangePick: (cb: (startMin: number, endMin: number) => void) => void
+  onCancelChartRangePick: () => void
+  /** Permet au panneau de mettre en évidence une fenêtre sur le chart. */
+  onHighlightRange: (range: { startMin: number; endMin: number } | null) => void
   /** Applique un nouveau calage (met à jour startMin, date, caleStatus=calibrated) */
   onApply: (patch: { startMin: number; date: string }) => void
   onClose: () => void
@@ -69,9 +74,16 @@ function fmtOffset(seconds: number): string {
 }
 
 export default function AudioCalagePanel({
-  entry, sync, laeqByMinute, onRequestChartPick, onCancelChartPick, onApply, onClose,
+  entry, sync, laeqByMinute,
+  onRequestChartPick, onCancelChartPick,
+  onRequestChartRangePick, onCancelChartRangePick,
+  onHighlightRange,
+  onApply, onClose,
 }: Props) {
   const [mode, setMode] = useState<CalageMode>('pointing')
+  /** Quand vrai, le modal se réduit en petit bandeau en haut-droite pour laisser
+   *  voir le graphique. Déclenché par les boutons de sélection graphique. */
+  const [minimized, setMinimized] = useState(false)
 
   // Mode 1 — horodatage direct
   const [m1Date, setM1Date] = useState(entry.date)
@@ -94,13 +106,23 @@ export default function AudioCalagePanel({
   >(null)
   const [m3Loading, setM3Loading] = useState(false)
   const [m3Error, setM3Error] = useState<string | null>(null)
+  /** Fenêtre sélectionnée graphiquement (mode 3). Si défini, cache les
+   *  champs HH:MM manuels et pré-remplit la corrélation. */
+  const [m3GraphicalRange, setM3GraphicalRange] = useState<{ startMin: number; endMin: number } | null>(null)
+  /** Mode saisie manuelle explicitement déplié (masqué par défaut). */
+  const [m3ManualMode, setM3ManualMode] = useState(false)
+  /** En attente d'un drag sur le chart pour sélectionner la fenêtre mode 3 */
+  const [waitingRangePick, setWaitingRangePick] = useState(false)
 
   useEffect(() => {
     return () => {
       // Cleanup si on ferme pendant un pick en attente
       if (waitingChartClick) onCancelChartPick()
+      if (waitingRangePick) onCancelChartRangePick()
+      onHighlightRange(null)
     }
-  }, [waitingChartClick, onCancelChartPick])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   // Durée audio pour caler les bornes de mode 1/2
   const durationMin = entry.durationSec / 60
@@ -130,10 +152,36 @@ export default function AudioCalagePanel({
 
   function armChartPick() {
     setWaitingChartClick(true)
+    setMinimized(true)
     onRequestChartPick((tMin) => {
       setChartMarkerMin(tMin)
       setWaitingChartClick(false)
+      setMinimized(false)
     })
+  }
+
+  function armRangePick() {
+    setWaitingRangePick(true)
+    setMinimized(true)
+    onRequestChartRangePick((s, e) => {
+      const range = { startMin: Math.min(s, e), endMin: Math.max(s, e) }
+      setM3GraphicalRange(range)
+      setWaitingRangePick(false)
+      setMinimized(false)
+      onHighlightRange(range)
+    })
+  }
+
+  function cancelRangePick() {
+    onCancelChartRangePick()
+    setWaitingRangePick(false)
+    setMinimized(false)
+  }
+
+  function cancelPointPick() {
+    onCancelChartPick()
+    setWaitingChartClick(false)
+    setMinimized(false)
   }
 
   const pointingOffsetSec = audioMarkerSec !== null && chartMarkerMin !== null
@@ -154,11 +202,20 @@ export default function AudioCalagePanel({
     setM3Error(null)
     setM3Result(null)
     try {
-      const startMatch = m3WindowStart.match(/^(\d{1,2}):(\d{2})$/)
-      const endMatch = m3WindowEnd.match(/^(\d{1,2}):(\d{2})$/)
-      if (!startMatch || !endMatch) throw new Error('Fenêtre invalide (format HH:MM attendu).')
-      const startMin = parseInt(startMatch[1], 10) * 60 + parseInt(startMatch[2], 10)
-      const endMin = parseInt(endMatch[1], 10) * 60 + parseInt(endMatch[2], 10)
+      // Priorité à la sélection graphique ; sinon on retombe sur la saisie
+      // manuelle HH:MM si l'utilisateur l'a explicitement dépliée.
+      let startMin: number
+      let endMin: number
+      if (m3GraphicalRange) {
+        startMin = Math.floor(m3GraphicalRange.startMin)
+        endMin = Math.ceil(m3GraphicalRange.endMin)
+      } else {
+        const startMatch = m3WindowStart.match(/^(\d{1,2}):(\d{2})$/)
+        const endMatch = m3WindowEnd.match(/^(\d{1,2}):(\d{2})$/)
+        if (!startMatch || !endMatch) throw new Error('Fenêtre invalide (format HH:MM attendu).')
+        startMin = parseInt(startMatch[1], 10) * 60 + parseInt(startMatch[2], 10)
+        endMin = parseInt(endMatch[1], 10) * 60 + parseInt(endMatch[2], 10)
+      }
       if (endMin <= startMin) throw new Error('La fin doit être après le début.')
       const laeqSlice: number[] = []
       for (let m = startMin; m < endMin; m++) {
@@ -205,6 +262,53 @@ export default function AudioCalagePanel({
     if (entry.caleStatus === 'date_only') return { color: 'bg-amber-400', label: 'Date estimée, non calé' }
     return { color: 'bg-rose-500', label: 'Non calé (00:00 par défaut)' }
   }, [entry.caleStatus])
+
+  // Mode minimisé : petit panneau flottant en haut-droite qui laisse la vue
+  // sur le chart pour cliquer / glisser. Conserve l'état interne du modal.
+  if (minimized) {
+    const cancel = waitingRangePick
+      ? cancelRangePick
+      : waitingChartClick
+      ? cancelPointPick
+      : () => setMinimized(false)
+    return (
+      <div className="fixed top-4 right-4 z-50 w-[320px] bg-gray-900 border border-amber-600 rounded-lg shadow-2xl p-3">
+        <div className="flex items-center gap-2">
+          <span className={`w-2 h-2 rounded-full ${statusDot.color} animate-pulse`} />
+          <span className="text-[11px] font-semibold text-gray-100">
+            {waitingRangePick
+              ? 'Sélection de la fenêtre Auto RMS'
+              : waitingChartClick
+              ? 'Marqueur courbe — cliquez sur le chart'
+              : 'Calage — mode compact'}
+          </span>
+          <button
+            onClick={() => setMinimized(false)}
+            className="ml-auto text-gray-400 hover:text-gray-200"
+            aria-label="Rouvrir le modal complet"
+            title="Rouvrir le modal complet"
+          >
+            <Pencil size={12} />
+          </button>
+        </div>
+        <p className="text-[10px] text-gray-400 mt-1 leading-snug">
+          {waitingRangePick
+            ? 'Cliquez-glissez sur le graphique LAeq pour définir la fenêtre.'
+            : waitingChartClick
+            ? 'Cliquez sur le graphique LAeq à l\'instant du même événement que le marqueur audio.'
+            : `${entry.name}`}
+        </p>
+        <div className="mt-2 flex justify-end gap-1.5">
+          <button
+            onClick={cancel}
+            className="text-[10px] text-gray-300 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-2 py-1"
+          >
+            Annuler
+          </button>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm">
@@ -387,36 +491,92 @@ export default function AudioCalagePanel({
           {mode === 'correlation' && (
             <>
               <p className="text-[11px] text-gray-400 leading-snug">
-                Sélectionnez une fenêtre de la courbe LAeq contenant un événement
-                distinctif (ex: un pic unique). L'algorithme calcule l'enveloppe
-                RMS de l'audio et cherche l'offset qui maximise la corrélation
-                avec la courbe LAeq sur cette fenêtre (pas de 1 min).
+                Sélectionnez graphiquement la fenêtre de la courbe LAeq contenant
+                un événement distinctif (pic, passage de camion…). L'algorithme
+                calcule l'enveloppe RMS de l'audio et cherche l'offset qui
+                maximise la corrélation avec la courbe LAeq sur cette fenêtre.
               </p>
-              <div className="grid grid-cols-2 gap-2">
-                <label className="text-[10px] text-gray-500 uppercase tracking-wide">
-                  Début fenêtre LAeq (HH:MM)
-                  <input
-                    type="text"
-                    value={m3WindowStart}
-                    onChange={(e) => setM3WindowStart(e.target.value)}
-                    className="mt-1 w-full text-xs font-mono bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                  />
-                </label>
-                <label className="text-[10px] text-gray-500 uppercase tracking-wide">
-                  Fin fenêtre LAeq (HH:MM)
-                  <input
-                    type="text"
-                    value={m3WindowEnd}
-                    onChange={(e) => setM3WindowEnd(e.target.value)}
-                    className="mt-1 w-full text-xs font-mono bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                  />
-                </label>
-              </div>
+
+              {/* Sélection graphique de la fenêtre */}
+              <button
+                onClick={armRangePick}
+                disabled={waitingRangePick}
+                className="w-full text-[11px] bg-blue-600 hover:bg-blue-500 disabled:opacity-60 text-white rounded px-3 py-2 flex items-center justify-center gap-1.5"
+              >
+                <Target size={12} />
+                {m3GraphicalRange
+                  ? 'Modifier la sélection'
+                  : 'Sélectionner une fenêtre sur le graphique'}
+              </button>
+
+              {m3GraphicalRange && (
+                <div className="rounded-md border border-blue-700/60 bg-blue-950/30 p-2.5 text-[11px] text-blue-200 space-y-0.5">
+                  <div>
+                    Fenêtre sélectionnée :{' '}
+                    <span className="font-mono font-semibold">
+                      {minToHHMMSS(m3GraphicalRange.startMin).slice(0, 5)}
+                      {' → '}
+                      {minToHHMMSS(m3GraphicalRange.endMin).slice(0, 5)}
+                    </span>
+                    {' '}
+                    <span className="text-blue-300/80">
+                      ({(() => {
+                        const dur = Math.max(0, m3GraphicalRange.endMin - m3GraphicalRange.startMin)
+                        const h = Math.floor(dur / 60)
+                        const m = Math.round(dur % 60)
+                        return h > 0 ? `${h}h ${String(m).padStart(2, '0')}m` : `${m}m`
+                      })()})
+                    </span>
+                  </div>
+                </div>
+              )}
+
+              {/* Saisie manuelle (optionnelle, masquée par défaut) */}
+              {!m3ManualMode ? (
+                <button
+                  onClick={() => setM3ManualMode(true)}
+                  className="text-[10px] text-gray-500 hover:text-gray-300 underline self-start"
+                  type="button"
+                >
+                  <Pencil size={9} className="inline-block mr-1" />
+                  Saisir les heures manuellement
+                </button>
+              ) : (
+                <div className="rounded border border-gray-800 p-2 space-y-2">
+                  <div className="grid grid-cols-2 gap-2">
+                    <label className="text-[10px] text-gray-500 uppercase tracking-wide">
+                      Début fenêtre LAeq (HH:MM)
+                      <input
+                        type="text"
+                        value={m3WindowStart}
+                        onChange={(e) => { setM3WindowStart(e.target.value); setM3GraphicalRange(null); onHighlightRange(null) }}
+                        className="mt-1 w-full text-xs font-mono bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                    </label>
+                    <label className="text-[10px] text-gray-500 uppercase tracking-wide">
+                      Fin fenêtre LAeq (HH:MM)
+                      <input
+                        type="text"
+                        value={m3WindowEnd}
+                        onChange={(e) => { setM3WindowEnd(e.target.value); setM3GraphicalRange(null); onHighlightRange(null) }}
+                        className="mt-1 w-full text-xs font-mono bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                    </label>
+                  </div>
+                  <button
+                    onClick={() => setM3ManualMode(false)}
+                    className="text-[10px] text-gray-500 hover:text-gray-300 underline"
+                    type="button"
+                  >
+                    Revenir à la sélection graphique
+                  </button>
+                </div>
+              )}
 
               <button
                 onClick={runCorrelation}
-                disabled={m3Loading}
-                className="w-full text-[11px] bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded px-3 py-2 flex items-center justify-center gap-1.5"
+                disabled={m3Loading || (!m3GraphicalRange && !m3ManualMode)}
+                className="w-full text-[11px] bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded px-3 py-2 flex items-center justify-center gap-1.5"
               >
                 {m3Loading && <Loader2 size={12} className="animate-spin" />}
                 {m3Loading ? 'Décodage + corrélation…' : 'Lancer la corrélation'}

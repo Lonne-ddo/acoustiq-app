@@ -301,6 +301,12 @@ interface Props {
    *  remonte la minute absolue au callback au lieu de créer une période. */
   chartPickArmed?: boolean
   onChartPicked?: (tMin: number) => void
+  /** Mode "pick range" pour le calage audio Auto RMS : le prochain drag
+   *  remonte [startMin, endMin] au callback au lieu de créer une période. */
+  chartRangePickArmed?: boolean
+  onChartRangePicked?: (startMin: number, endMin: number) => void
+  /** Fenêtre surlignée de façon persistante sur le chart (bleu translucide). */
+  chartHighlightRange?: { startMin: number; endMin: number } | null
 }
 
 /** Format court d'une date ISO en français : "2026-03-09" → "09 mars" */
@@ -356,6 +362,9 @@ export default function TimeSeriesChart({
   onAudioSeekMin,
   chartPickArmed,
   onChartPicked,
+  chartRangePickArmed,
+  onChartRangePicked,
+  chartHighlightRange,
 }: Props) {
   // Affichage des données météo (vent) sur le graphique
   const [showWind, setShowWind] = useState(false)
@@ -1192,7 +1201,7 @@ export default function TimeSeriesChart({
       return
     }
 
-    // Finaliser une sélection de période
+    // Finaliser une sélection de période (ou un pick de plage armé)
     if (periodStartRef.current !== null && periodPx) {
       const rect = chartAreaRef.current?.getBoundingClientRect()
       const xA = periodPx.startX
@@ -1204,6 +1213,16 @@ export default function TimeSeriesChart({
       }
       const tA = xPxToMinutes(Math.min(xA, xB))
       const tB = xPxToMinutes(Math.max(xA, xB))
+
+      // Si le chart est armé pour un pick de plage (Auto RMS du calage),
+      // court-circuite la création de période et remonte directement [tA, tB]
+      // au demandeur.
+      if (chartRangePickArmed && onChartRangePicked) {
+        setPeriodPx(null)
+        onChartRangePicked(tA, tB)
+        return
+      }
+
       const midX = (xA + xB) / 2
       const popupY = rect ? Math.max(8, e.clientY - rect.top - 4) : 40
       setPeriodPopup({
@@ -1216,7 +1235,7 @@ export default function TimeSeriesChart({
       })
       return
     }
-  }, [selectionPx, periodPx, xPxToMinutes, filesByPoint, compPx, compPhase, laeqOverRange, periods])
+  }, [selectionPx, periodPx, xPxToMinutes, filesByPoint, compPx, compPhase, laeqOverRange, periods, chartRangePickArmed, onChartRangePicked])
 
   const handleMouseLeave = useCallback(() => {
     // Ne pas annuler une sélection en cours : l'utilisateur peut sortir de la zone
@@ -1647,7 +1666,7 @@ export default function TimeSeriesChart({
       <div
         ref={chartAreaRef}
         className={`relative flex-1 min-h-0 ${
-          pendingAnnotationText || compPhase === 'pickON' || compPhase === 'pickOFF'
+          pendingAnnotationText || compPhase === 'pickON' || compPhase === 'pickOFF' || chartPickArmed || chartRangePickArmed
             ? 'cursor-crosshair'
             : periodStartRef.current !== null || selectionStartRef.current !== null
             ? 'cursor-col-resize'
@@ -1913,6 +1932,38 @@ export default function TimeSeriesChart({
                   }}
                 />
               )}
+
+              {/* Fenêtre sélectionnée pour le calage Auto RMS — surlignage
+                  bleu translucide persistant tant que le panneau reste ouvert. */}
+              {chartHighlightRange && (() => {
+                const xMin = isMultiDay
+                  ? chartHighlightRange.startMin
+                  : Math.max(fullRange.startMin, chartHighlightRange.startMin)
+                const xMax = isMultiDay
+                  ? chartHighlightRange.endMin
+                  : Math.min(fullRange.endMin, chartHighlightRange.endMin)
+                if (xMax <= xMin) return null
+                return (
+                  <ReferenceArea
+                    yAxisId="left"
+                    x1={xMin}
+                    x2={xMax}
+                    fill="#3b82f6"
+                    fillOpacity={0.2}
+                    stroke="#3b82f6"
+                    strokeOpacity={0.75}
+                    strokeDasharray="4 3"
+                    ifOverflow="hidden"
+                    label={{
+                      value: 'Fenêtre Auto RMS',
+                      position: 'insideTop',
+                      fill: '#93c5fd',
+                      fontSize: 10,
+                      offset: 4,
+                    }}
+                  />
+                )
+              })()}
 
               {/* Périodes nommées :
                    - include  → vert
@@ -2225,6 +2276,25 @@ export default function TimeSeriesChart({
             {compPhase === 'pickON'
               ? 'Glissez pour sélectionner la plage Source ON (verte)'
               : 'Glissez pour sélectionner la plage Source OFF (grise)'}
+          </div>
+        )}
+
+        {/* Bandeau : cliquez sur le chart pour remonter un instant (calage
+            audio mode Pointage) */}
+        {chartPickArmed && (
+          <div className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2
+                          px-3 py-1 rounded bg-amber-900/80 border border-amber-600
+                          text-xs text-amber-100 animate-pulse">
+            Cliquez sur le graphique LAeq au même instant que le marqueur audio
+          </div>
+        )}
+
+        {/* Bandeau : cliquez-glissez pour définir une fenêtre (calage Auto RMS) */}
+        {chartRangePickArmed && (
+          <div className="pointer-events-none absolute top-2 left-1/2 -translate-x-1/2
+                          px-3 py-1 rounded bg-blue-900/80 border border-blue-500
+                          text-xs text-blue-100 animate-pulse">
+            Cliquez-glissez sur le graphique LAeq pour définir la fenêtre de recherche
           </div>
         )}
 

@@ -6,10 +6,19 @@
  * Affichage : panneau sous le graphique LAeq, collapsible, visible
  * uniquement quand une entrée audio est associée au point actif.
  */
-import { Play, Pause, Square, Volume2, Gauge, ChevronDown, ChevronUp, Clock, AlertTriangle } from 'lucide-react'
-import { useState } from 'react'
+import { Play, Pause, Square, Volume2, Gauge, ChevronDown, ChevronUp, Clock, AlertTriangle, MapPin, Sliders } from 'lucide-react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AudioFileEntry } from '../../types'
 import type { UseAudioSyncResult } from '../../hooks/useAudioSync'
+import AudioWaveform from './AudioWaveform'
+
+/** Hauteur par défaut du panneau (spec : 140 px) + bornes du redimensionnement. */
+const AUDIO_HEIGHT_DEFAULT = 140
+const AUDIO_HEIGHT_MIN = 80
+const AUDIO_HEIGHT_MAX = 500
+const AUDIO_HEIGHT_KEY = 'acoustiq_audio_panel_height'
+/** Seuil au-dessus duquel on affiche la forme d'onde + timeline détaillée. */
+const EXPANDED_THRESHOLD = 200
 
 const SPEEDS: Array<1 | 1.5 | 2 | 4> = [1, 1.5, 2, 4]
 
@@ -43,11 +52,48 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
   // Modal de confirmation quand on essaie de lire un fichier non calé.
   const [warnUncaled, setWarnUncaled] = useState<AudioFileEntry | null>(null)
 
+  // Hauteur du panneau — spec : 140 px par défaut, 80–500 px, persistée
+  // en localStorage pour survivre aux rechargements.
+  const [height, setHeight] = useState<number>(() => {
+    try {
+      const v = localStorage.getItem(AUDIO_HEIGHT_KEY)
+      if (v) {
+        const n = parseInt(v, 10)
+        if (Number.isFinite(n)) return Math.max(AUDIO_HEIGHT_MIN, Math.min(AUDIO_HEIGHT_MAX, n))
+      }
+    } catch { /* ignore */ }
+    return AUDIO_HEIGHT_DEFAULT
+  })
+  useEffect(() => {
+    try { localStorage.setItem(AUDIO_HEIGHT_KEY, String(height)) } catch { /* ignore */ }
+  }, [height])
+
+  const resizeRef = useRef<{ startY: number; startH: number } | null>(null)
+  const handleResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    resizeRef.current = { startY: e.clientY, startH: height }
+    const onMove = (ev: MouseEvent) => {
+      if (!resizeRef.current) return
+      // Glisser vers le haut (clientY diminue) → agrandit le panneau
+      const deltaY = ev.clientY - resizeRef.current.startY
+      const newH = resizeRef.current.startH - deltaY
+      setHeight(Math.max(AUDIO_HEIGHT_MIN, Math.min(AUDIO_HEIGHT_MAX, newH)))
+    }
+    const onUp = () => {
+      resizeRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [height])
+
   const active = entries.find((e) => e.id === sync.activeEntryId) ?? null
   const currentSec = active && sync.currentMin !== null
     ? Math.max(0, (sync.currentMin - active.startMin) * 60)
     : 0
   const totalSec = active?.durationSec ?? 0
+  const expanded = !collapsed && height >= EXPANDED_THRESHOLD
 
   /** Tente de jouer une entrée, ouvre le warning si pas calée. */
   function playOrWarn(e: AudioFileEntry) {
@@ -78,10 +124,30 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
   if (entries.length === 0) return null
 
   return (
-    <div className="border-t border-gray-800 bg-gray-950/70">
+    <div
+      className="border-t border-gray-800 bg-gray-950/70 flex flex-col"
+      style={collapsed ? undefined : { height }}
+    >
+      {/* Poignée de redimensionnement (3 px, cursor ns-resize).
+          Masquée quand le panneau est replié (la hauteur est alors dictée
+          par le seul en-tête cliquable). */}
+      {!collapsed && (
+        <div
+          onMouseDown={handleResizeStart}
+          className="shrink-0 cursor-ns-resize group"
+          style={{ height: 3, backgroundColor: 'rgba(107, 114, 128, 0.3)' }}
+          title="Glisser pour redimensionner le panneau audio"
+        >
+          <div
+            className="w-full h-full group-hover:opacity-100 opacity-0 transition-opacity"
+            style={{ backgroundColor: 'rgba(107, 114, 128, 0.6)' }}
+          />
+        </div>
+      )}
+
       <button
         onClick={() => setCollapsed((v) => !v)}
-        className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-gray-900/60 transition-colors"
+        className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-gray-900/60 transition-colors shrink-0"
         aria-expanded={!collapsed}
       >
         {collapsed ? <ChevronUp size={11} className="text-gray-500" /> : <ChevronDown size={11} className="text-gray-500" />}
@@ -102,7 +168,7 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
       </button>
 
       {!collapsed && (
-        <div className="px-4 pb-3 space-y-2">
+        <div className="px-4 pb-3 space-y-2 flex-1 min-h-0 overflow-hidden flex flex-col">
           {/* Barre de progression */}
           <div
             className="relative w-full h-2 rounded bg-gray-800 cursor-pointer overflow-hidden"
@@ -200,6 +266,46 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
               Caler
             </button>
           </div>
+
+          {/* Mode étendu : waveform + timeline + actions supplémentaires.
+              Uniquement quand le panneau dépasse EXPANDED_THRESHOLD (200 px). */}
+          {expanded && active && (
+            <div className="flex-1 min-h-0 flex flex-col gap-2">
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => {
+                    // "Marquer ici" : ouvre le calage en mode pointage, avec
+                    // l'instant courant déjà placé en tant que marqueur audio.
+                    if (active) onOpenCalage(active.id)
+                  }}
+                  className="flex items-center gap-1 text-[11px] text-emerald-300 hover:text-emerald-200 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded px-2 py-1"
+                  title="Placer un marqueur à l'instant courant (ouvre le calage)"
+                >
+                  <MapPin size={11} />
+                  Marquer ici
+                </button>
+                <button
+                  className="flex items-center gap-1 text-[11px] text-gray-500 bg-gray-900 border border-gray-800 rounded px-2 py-1 cursor-not-allowed"
+                  title="Égaliseur audio (à venir)"
+                  disabled
+                >
+                  <Sliders size={11} />
+                  Égaliseur
+                </button>
+                <span className="ml-auto text-[10px] text-gray-500 truncate">
+                  Forme d'onde — cliquer pour aller à un instant
+                </span>
+              </div>
+              <div className="flex-1 min-h-0">
+                <AudioWaveform
+                  key={active.id}
+                  entry={active}
+                  sync={sync}
+                  height={Math.max(60, height - 150)}
+                />
+              </div>
+            </div>
+          )}
 
           {/* Liste des fichiers audio — bascule rapide + indicateur ●  + bouton ⏱ par onglet */}
           {entries.length > 1 && (

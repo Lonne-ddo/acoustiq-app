@@ -19,14 +19,13 @@
  *     sur le chart remonte la minute absolue à notre handler)
  *   - la série LAeq pour le mode 3 (récupérée côté App depuis `files`)
  */
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { X, Clock, MousePointerClick, Activity, Loader2, Check, Target, Pencil } from 'lucide-react'
 import type { AudioFileEntry } from '../../types'
 import type { UseAudioSyncResult } from '../../hooks/useAudioSync'
 import {
-  decodeBlobUrl,
-  computeRmsEnvelope,
-  findBestOffset,
+  computePartialRmsEnvelope,
+  findBestShiftPartial,
 } from '../../utils/audioEnvelope'
 
 export type CalageMode = 'direct' | 'pointing' | 'correlation'
@@ -105,6 +104,7 @@ export default function AudioCalagePanel({
     | null
   >(null)
   const [m3Loading, setM3Loading] = useState(false)
+  const [m3Progress, setM3Progress] = useState(0)
   const [m3Error, setM3Error] = useState<string | null>(null)
   /** Fenêtre sélectionnée graphiquement (mode 3). Si défini, cache les
    *  champs HH:MM manuels et pré-remplit la corrélation. */
@@ -157,6 +157,14 @@ export default function AudioCalagePanel({
       setChartMarkerMin(tMin)
       setWaitingChartClick(false)
       setMinimized(false)
+      // Auto-apply si les 2 marqueurs sont posés — la solution la plus
+      // légère : ni décodage ni calcul, juste 2 timestamps. L'utilisateur
+      // voit le résumé dans le modal pendant la fermeture.
+      if (audioMarkerSec !== null) {
+        const newStartMin = tMin - audioMarkerSec / 60
+        onApply({ startMin: newStartMin, date: entry.date })
+        onClose()
+      }
     })
   }
 
@@ -196,59 +204,102 @@ export default function AudioCalagePanel({
     onClose()
   }
 
-  // ── Mode 3 — corrélation RMS ─────────────────────────────────────────
+  // ── Mode 3 — corrélation RMS sur décodage PARTIEL ───────────────────
+  // Ne décode JAMAIS le fichier entier (essentiel pour les MP3 > 1h).
+  // Lit en streaming via HTMLAudioElement + AnalyserNode une fenêtre
+  // autour de la position attendue, puis corrèle à la courbe LAeq.
+  const cancelRef = useRef({ cancelled: false })
   async function runCorrelation() {
     setM3Loading(true)
+    setM3Progress(0)
     setM3Error(null)
     setM3Result(null)
+    cancelRef.current = { cancelled: false }
     try {
-      // Priorité à la sélection graphique ; sinon on retombe sur la saisie
-      // manuelle HH:MM si l'utilisateur l'a explicitement dépliée.
-      let startMin: number
-      let endMin: number
+      let laeqStartMin: number
+      let laeqEndMin: number
       if (m3GraphicalRange) {
-        startMin = Math.floor(m3GraphicalRange.startMin)
-        endMin = Math.ceil(m3GraphicalRange.endMin)
+        laeqStartMin = Math.floor(m3GraphicalRange.startMin)
+        laeqEndMin = Math.ceil(m3GraphicalRange.endMin)
       } else {
         const startMatch = m3WindowStart.match(/^(\d{1,2}):(\d{2})$/)
         const endMatch = m3WindowEnd.match(/^(\d{1,2}):(\d{2})$/)
         if (!startMatch || !endMatch) throw new Error('Fenêtre invalide (format HH:MM attendu).')
-        startMin = parseInt(startMatch[1], 10) * 60 + parseInt(startMatch[2], 10)
-        endMin = parseInt(endMatch[1], 10) * 60 + parseInt(endMatch[2], 10)
+        laeqStartMin = parseInt(startMatch[1], 10) * 60 + parseInt(startMatch[2], 10)
+        laeqEndMin = parseInt(endMatch[1], 10) * 60 + parseInt(endMatch[2], 10)
       }
-      if (endMin <= startMin) throw new Error('La fin doit être après le début.')
-      const laeqSlice: number[] = []
-      for (let m = startMin; m < endMin; m++) {
-        const v = laeqByMinute[m]
-        laeqSlice.push(Number.isFinite(v) ? v : 0)
+      if (laeqEndMin <= laeqStartMin) throw new Error('La fin doit être après le début.')
+      if (laeqEndMin - laeqStartMin > 60) {
+        throw new Error(
+          'La fenêtre est trop large pour l\'analyse automatique. Réduisez-la à moins d\'1h ou utilisez le mode Pointage.',
+        )
       }
-      if (laeqSlice.length < 10) throw new Error('Pas assez de données LAeq dans la fenêtre.')
 
-      const audioBuffer = await decodeBlobUrl(entry.blobUrl)
-      // Enveloppe par minute pour s'aligner naturellement sur laeqByMinute
-      const env = computeRmsEnvelope(audioBuffer, 60)
+      const laeqPerMin: number[] = []
+      for (let m = laeqStartMin; m < laeqEndMin; m++) {
+        const v = laeqByMinute[m]
+        laeqPerMin.push(Number.isFinite(v) ? v : 0)
+      }
+      if (laeqPerMin.length < 5) throw new Error('Pas assez de données LAeq dans la fenêtre.')
+
+      // Fenêtre audio à décoder : autour de la position prédite par la
+      // startMin actuelle (souvent 0 = midnight), avec ±30 min de marge
+      // pour absorber le décalage réel.
+      const currentStartSec = entry.startMin * 60
+      const laeqStartSec = laeqStartMin * 60
+      const laeqEndSec = laeqEndMin * 60
+      const MARGIN = 30 * 60 // secondes
+      const audioWindowStart = Math.max(0, (laeqStartSec - currentStartSec) - MARGIN)
+      const audioWindowEnd = Math.min(entry.durationSec, (laeqEndSec - currentStartSec) + MARGIN)
+      if (audioWindowEnd - audioWindowStart < 60) {
+        throw new Error('La fenêtre LAeq choisie tombe hors de la plage audio disponible (ajustez la date du fichier ou déplacez la fenêtre).')
+      }
+
+      const { env, audioStartSec } = await computePartialRmsEnvelope(
+        entry.blobUrl,
+        audioWindowStart,
+        audioWindowEnd,
+        {
+          onProgress: (p) => setM3Progress(p),
+          signal: cancelRef.current,
+        },
+      )
       if (env.length < 2) throw new Error('Enveloppe audio trop courte.')
 
-      // Cherche un offset entre -6 h et +6 h (décalage typique des
-      // enregistreurs de terrain).
-      const res = findBestOffset(
+      // Recherche d'un shift dans la marge ±30 min (le 1er ordre de
+      // décalage ; si aucune corrélation, l'utilisateur élargit la
+      // fenêtre graphique ou recale grossièrement au préalable).
+      const res = findBestShiftPartial(
         env,
-        laeqSlice,
-        startMin * 60,     // on passe en secondes pour matcher l'unité d'env.tSec
-        -6 * 3600,
-        6 * 3600,
-        60,                // pas de 1 min
+        audioStartSec,
+        laeqPerMin,
+        laeqStartMin,
+        laeqEndMin,
+        currentStartSec,
+        -MARGIN,
+        MARGIN,
+        60,
       )
-      if (!res) throw new Error('Aucune corrélation trouvée.')
-      // L'offset trouvé correspond à : timeReel = timeAudio + offsetSec
-      // donc newStartMin = (−offsetSec / 60)  en minutes depuis minuit
-      const newStartMin = -res.offsetSec / 60
-      setM3Result({ ...res, newStartMin })
+      if (!res) throw new Error('Aucune corrélation trouvée dans la fenêtre de recherche.')
+      const newStartMin = (currentStartSec + res.shiftSec) / 60
+      setM3Result({ offsetSec: res.shiftSec, correlation: res.correlation, newStartMin })
     } catch (err) {
-      setM3Error(err instanceof Error ? err.message : 'Échec de la corrélation.')
+      const msg = err instanceof Error ? err.message : 'Échec de la corrélation.'
+      // Tip automatique quand c'est un échec de décodage : on suggère Pointage
+      if (/décod|decode|Annulé/i.test(msg)) {
+        setM3Error(
+          msg + '\n\nCe fichier MP3 n\'a pas pu être analysé automatiquement. Essayez le mode Pointage qui ne nécessite pas de décodage.',
+        )
+      } else {
+        setM3Error(msg)
+      }
     } finally {
       setM3Loading(false)
     }
+  }
+
+  function cancelCorrelation() {
+    cancelRef.current.cancelled = true
   }
 
   function applyCorrelation() {
@@ -573,22 +624,57 @@ export default function AudioCalagePanel({
                 </div>
               )}
 
-              <button
-                onClick={runCorrelation}
-                disabled={m3Loading || (!m3GraphicalRange && !m3ManualMode)}
-                className="w-full text-[11px] bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded px-3 py-2 flex items-center justify-center gap-1.5"
-              >
-                {m3Loading && <Loader2 size={12} className="animate-spin" />}
-                {m3Loading ? 'Décodage + corrélation…' : 'Lancer la corrélation'}
-              </button>
+              {!m3Loading ? (
+                <button
+                  onClick={runCorrelation}
+                  disabled={
+                    !m3GraphicalRange && !m3ManualMode
+                    /* Validation de la fenêtre 1h dans runCorrelation */
+                  }
+                  className="w-full text-[11px] bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded px-3 py-2 flex items-center justify-center gap-1.5"
+                >
+                  Lancer la corrélation
+                </button>
+              ) : (
+                <div className="rounded border border-blue-700/60 bg-blue-950/30 p-3 space-y-2">
+                  <div className="flex items-center gap-2 text-[11px] text-blue-200">
+                    <Loader2 size={12} className="animate-spin" />
+                    <span>Analyse de l'audio sur la fenêtre sélectionnée…</span>
+                    <span className="ml-auto font-mono text-blue-300 tabular-nums">
+                      {Math.round(m3Progress * 100)} %
+                    </span>
+                  </div>
+                  <div className="w-full h-1.5 bg-gray-900 rounded overflow-hidden">
+                    <div
+                      className="h-full bg-blue-500 transition-all duration-100"
+                      style={{ width: `${Math.max(0, Math.min(1, m3Progress)) * 100}%` }}
+                    />
+                  </div>
+                  <button
+                    onClick={cancelCorrelation}
+                    className="text-[10px] text-gray-300 hover:text-gray-100 underline"
+                    type="button"
+                  >
+                    Annuler l'analyse
+                  </button>
+                </div>
+              )}
 
-              <p className="text-[10px] text-amber-400/80 italic">
-                ⚠ Le décodage d'un gros MP3 peut prendre plusieurs secondes et consommer
-                beaucoup de RAM. Gardez la fenêtre raisonnable (≤ 3 h idéalement).
+              {m3GraphicalRange && (m3GraphicalRange.endMin - m3GraphicalRange.startMin > 60) && (
+                <p className="text-[10px] text-rose-300 bg-rose-950/30 border border-rose-800/60 rounded px-2 py-1.5">
+                  La fenêtre est trop large pour l'analyse automatique (max 1h).
+                  Réduisez-la ou utilisez le mode <span className="font-semibold">Pointage</span>.
+                </p>
+              )}
+
+              <p className="text-[10px] text-gray-500 italic leading-snug">
+                Décodage partiel via HTMLAudioElement + AnalyserNode (streaming, pas
+                de chargement complet en mémoire). Fonctionne sur les MP3 de
+                plusieurs heures si la fenêtre reste ≤ 1h.
               </p>
 
               {m3Error && (
-                <div className="rounded border border-rose-700/60 bg-rose-950/30 p-2 text-[11px] text-rose-200">
+                <div className="rounded border border-rose-700/60 bg-rose-950/30 p-2 text-[11px] text-rose-200 whitespace-pre-line">
                   {m3Error}
                 </div>
               )}

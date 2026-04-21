@@ -106,6 +106,200 @@ export function pearsonCorrelation(a: number[], b: number[]): number {
 }
 
 /**
+ * Calcule l'enveloppe RMS d'un segment d'un fichier audio SANS le décoder
+ * entièrement en mémoire. Essentiel pour les gros MP3 (> 1h) que
+ * `decodeAudioData` ne peut pas manipuler.
+ *
+ * Technique : un HTMLAudioElement pilote la lecture en streaming (le
+ * browser n'a qu'à garder les frames courants en mémoire). On branche un
+ * AnalyserNode dessus via un MediaElementAudioSourceNode et on
+ * échantillonne le RMS temps-domaine environ une fois par seconde de
+ * temps audio. La lecture est accélérée (playbackRate 16× si le browser
+ * l'accepte) pour que l'analyse soit rapide, et mise en silence via un
+ * GainNode à 0 (on ne peut pas `audio.muted` une fois routée vers
+ * AudioContext).
+ *
+ * Limite pratique : fenêtre ≤ ~2 h, sinon la lecture accélérée prend
+ * trop de temps. L'appelant doit valider.
+ */
+export async function computePartialRmsEnvelope(
+  blobUrl: string,
+  startSec: number,
+  endSec: number,
+  options: {
+    /** Vitesse de lecture souhaitée (clampée au max supporté par le browser) */
+    playbackRate?: number
+    /** Callback de progression en fraction 0..1 */
+    onProgress?: (pct: number) => void
+    /** Flag d'annulation (ref mutable, pas un AbortSignal). */
+    signal?: { cancelled: boolean }
+  } = {},
+): Promise<{ env: number[]; audioStartSec: number; step: number }> {
+  if (endSec <= startSec) throw new Error('Fenêtre vide')
+
+  const audio = new Audio()
+  audio.preload = 'auto'
+  audio.src = blobUrl
+
+  // Attente des métadonnées (durée, sample rate décodable…)
+  await new Promise<void>((resolve, reject) => {
+    const onMeta = () => { cleanup(); resolve() }
+    const onErr = () => { cleanup(); reject(new Error('Impossible de charger le fichier audio (métadonnées illisibles)')) }
+    const cleanup = () => {
+      audio.removeEventListener('loadedmetadata', onMeta)
+      audio.removeEventListener('error', onErr)
+    }
+    audio.addEventListener('loadedmetadata', onMeta, { once: true })
+    audio.addEventListener('error', onErr, { once: true })
+  })
+
+  if (options.signal?.cancelled) throw new Error('Annulé')
+
+  const duration = Number.isFinite(audio.duration) ? audio.duration : endSec
+  endSec = Math.min(endSec, duration)
+  startSec = Math.max(0, startSec)
+  if (endSec - startSec < 2) throw new Error('Fenêtre audio trop courte')
+
+  const ctx: AudioContext = new AudioContext()
+  let source: MediaElementAudioSourceNode | null = null
+  let analyser: AnalyserNode | null = null
+  let gain: GainNode | null = null
+  const env: number[] = []
+
+  try {
+    source = ctx.createMediaElementSource(audio)
+    analyser = ctx.createAnalyser()
+    analyser.fftSize = 2048
+    gain = ctx.createGain()
+    gain.gain.value = 0 // silencieux — l'analyser tourne quand même
+    source.connect(analyser)
+    analyser.connect(gain)
+    gain.connect(ctx.destination)
+
+    // Seek au début de la fenêtre
+    audio.currentTime = startSec
+    await new Promise<void>((resolve) => {
+      const onSeeked = () => { audio.removeEventListener('seeked', onSeeked); resolve() }
+      audio.addEventListener('seeked', onSeeked, { once: true })
+    })
+
+    // Lecture accélérée. Les browsers clampent silencieusement si > 16.
+    audio.playbackRate = options.playbackRate ?? 16
+    await audio.play()
+
+    const buf = new Float32Array(analyser.fftSize)
+    const totalDur = endSec - startSec
+    await new Promise<void>((resolve, reject) => {
+      let lastSampleSec = startSec - 1
+      let rafId = 0
+      const tick = () => {
+        if (options.signal?.cancelled) {
+          cancelAnimationFrame(rafId)
+          reject(new Error('Annulé'))
+          return
+        }
+        const cur = audio.currentTime
+        if (cur >= endSec - 0.05 || audio.ended) {
+          cancelAnimationFrame(rafId)
+          resolve()
+          return
+        }
+        // 1 échantillon par seconde de temps audio
+        if (cur - lastSampleSec >= 1) {
+          analyser!.getFloatTimeDomainData(buf)
+          let sumSq = 0
+          for (let i = 0; i < buf.length; i++) sumSq += buf[i] * buf[i]
+          const rms = Math.sqrt(sumSq / buf.length)
+          env.push(rms > 1e-6 ? 20 * Math.log10(rms) : -120)
+          lastSampleSec = cur
+          options.onProgress?.((cur - startSec) / totalDur)
+        }
+        rafId = requestAnimationFrame(tick)
+      }
+      rafId = requestAnimationFrame(tick)
+    })
+  } finally {
+    try { audio.pause() } catch { /* ignore */ }
+    try { source?.disconnect() } catch { /* ignore */ }
+    try { analyser?.disconnect() } catch { /* ignore */ }
+    try { gain?.disconnect() } catch { /* ignore */ }
+    try { await ctx.close() } catch { /* ignore */ }
+    audio.removeAttribute('src')
+    try { audio.load() } catch { /* ignore */ }
+  }
+
+  return { env, audioStartSec: startSec, step: 1 }
+}
+
+/**
+ * Cherche le meilleur décalage `shiftSec` tel que l'enveloppe RMS audio
+ * (partielle, commençant à `audioStartSec` dans le fichier) s'aligne sur
+ * une série LAeq de référence (par minute, commençant à `laeqStartSec`
+ * secondes depuis minuit).
+ *
+ * `shiftSec` est le décalage à APPLIQUER à la startTime courante de
+ * l'entrée audio pour qu'elle colle à la courbe LAeq : la nouvelle
+ * startTime réelle = `currentStartSec + shiftSec`.
+ *
+ * @param audioEnv      enveloppe RMS audio, 1 pt/s
+ * @param audioStartSec audio time du 1er point d'audioEnv
+ * @param laeqPerMinute LAeq par minute (dB), aligné sur l'axe real-time
+ * @param laeqStartMin  minutes depuis minuit du 1er point de laeqPerMinute
+ * @param laeqEndMin    minutes depuis minuit du dernier point (exclu)
+ * @param currentStartSec  startTime actuelle de l'entrée (en s depuis minuit)
+ * @param minShiftSec   shift minimal à tester (≤ 0 typiquement)
+ * @param maxShiftSec   shift maximal à tester (≥ 0 typiquement)
+ * @param stepSec       pas de recherche (défaut 60 s)
+ */
+export function findBestShiftPartial(
+  audioEnv: number[],
+  audioStartSec: number,
+  laeqPerMinute: number[],
+  laeqStartMin: number,
+  laeqEndMin: number,
+  currentStartSec: number,
+  minShiftSec: number,
+  maxShiftSec: number,
+  stepSec = 60,
+): { shiftSec: number; correlation: number } | null {
+  if (audioEnv.length === 0) return null
+
+  // On se place à la résolution minute côté audio aussi — ça stabilise la
+  // corrélation quand l'audio est sous-échantillonné.
+  const audioPerMinute: number[] = []
+  for (let m = 0; m * 60 < audioEnv.length; m++) {
+    let sumSq = 0, n = 0
+    for (let s = m * 60; s < Math.min(audioEnv.length, (m + 1) * 60); s++) {
+      const v = audioEnv[s]
+      if (Number.isFinite(v)) { sumSq += v * v; n += 1 }
+    }
+    audioPerMinute.push(n > 0 ? Math.sqrt(sumSq / n) : 0)
+  }
+  const audioPerMinuteStartMin = audioStartSec / 60
+
+  let bestShift = 0
+  let bestR = -2
+  for (let shift = minShiftSec; shift <= maxShiftSec; shift += stepSec) {
+    const a: number[] = []
+    const l: number[] = []
+    for (let k = 0; k < laeqPerMinute.length; k++) {
+      const realMin = laeqStartMin + k
+      if (realMin >= laeqEndMin) break
+      // audio time = real time - (currentStart + shift)
+      const audioTimeMin = realMin - (currentStartSec + shift) / 60
+      const audioIdx = Math.round(audioTimeMin - audioPerMinuteStartMin)
+      if (audioIdx < 0 || audioIdx >= audioPerMinute.length) continue
+      a.push(audioPerMinute[audioIdx])
+      l.push(laeqPerMinute[k])
+    }
+    if (a.length < 5) continue
+    const r = pearsonCorrelation(a, l)
+    if (r > bestR) { bestR = r; bestShift = shift }
+  }
+  return bestR > -1 ? { shiftSec: bestShift, correlation: bestR } : null
+}
+
+/**
  * Cherche le meilleur offset temporel (en secondes) qui aligne l'enveloppe
  * audio RMS avec une série LAeq de référence, dans une plage d'offsets
  * donnée. Le pas `stepSec` contrôle la résolution de la recherche.

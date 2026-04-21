@@ -293,6 +293,10 @@ interface Props {
   audioPlayheadMin?: number | null
   /** Demande à jouer une entrée audio à une position donnée */
   onAudioPlayAt?: (entryId: string, minutes: number) => void
+  /** Mode "pick" pour le calage audio (feature calage) : le prochain clic
+   *  remonte la minute absolue au callback au lieu de créer une période. */
+  chartPickArmed?: boolean
+  onChartPicked?: (tMin: number) => void
 }
 
 /** Format court d'une date ISO en français : "2026-03-09" → "09 mars" */
@@ -344,6 +348,8 @@ export default function TimeSeriesChart({
   audioLabels,
   audioPlayheadMin,
   onAudioPlayAt,
+  chartPickArmed,
+  onChartPicked,
 }: Props) {
   // Affichage des données météo (vent) sur le graphique
   const [showWind, setShowWind] = useState(false)
@@ -984,6 +990,14 @@ export default function TimeSeriesChart({
     if (!rect) return
     const xLocal = e.clientX - rect.left
 
+    // Mode "pick" (calage audio) : le prochain clic remonte la minute
+    // absolue au callback — court-circuite toutes les autres actions.
+    if (chartPickArmed && onChartPicked) {
+      const tMin = xPxToMinutes(xLocal)
+      onChartPicked(tMin)
+      return
+    }
+
     // Placement d'annotation en attente : transformer le clic en placement
     if (pendingAnnotationText) {
       const tMin = xPxToMinutes(xLocal)
@@ -1034,7 +1048,7 @@ export default function TimeSeriesChart({
     periodStartRef.current = xLocal
     setPeriodPx({ startX: xLocal, endX: xLocal })
     setPeriodPopup(null)
-  }, [compPhase, pendingAnnotationText, xPxToMinutes, chartData, lineSpecs, yDomain, selectedDate, onAnnotationPlace, onPendingAnnotationCleared])
+  }, [compPhase, pendingAnnotationText, xPxToMinutes, chartData, lineSpecs, yDomain, selectedDate, onAnnotationPlace, onPendingAnnotationCleared, chartPickArmed, onChartPicked])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const rect = chartAreaRef.current?.getBoundingClientRect()

@@ -49,6 +49,7 @@ import type {
   Scene3DData,
   Period,
   AudioFileEntry,
+  AudioCaleStatus,
 } from './types'
 import { DEFAULT_METEO } from './types'
 import ChecklistModal, { DEFAULT_CHECKLIST } from './components/ChecklistModal'
@@ -99,6 +100,7 @@ const IsolementPage = lazy(() => import('./pages/IsolementPage'))
 import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
 import StreamAudioPlayer from './components/audio/AudioPlayer'
+import AudioCalagePanel from './components/audio/AudioCalagePanel'
 import { useAudioSync, computeAudioCoverage, type AudioCoverageRange } from './hooks/useAudioSync'
 import { parseAudioFilename, deriveStartTimesFromSequence } from './utils/audioFilenameParser'
 import Conformite2026 from './components/Conformite2026'
@@ -290,7 +292,7 @@ function FileList({
   files, pointMap, pointLabels, allPoints,
   onPointChange, onPointLabelChange, onFileRemove, onCreatePoint,
   hiddenPoints, onTogglePointVisibility,
-  audioEntries, audioPointMap, onAudioEntryRemove, onAudioPlayAt,
+  audioEntries, audioPointMap, onAudioEntryRemove, onAudioPlayAt, onOpenCalage,
 }: {
   files: MeasurementFile[]
   pointMap: Record<string, string>
@@ -306,6 +308,7 @@ function FileList({
   audioPointMap: Record<string, string>
   onAudioEntryRemove: (id: string) => void
   onAudioPlayAt: (entryId: string, minutes: number) => void
+  onOpenCalage: (entryId: string) => void
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
   const [newPointInput, setNewPointInput] = useState<string | null>(null) // file ID awaiting new point
@@ -485,16 +488,32 @@ function FileList({
                         const durH = Math.floor(durMin / 60)
                         const durM = Math.round(durMin % 60)
                         const durLabel = durH > 0 ? `${durH}h${String(durM).padStart(2, '0')}` : `${durM} min`
+                        const status = a.caleStatus
+                        const dotColor = status === 'calibrated'
+                          ? 'bg-emerald-500'
+                          : status === 'date_only'
+                          ? 'bg-amber-400'
+                          : 'bg-rose-500'
+                        const dotTitle = status === 'calibrated'
+                          ? 'Calage appliqué'
+                          : status === 'date_only'
+                          ? 'Date estimée, heure à vérifier'
+                          : 'Non calé (00:00 par défaut)'
                         return (
                           <li
                             key={a.id}
                             className="flex items-center gap-1 px-1.5 py-1 rounded bg-blue-950/20 border border-blue-900/40 text-[10px]"
                             title={`${a.name} — ${a.date} · ${h(a.startMin)} → ${h(endMin)}`}
                           >
+                            <span
+                              className={`w-1.5 h-1.5 rounded-full shrink-0 ${dotColor}`}
+                              title={dotTitle}
+                            />
                             <button
                               onClick={() => onAudioPlayAt(a.id, a.startMin)}
-                              className="shrink-0 p-0.5 rounded hover:bg-blue-900/40 text-blue-300 hover:text-blue-200"
-                              title="Lire ce fichier"
+                              disabled={status === 'none'}
+                              className="shrink-0 p-0.5 rounded hover:bg-blue-900/40 text-blue-300 hover:text-blue-200 disabled:opacity-40"
+                              title={status === 'none' ? 'Calez le fichier avant de l\'écouter en synchro' : 'Lire ce fichier'}
                               aria-label="Lire"
                             >
                               <Play size={10} />
@@ -505,14 +524,13 @@ function FileList({
                             <span className="shrink-0 text-gray-500 font-mono">
                               {durLabel} · {h(a.startMin)} → {h(endMin)}
                             </span>
-                            {a.manualStart && (
-                              <span
-                                className="shrink-0 text-amber-400"
-                                title="Début estimé ou saisi manuellement"
-                              >
-                                ●
-                              </span>
-                            )}
+                            <button
+                              onClick={() => onOpenCalage(a.id)}
+                              className="shrink-0 text-[10px] text-amber-300 hover:text-amber-200 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded px-1 py-0 flex items-center gap-0.5"
+                              title="Caler ce fichier sur la courbe LAeq"
+                            >
+                              ⏱ Caler
+                            </button>
                             <button
                               onClick={() => onAudioEntryRemove(a.id)}
                               className="shrink-0 text-gray-600 hover:text-red-400"
@@ -659,6 +677,7 @@ interface SidebarProps {
   onAudioEntryRemove: (id: string) => void
   onAudioEntryPointChange: (id: string, point: string) => void
   onAudioPlayAt: (entryId: string, minutes: number) => void
+  onOpenCalage: (entryId: string) => void
   groupSuggestions: GroupSuggestion[]
   onAcceptSuggestion: (s: GroupSuggestion) => void
   onDismissSuggestion: (s: GroupSuggestion) => void
@@ -730,7 +749,7 @@ function Sidebar({
   onDetectCandidates, onConfirmCandidate, onDismissCandidate,
   onSaveProject, onLoadProject, onParseFiles,
   onAudioLoaded, onAudioRemove, onAudioSeek,
-  audioEntries, audioPointMap, audioCoverage, onAudioEntriesLoad, onAudioEntryRemove, onAudioPlayAt,
+  audioEntries, audioPointMap, audioCoverage, onAudioEntriesLoad, onAudioEntryRemove, onAudioPlayAt, onOpenCalage,
   groupSuggestions, onAcceptSuggestion, onDismissSuggestion, onAcceptAllSuggestions,
   hiddenPoints, onTogglePointVisibility,
   detectParams, onDetectParamsChange,
@@ -1030,6 +1049,7 @@ function Sidebar({
               audioPointMap={audioPointMap}
               onAudioEntryRemove={onAudioEntryRemove}
               onAudioPlayAt={onAudioPlayAt}
+              onOpenCalage={onOpenCalage}
             />
           )}
 
@@ -1196,6 +1216,8 @@ interface MainPanelProps {
   audioPointMap: Record<string, string>
   audioSync: ReturnType<typeof useAudioSync>
   audioCoverage: AudioCoverageRange[]
+  chartPickArmed: boolean
+  onChartPicked: (tMin: number) => void
   onDateChange: (date: string) => void
   onTabChange: (tab: Tab) => void
   onCellChange: (eventId: string, point: string, state: ConcordanceState) => void
@@ -1229,6 +1251,7 @@ function MainPanel({
   hiddenPoints, onTogglePointVisibility,
   periods, onPeriodAdd, onPeriodUpdate, onPeriodRemove,
   audioEntries, audioPointMap, audioSync, audioCoverage,
+  chartPickArmed, onChartPicked,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
@@ -1506,6 +1529,8 @@ function MainPanel({
                     return offset + audioSync.currentMin
                   })()}
                   onAudioPlayAt={audioSync.playAt}
+                  chartPickArmed={chartPickArmed}
+                  onChartPicked={onChartPicked}
                 />
               </div>
 
@@ -1883,6 +1908,39 @@ export default function App() {
   const handleAudioPointChange = useCallback((id: string, point: string) => {
     setAudioPointMap((prev) => ({ ...prev, [id]: point }))
   }, [])
+  // ── Panneau de calage audio ──────────────────────────────────────────
+  const [calageEntryId, setCalageEntryId] = useState<string | null>(null)
+  // Mode "pick" sur le chart : quand actif, le prochain clic sur le chart
+  // (sans drag) remonte la minute absolue au lieu de lancer une sélection.
+  const [chartPickArmed, setChartPickArmed] = useState(false)
+  const chartPickCallbackRef = useRef<((tMin: number) => void) | null>(null)
+  const requestChartPick = useCallback((cb: (tMin: number) => void) => {
+    chartPickCallbackRef.current = cb
+    setChartPickArmed(true)
+  }, [])
+  const cancelChartPick = useCallback(() => {
+    chartPickCallbackRef.current = null
+    setChartPickArmed(false)
+  }, [])
+  const handleChartPicked = useCallback((tMin: number) => {
+    const cb = chartPickCallbackRef.current
+    chartPickCallbackRef.current = null
+    setChartPickArmed(false)
+    if (cb) cb(tMin)
+  }, [])
+  const handleAudioCalageApply = useCallback(
+    (id: string, patch: { startMin: number; date: string }) => {
+      setAudioEntries((prev) => prev.map((e) => (e.id === id ? {
+        ...e,
+        startMin: patch.startMin,
+        date: patch.date,
+        caleStatus: 'calibrated' as const,
+        calibratedAt: new Date().toISOString(),
+        manualStart: false,
+      } : e)))
+    },
+    [],
+  )
   /** Importe un lot de fichiers audio : probe chacun, parse le nom et crée
    *  les AudioFileEntry correspondants. Auto-assignation du point quand
    *  le numéro de série d'un fichier de mesure déjà chargé apparaît dans
@@ -1918,6 +1976,13 @@ export default function App() {
       const fallbackDate = files[0]?.date ?? new Date().toISOString().slice(0, 10)
       const date = parsed?.date ?? fallbackDate
       const startMin = parsed?.startMin ?? 0
+      // Qualité initiale : jaune si le parser a tiré une info du nom,
+      // rouge sinon. Vert seulement après un calage utilisateur.
+      const caleStatus: AudioCaleStatus = !parsed
+        ? 'none'
+        : parsed.detected === 'none'
+        ? 'none'
+        : 'date_only'
       const entry: AudioFileEntry = {
         id: crypto.randomUUID(),
         name: file.name,
@@ -1931,6 +1996,7 @@ export default function App() {
           ? { fileIndex: parsed.fileIndex ?? undefined, detected: parsed.detected }
           : { detected: 'none' },
         manualStart: !parsed || parsed.startMin === null,
+        caleStatus,
       }
       return entry
     })
@@ -2715,6 +2781,7 @@ export default function App() {
         onAudioEntryRemove={handleAudioEntryRemove}
         onAudioEntryPointChange={handleAudioPointChange}
         onAudioPlayAt={audioSync.playAt}
+        onOpenCalage={setCalageEntryId}
         groupSuggestions={groupSuggestions}
         onAcceptSuggestion={acceptGroupSuggestion}
         onDismissSuggestion={dismissGroupSuggestion}
@@ -2785,6 +2852,8 @@ export default function App() {
         audioPointMap={audioPointMap}
         audioSync={audioSync}
         audioCoverage={audioCoverage}
+        chartPickArmed={chartPickArmed}
+        onChartPicked={handleChartPicked}
         onDateChange={setSelectedDate}
         onTabChange={setActiveTab}
         onCellChange={handleCellChange}
@@ -2797,6 +2866,43 @@ export default function App() {
         onOpenOnboarding={() => { resetOnboarding(); setShowOnboarding(true) }}
         onOpenChangelog={() => setShowChangelog(true)}
       />
+
+      {/* Panneau de calage audio */}
+      {calageEntryId && (() => {
+        const entry = audioEntries.find((e) => e.id === calageEntryId)
+        if (!entry) return null
+        // Série LAeq par minute pour le jour de l'entrée — utilisée par le mode 3
+        // (corrélation). Agrégation énergétique sur 1 minute.
+        const laeqByMinute = new Array<number>(1440).fill(0)
+        const buckets = new Array<{ pow: number; n: number }>(1440)
+          .fill(null as unknown as { pow: number; n: number })
+          .map(() => ({ pow: 0, n: 0 }))
+        for (const f of files) {
+          if (f.date !== entry.date) continue
+          for (const dp of f.data) {
+            const m = Math.floor(dp.t)
+            if (m < 0 || m >= 1440) continue
+            if (!Number.isFinite(dp.laeq)) continue
+            buckets[m].pow += Math.pow(10, dp.laeq / 10)
+            buckets[m].n += 1
+          }
+        }
+        for (let m = 0; m < 1440; m++) {
+          const { pow, n } = buckets[m]
+          laeqByMinute[m] = n > 0 ? 10 * Math.log10(pow / n) : 0
+        }
+        return (
+          <AudioCalagePanel
+            entry={entry}
+            sync={audioSync}
+            laeqByMinute={laeqByMinute}
+            onRequestChartPick={requestChartPick}
+            onCancelChartPick={cancelChartPick}
+            onApply={(patch) => handleAudioCalageApply(entry.id, patch)}
+            onClose={() => { cancelChartPick(); setCalageEntryId(null) }}
+          />
+        )
+      })()}
 
       {/* Modales */}
       {showSettings && (

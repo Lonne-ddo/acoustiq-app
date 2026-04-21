@@ -234,6 +234,14 @@ export interface AudioFile {
 }
 
 /**
+ * Qualité de calage d'un fichier audio par rapport à la courbe LAeq :
+ *   - calibrated : calage appliqué (horodatage manuel, pointage ou corrélation)
+ *   - date_only  : date déduite du nom mais heure inconnue → heure à 00:00
+ *   - none       : rien de fiable, début forcé à 00:00 par défaut
+ */
+export type AudioCaleStatus = 'calibrated' | 'date_only' | 'none'
+
+/**
  * Entrée audio en mode streaming — ne décode pas le fichier en AudioBuffer
  * (crucial pour les MP3 de plusieurs centaines de Mo). Chargée via blob URL
  * et HTMLAudioElement, associée à un point de mesure comme un fichier de
@@ -262,6 +270,23 @@ export interface AudioFileEntry {
   }
   /** Vrai si l'heure n'a pas pu être déduite → l'utilisateur a dû la saisir manuellement */
   manualStart?: boolean
+  /** Qualité de calage (indicateur visuel ● vert/jaune/rouge) */
+  caleStatus: AudioCaleStatus
+  /** ISO datetime du dernier calage appliqué (utile pour la persistance / debug) */
+  calibratedAt?: string
+  /** Identifiant de session audio — fichiers d'un même enregistreur regroupés */
+  sessionId?: string
+  /** Dans une session, si vrai → les fichiers se suivent sans gap (heures dérivées des durées) */
+  sessionContiguous?: boolean
+}
+
+/** Session audio regroupant plusieurs fichiers d'un même enregistreur. */
+export interface AudioSession {
+  id: string
+  /** Nom affiché (ex: "Tascam 1") */
+  name: string
+  /** Vrai si l'utilisateur confirme que les fichiers sont contigus → propage le calage */
+  contiguous: boolean
 }
 
 /** Position normalisée (0–1) d'un marqueur sur l'image de plan de site */

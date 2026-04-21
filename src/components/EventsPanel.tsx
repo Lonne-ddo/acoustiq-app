@@ -3,8 +3,10 @@
  * Permet d'ajouter des événements horodatés qui s'affichent sur le graphique
  */
 import { useState } from 'react'
-import { Plus, Trash2, Clock, Sparkles, Check, X, MessageSquare, MousePointerClick } from 'lucide-react'
+import { Plus, Trash2, Clock, Sparkles, Check, X, MessageSquare, MousePointerClick, Play } from 'lucide-react'
 import type { SourceEvent, CandidateEvent, ChartAnnotation } from '../types'
+import type { AudioCoverageRange } from '../hooks/useAudioSync'
+import { findCoveringRange } from '../hooks/useAudioSync'
 
 // Couleurs prédéfinies pour les événements
 const PRESET_COLORS = [
@@ -39,6 +41,11 @@ interface Props {
   onPendingAnnotationChange: (text: string | null) => void
   detectParams: DetectParams
   onDetectParamsChange: (p: DetectParams) => void
+  /** Plages de couverture audio pour activer le bouton ▶ sur les événements */
+  audioCoverage?: AudioCoverageRange[]
+  /** Index des jours pour le mapping multi-jours (ev.day → offset minutes) */
+  dayIndexOf?: (d: string) => number
+  onAudioPlayAt?: (entryId: string, minutes: number) => void
 }
 
 const MAX_CANDIDATES_DISPLAYED = 50
@@ -56,6 +63,7 @@ export default function EventsPanel({
   annotations, onAnnotationAdd, onAnnotationRemove, onAnnotationUpdate,
   pendingAnnotationText, onPendingAnnotationChange,
   detectParams, onDetectParamsChange,
+  audioCoverage, dayIndexOf, onAudioPlayAt,
 }: Props) {
   const [label, setLabel] = useState('')
   const [time, setTime] = useState('00:00')
@@ -381,30 +389,52 @@ export default function EventsPanel({
             </div>
           ) : (
             <ul className="space-y-1">
-              {events.map((ev) => (
-                <li
-                  key={ev.id}
-                  className="flex items-center gap-2 bg-gray-800 rounded px-2 py-1.5"
-                >
-                  <span
-                    className="w-2.5 h-2.5 rounded-full shrink-0"
-                    style={{ backgroundColor: ev.color }}
-                  />
-                  <div className="flex-1 min-w-0">
-                    <p className="text-xs text-gray-200 truncate">{ev.label}</p>
-                    <p className="text-xs text-gray-500">
-                      {ev.day} · {ev.time}
-                    </p>
-                  </div>
-                  <button
-                    onClick={() => onRemove(ev.id)}
-                    className="text-gray-600 hover:text-red-400 shrink-0 transition-colors"
-                    title="Supprimer"
+              {events.map((ev) => {
+                // Calcul de la minute absolue sur l'axe X chart pour tester la couverture audio
+                const [hStr = '0', mStr = '0'] = ev.time.split(':')
+                const evMin = parseInt(hStr, 10) * 60 + parseInt(mStr, 10)
+                const offset = dayIndexOf ? dayIndexOf(ev.day) * 1440 : 0
+                const audioRange = audioCoverage
+                  ? findCoveringRange(audioCoverage, offset + evMin)
+                  : null
+                return (
+                  <li
+                    key={ev.id}
+                    className="flex items-center gap-2 bg-gray-800 rounded px-2 py-1.5"
                   >
-                    <Trash2 size={12} />
-                  </button>
-                </li>
-              ))}
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: ev.color }}
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="text-xs text-gray-200 truncate">{ev.label}</p>
+                      <p className="text-xs text-gray-500">
+                        {ev.day} · {ev.time}
+                      </p>
+                    </div>
+                    {audioRange && onAudioPlayAt && (
+                      <button
+                        onClick={() => onAudioPlayAt(
+                          audioRange.entryId,
+                          Math.max(audioRange.startMin, offset + evMin - 5 / 60),
+                        )}
+                        className="shrink-0 p-1 rounded text-blue-400 hover:text-blue-300 hover:bg-blue-950/40"
+                        title="Écouter l'audio (−5 s) à cet événement"
+                        aria-label="Écouter"
+                      >
+                        <Play size={12} />
+                      </button>
+                    )}
+                    <button
+                      onClick={() => onRemove(ev.id)}
+                      className="text-gray-600 hover:text-red-400 shrink-0 transition-colors"
+                      title="Supprimer"
+                    >
+                      <Trash2 size={12} />
+                    </button>
+                  </li>
+                )
+              })}
               {annotations.map((a) => (
                 <li
                   key={a.id}

@@ -25,11 +25,14 @@ import {
 } from 'recharts'
 import html2canvas from 'html2canvas'
 import { drawQrBadge } from '../utils/qrBadge'
-import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3 } from 'lucide-react'
+import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3, Play } from 'lucide-react'
 import ContextMenu from './ContextMenu'
 import { ReferenceDot } from 'recharts'
 import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData, Period, PeriodStatus } from '../types'
 import { PERIOD_PALETTE } from '../types'
+import type { AudioCoverageRange } from '../hooks/useAudioSync'
+import { findCoveringRange } from '../hooks/useAudioSync'
+import AudioTimelineBar from './audio/AudioTimelineBar'
 import type { ClassifiedSegment } from '../utils/yamnetProcessor'
 import { laeqAvg, computeL90 } from '../utils/acoustics'
 
@@ -282,6 +285,14 @@ interface Props {
   onPeriodAdd?: (p: Period) => void
   onPeriodUpdate?: (id: string, patch: Partial<Period>) => void
   onPeriodRemove?: (id: string) => void
+  /** Plages de couverture audio pour la barre sous l'axe X et le curseur de lecture */
+  audioCoverage?: AudioCoverageRange[]
+  /** Noms des fichiers audio (pour le tooltip de la timeline) */
+  audioLabels?: Record<string, string>
+  /** Position actuelle de lecture (minutes absolues axe X) */
+  audioPlayheadMin?: number | null
+  /** Demande à jouer une entrée audio à une position donnée */
+  onAudioPlayAt?: (entryId: string, minutes: number) => void
 }
 
 /** Format court d'une date ISO en français : "2026-03-09" → "09 mars" */
@@ -329,6 +340,10 @@ export default function TimeSeriesChart({
   onPeriodAdd,
   onPeriodUpdate,
   onPeriodRemove,
+  audioCoverage,
+  audioLabels,
+  audioPlayheadMin,
+  onAudioPlayAt,
 }: Props) {
   // Affichage des données météo (vent) sur le graphique
   const [showWind, setShowWind] = useState(false)
@@ -1156,10 +1171,24 @@ export default function TimeSeriesChart({
     setPeriodHover(null)
   }, [])
 
-  // Double-clic = reset zoom
-  const handleDoubleClick = useCallback(() => {
+  // Double-clic = lecture audio si couvert, sinon reset zoom
+  const handleDoubleClick = useCallback((e: React.MouseEvent) => {
+    if (audioCoverage && audioCoverage.length > 0 && onAudioPlayAt) {
+      const rect = chartAreaRef.current?.getBoundingClientRect()
+      if (rect) {
+        const xLocal = e.clientX - rect.left
+        const tMin = xPxToMinutes(xLocal)
+        const r = findCoveringRange(audioCoverage, tMin)
+        if (r) {
+          // Saute 5 s avant (si possible) pour laisser le contexte
+          const offsetMin = Math.max(r.startMin, tMin - 5 / 60)
+          onAudioPlayAt(r.entryId, offsetMin)
+          return
+        }
+      }
+    }
     onZoomChange(null)
-  }, [onZoomChange])
+  }, [onZoomChange, audioCoverage, onAudioPlayAt, xPxToMinutes])
 
   // Boutons zoom +/-
   const handleZoomIn = useCallback(() => {
@@ -1880,6 +1909,44 @@ export default function TimeSeriesChart({
           />
         )}
 
+        {/* Curseur de lecture audio — vertical, suit audioPlayheadMin
+            converti en px via xPxToMinutes (inverse). */}
+        {audioPlayheadMin !== null && audioPlayheadMin !== undefined &&
+         audioPlayheadMin >= effectiveRange.startMin && audioPlayheadMin <= effectiveRange.endMin &&
+         chartAreaRef.current && (() => {
+           const W = chartAreaRef.current.clientWidth
+           const PAD_LEFT = 64
+           const PAD_RIGHT = 24
+           const usable = Math.max(1, W - PAD_LEFT - PAD_RIGHT)
+           const span = Math.max(0.0001, effectiveRange.endMin - effectiveRange.startMin)
+           const px = PAD_LEFT + ((audioPlayheadMin - effectiveRange.startMin) / span) * usable
+           return (
+             <div
+               key="audio-playhead"
+               className="pointer-events-none absolute top-0 bottom-0"
+               style={{ left: px, width: 0, borderLeft: '2px solid rgba(59, 130, 246, 0.85)', zIndex: 5 }}
+             >
+               <div
+                 className="absolute -top-1 left-0 px-1 py-0.5 rounded bg-blue-600 text-[9px] text-white font-mono"
+                 style={{ transform: 'translateX(-50%)' }}
+               >
+                 ▶
+               </div>
+             </div>
+           )
+         })()}
+
+        {/* Barre de disponibilité audio sous l'axe X */}
+        {audioCoverage && audioCoverage.length > 0 && (
+          <div className="absolute left-0 right-0 bottom-0 pointer-events-auto">
+            <AudioTimelineBar
+              coverage={audioCoverage}
+              effectiveRange={effectiveRange}
+              labels={audioLabels}
+            />
+          </div>
+        )}
+
         {/* Overlay : étiquettes "collantes" des points (haut-droite) */}
         <div className="pointer-events-none absolute top-2 right-8 flex flex-col items-end gap-0.5">
           {lineSpecs.filter((spec) => !hiddenLines.has(spec.key)).map((spec) => {
@@ -2331,7 +2398,16 @@ export default function TimeSeriesChart({
                   },
                 ]
               }
+              const audioRange = audioCoverage ? findCoveringRange(audioCoverage, tMin) : null
+              const audioItems = audioRange && onAudioPlayAt
+                ? [{
+                    label: `▶ Écouter à ${timeHHMMSS}`,
+                    icon: <Play size={12} />,
+                    action: () => onAudioPlayAt(audioRange.entryId, Math.max(audioRange.startMin, tMin - 5 / 60)),
+                  }]
+                : []
               return [
+                ...audioItems,
                 {
                   label: `Ajouter une période à partir de ${timeHHMMSS}`,
                   icon: <Edit3 size={12} />,

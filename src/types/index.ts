@@ -233,6 +233,37 @@ export interface AudioFile {
   startOffsetMin: number
 }
 
+/**
+ * Entrée audio en mode streaming — ne décode pas le fichier en AudioBuffer
+ * (crucial pour les MP3 de plusieurs centaines de Mo). Chargée via blob URL
+ * et HTMLAudioElement, associée à un point de mesure comme un fichier de
+ * données. Utilisée par le lecteur intégré au graphique LAeq.
+ */
+export interface AudioFileEntry {
+  id: string
+  /** Nom original du fichier */
+  name: string
+  /** Taille en octets */
+  size: number
+  /** Extension normalisée : mp3 | wav | m4a | ogg */
+  ext: 'mp3' | 'wav' | 'm4a' | 'ogg'
+  /** Blob URL (URL.createObjectURL) — à révoquer au retrait */
+  blobUrl: string
+  /** Durée en secondes, probée via <audio> metadata */
+  durationSec: number
+  /** Date ISO YYYY-MM-DD de début de l'enregistrement */
+  date: string
+  /** Minutes depuis minuit du début de l'enregistrement (sur la date ci-dessus) */
+  startMin: number
+  /** Informations extraites du nom pour aider au regroupement si timestamp partiel */
+  parserResult?: {
+    fileIndex?: number
+    detected: 'full' | 'dateOnly' | 'none'
+  }
+  /** Vrai si l'heure n'a pas pu être déduite → l'utilisateur a dû la saisir manuellement */
+  manualStart?: boolean
+}
+
 /** Position normalisée (0–1) d'un marqueur sur l'image de plan de site */
 export interface MarkerPos {
   x: number  // fraction 0..1 — colonne

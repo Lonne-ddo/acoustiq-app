@@ -25,6 +25,8 @@ import {
   ChevronUp,
   GitCompare,
   ClipboardCheck,
+  Volume2,
+  Play,
 } from 'lucide-react'
 import * as XLSX from 'xlsx'
 import type {
@@ -46,6 +48,7 @@ import type {
   LwSourceSummary,
   Scene3DData,
   Period,
+  AudioFileEntry,
 } from './types'
 import { DEFAULT_METEO } from './types'
 import ChecklistModal, { DEFAULT_CHECKLIST } from './components/ChecklistModal'
@@ -95,6 +98,9 @@ const Vue3DTab = lazy(() => import('./components/Vue3DTab'))
 const IsolementPage = lazy(() => import('./pages/IsolementPage'))
 import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
+import StreamAudioPlayer from './components/audio/AudioPlayer'
+import { useAudioSync, computeAudioCoverage, type AudioCoverageRange } from './hooks/useAudioSync'
+import { parseAudioFilename, deriveStartTimesFromSequence } from './utils/audioFilenameParser'
 import Conformite2026 from './components/Conformite2026'
 import SiteMap from './components/SiteMap'
 import Settings from './components/Settings'
@@ -162,6 +168,45 @@ function readAsArrayBuffer(file: File): Promise<ArrayBuffer> {
     reader.onload = (e) => resolve(e.target!.result as ArrayBuffer)
     reader.onerror = () => reject(new Error(`Impossible de lire : ${file.name}`))
     reader.readAsArrayBuffer(file)
+  })
+}
+
+/** Extensions audio acceptées par le système de streaming */
+const AUDIO_EXTS = ['mp3', 'wav', 'm4a', 'ogg'] as const
+type AudioExt = (typeof AUDIO_EXTS)[number]
+function audioExtOf(name: string): AudioExt | null {
+  const m = name.toLowerCase().match(/\.([a-z0-9]+)$/)
+  if (!m) return null
+  const ext = m[1]
+  return (AUDIO_EXTS as readonly string[]).includes(ext) ? (ext as AudioExt) : null
+}
+
+/**
+ * Probe non-destructif d'un fichier audio : crée un blob URL + lit les
+ * métadonnées via un HTMLAudioElement éphémère pour récupérer la durée.
+ * Le blob URL est conservé (pas révoqué) pour servir ensuite au lecteur.
+ */
+function probeAudioFile(file: File): Promise<{ blobUrl: string; durationSec: number }> {
+  return new Promise((resolve, reject) => {
+    const blobUrl = URL.createObjectURL(file)
+    const el = new Audio()
+    el.preload = 'metadata'
+    const cleanup = () => {
+      el.removeEventListener('loadedmetadata', onMeta)
+      el.removeEventListener('error', onErr)
+    }
+    const onMeta = () => {
+      cleanup()
+      resolve({ blobUrl, durationSec: Number.isFinite(el.duration) ? el.duration : 0 })
+    }
+    const onErr = () => {
+      cleanup()
+      URL.revokeObjectURL(blobUrl)
+      reject(new Error(`Décodage métadonnées impossible : ${file.name}`))
+    }
+    el.addEventListener('loadedmetadata', onMeta)
+    el.addEventListener('error', onErr)
+    el.src = blobUrl
   })
 }
 
@@ -241,7 +286,12 @@ function formatDuration(totalSeconds: number): string {
   return `${m}min`
 }
 
-function FileList({ files, pointMap, pointLabels, allPoints, onPointChange, onPointLabelChange, onFileRemove, onCreatePoint, hiddenPoints, onTogglePointVisibility }: {
+function FileList({
+  files, pointMap, pointLabels, allPoints,
+  onPointChange, onPointLabelChange, onFileRemove, onCreatePoint,
+  hiddenPoints, onTogglePointVisibility,
+  audioEntries, audioPointMap, onAudioEntryRemove, onAudioPlayAt,
+}: {
   files: MeasurementFile[]
   pointMap: Record<string, string>
   pointLabels: Record<string, string>
@@ -252,6 +302,10 @@ function FileList({ files, pointMap, pointLabels, allPoints, onPointChange, onPo
   onCreatePoint: (name: string) => void
   hiddenPoints: Set<string>
   onTogglePointVisibility: (pt: string) => void
+  audioEntries: AudioFileEntry[]
+  audioPointMap: Record<string, string>
+  onAudioEntryRemove: (id: string) => void
+  onAudioPlayAt: (entryId: string, minutes: number) => void
 }) {
   const [collapsedGroups, setCollapsedGroups] = useState<Record<string, boolean>>({})
   const [newPointInput, setNewPointInput] = useState<string | null>(null) // file ID awaiting new point
@@ -410,6 +464,70 @@ function FileList({ files, pointMap, pointLabels, allPoints, onPointChange, onPo
                 />
               </div>
             )}
+            {/* Fichiers audio associés au point */}
+            {!collapsed && (() => {
+              const ptAudios = audioEntries.filter((a) => audioPointMap[a.id] === pt)
+              if (ptAudios.length === 0) return null
+              return (
+                <div className="px-2 pb-1 pt-1">
+                  <div className="flex items-center gap-1 text-[10px] text-blue-400 mb-1 uppercase tracking-wider">
+                    <Volume2 size={10} />
+                    Audio ({ptAudios.length})
+                  </div>
+                  <ul className="space-y-0.5">
+                    {ptAudios
+                      .slice()
+                      .sort((a, b) => a.startMin - b.startMin)
+                      .map((a) => {
+                        const endMin = a.startMin + a.durationSec / 60
+                        const h = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(Math.round(m % 60)).padStart(2, '0')}`
+                        const durMin = a.durationSec / 60
+                        const durH = Math.floor(durMin / 60)
+                        const durM = Math.round(durMin % 60)
+                        const durLabel = durH > 0 ? `${durH}h${String(durM).padStart(2, '0')}` : `${durM} min`
+                        return (
+                          <li
+                            key={a.id}
+                            className="flex items-center gap-1 px-1.5 py-1 rounded bg-blue-950/20 border border-blue-900/40 text-[10px]"
+                            title={`${a.name} — ${a.date} · ${h(a.startMin)} → ${h(endMin)}`}
+                          >
+                            <button
+                              onClick={() => onAudioPlayAt(a.id, a.startMin)}
+                              className="shrink-0 p-0.5 rounded hover:bg-blue-900/40 text-blue-300 hover:text-blue-200"
+                              title="Lire ce fichier"
+                              aria-label="Lire"
+                            >
+                              <Play size={10} />
+                            </button>
+                            <span className="flex-1 truncate text-gray-300 font-mono" title={a.name}>
+                              {a.name}
+                            </span>
+                            <span className="shrink-0 text-gray-500 font-mono">
+                              {durLabel} · {h(a.startMin)} → {h(endMin)}
+                            </span>
+                            {a.manualStart && (
+                              <span
+                                className="shrink-0 text-amber-400"
+                                title="Début estimé ou saisi manuellement"
+                              >
+                                ●
+                              </span>
+                            )}
+                            <button
+                              onClick={() => onAudioEntryRemove(a.id)}
+                              className="shrink-0 text-gray-600 hover:text-red-400"
+                              title="Retirer ce fichier audio"
+                              aria-label="Retirer"
+                            >
+                              <X size={10} />
+                            </button>
+                          </li>
+                        )
+                      })}
+                  </ul>
+                </div>
+              )
+            })()}
             {/* File cards groupés par session + séparateurs de discontinuité */}
             {!collapsed && (() => {
               const { sessions, gaps } = detectSessions(ptFiles)
@@ -533,6 +651,14 @@ interface SidebarProps {
   onAudioLoaded: (audio: AudioFile) => void
   onAudioRemove: () => void
   onAudioSeek: (timeMin: number) => void
+  /** Nouveau système multi-fichiers en streaming (MP3/WAV/M4A/OGG) */
+  audioEntries: AudioFileEntry[]
+  audioPointMap: Record<string, string>
+  audioCoverage: AudioCoverageRange[]
+  onAudioEntriesLoad: (files: File[]) => Promise<void>
+  onAudioEntryRemove: (id: string) => void
+  onAudioEntryPointChange: (id: string, point: string) => void
+  onAudioPlayAt: (entryId: string, minutes: number) => void
   groupSuggestions: GroupSuggestion[]
   onAcceptSuggestion: (s: GroupSuggestion) => void
   onDismissSuggestion: (s: GroupSuggestion) => void
@@ -604,6 +730,7 @@ function Sidebar({
   onDetectCandidates, onConfirmCandidate, onDismissCandidate,
   onSaveProject, onLoadProject, onParseFiles,
   onAudioLoaded, onAudioRemove, onAudioSeek,
+  audioEntries, audioPointMap, audioCoverage, onAudioEntriesLoad, onAudioEntryRemove, onAudioPlayAt,
   groupSuggestions, onAcceptSuggestion, onDismissSuggestion, onAcceptAllSuggestions,
   hiddenPoints, onTogglePointVisibility,
   detectParams, onDetectParamsChange,
@@ -616,7 +743,10 @@ function Sidebar({
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files ?? [])
     if (selected.length === 0) return
-    onParseFiles(selected)
+    const xlsx = selected.filter((f) => /\.xlsx$/i.test(f.name))
+    const audios = selected.filter((f) => /\.(mp3|wav|m4a|ogg)$/i.test(f.name))
+    if (xlsx.length > 0) onParseFiles(xlsx)
+    if (audios.length > 0) void onAudioEntriesLoad(audios)
     e.target.value = ''
   }
 
@@ -636,25 +766,12 @@ function Sidebar({
     e.stopPropagation()
     setDragOver(false)
     const droppedFiles = Array.from(e.dataTransfer.files)
-    const xlsx = droppedFiles.filter((f) => f.name.endsWith('.xlsx'))
-    const wav = droppedFiles.filter((f) => f.name.endsWith('.wav'))
-    const json = droppedFiles.filter((f) => f.name.endsWith('.json'))
+    const xlsx = droppedFiles.filter((f) => /\.xlsx$/i.test(f.name))
+    const audios = droppedFiles.filter((f) => /\.(mp3|wav|m4a|ogg)$/i.test(f.name))
+    const json = droppedFiles.filter((f) => /\.json$/i.test(f.name))
     if (xlsx.length > 0) onParseFiles(xlsx)
-    if (wav.length > 0 && wav[0]) {
-      // Charger le premier .wav
-      readAsArrayBuffer(wav[0]).then(async (buf) => {
-        const ctx = new AudioContext()
-        const decoded = await ctx.decodeAudioData(buf)
-        await ctx.close()
-        onAudioLoaded({
-          id: crypto.randomUUID(),
-          name: wav[0].name,
-          date: extractDateFromName(wav[0].name) ?? '',
-          buffer: decoded,
-          duration: decoded.duration,
-          startOffsetMin: 0,
-        })
-      })
+    if (audios.length > 0) {
+      void onAudioEntriesLoad(audios)
     }
     if (json.length > 0 && json[0]) {
       json[0].text().then(onLoadProject)
@@ -823,7 +940,7 @@ function Sidebar({
 
         {/* ─── 📂 FICHIERS ─────────────────────────────────────────────── */}
         <SidebarSection title="📂 Fichiers" defaultOpen>
-          <input ref={inputRef} type="file" accept=".xlsx" multiple className="hidden" onChange={handleFileChange} />
+          <input ref={inputRef} type="file" accept=".xlsx,.mp3,.wav,.m4a,.ogg" multiple className="hidden" onChange={handleFileChange} />
           <button
             onClick={() => inputRef.current?.click()}
             disabled={loading}
@@ -909,6 +1026,10 @@ function Sidebar({
               onFileRemove={onFileRemove}
               hiddenPoints={hiddenPoints}
               onTogglePointVisibility={onTogglePointVisibility}
+              audioEntries={audioEntries}
+              audioPointMap={audioPointMap}
+              onAudioEntryRemove={onAudioEntryRemove}
+              onAudioPlayAt={onAudioPlayAt}
             />
           )}
 
@@ -947,6 +1068,12 @@ function Sidebar({
               onPendingAnnotationChange={onPendingAnnotationChange}
               detectParams={detectParams}
               onDetectParamsChange={onDetectParamsChange}
+              audioCoverage={audioCoverage}
+              dayIndexOf={(d) => {
+                const idx = availableDates.indexOf(d)
+                return idx < 0 ? 0 : idx
+              }}
+              onAudioPlayAt={onAudioPlayAt}
             />
           </div>
         </SidebarSection>
@@ -1065,6 +1192,10 @@ interface MainPanelProps {
   onPeriodAdd: (p: Period) => void
   onPeriodUpdate: (id: string, patch: Partial<Period>) => void
   onPeriodRemove: (id: string) => void
+  audioEntries: AudioFileEntry[]
+  audioPointMap: Record<string, string>
+  audioSync: ReturnType<typeof useAudioSync>
+  audioCoverage: AudioCoverageRange[]
   onDateChange: (date: string) => void
   onTabChange: (tab: Tab) => void
   onCellChange: (eventId: string, point: string, state: ConcordanceState) => void
@@ -1097,6 +1228,7 @@ function MainPanel({
   presentationMode, onPresentationToggle,
   hiddenPoints, onTogglePointVisibility,
   periods, onPeriodAdd, onPeriodUpdate, onPeriodRemove,
+  audioEntries, audioPointMap, audioSync, audioCoverage,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
@@ -1360,6 +1492,20 @@ function MainPanel({
                   onPeriodAdd={onPeriodAdd}
                   onPeriodUpdate={onPeriodUpdate}
                   onPeriodRemove={onPeriodRemove}
+                  audioCoverage={audioCoverage}
+                  audioLabels={Object.fromEntries(audioEntries.map((e) => [e.id, e.name]))}
+                  audioPlayheadMin={(() => {
+                    // La position "minutes axe X" = dayIndex × 1440 + currentMin
+                    // quand multi-jours, sinon directement currentMin.
+                    const activeEntry = audioEntries.find((e) => e.id === audioSync.activeEntryId)
+                    if (!activeEntry || audioSync.currentMin === null) return null
+                    const isMulti = availableDates.length > 1 && !overlayDate
+                    const offset = isMulti
+                      ? Math.max(0, availableDates.indexOf(activeEntry.date)) * 1440
+                      : 0
+                    return offset + audioSync.currentMin
+                  })()}
+                  onAudioPlayAt={audioSync.playAt}
                 />
               </div>
 
@@ -1410,6 +1556,20 @@ function MainPanel({
               </div>
 
               </div>
+              {/* Lecteur audio flottant (streaming) — visible s'il existe des
+                  fichiers audio associés à au moins un point de mesure visible. */}
+              {!presentationMode && audioEntries.length > 0 && (
+                <div className="shrink-0">
+                  <StreamAudioPlayer
+                    entries={audioEntries.filter((e) => {
+                      const pt = audioPointMap[e.id]
+                      return !pt || assignedPoints.includes(pt)
+                    })}
+                    sync={audioSync}
+                    pointName={assignedPoints[0] ?? null}
+                  />
+                </div>
+              )}
               {!presentationMode && (
                 <>
                   <div className="shrink-0">
@@ -1694,6 +1854,129 @@ export default function App() {
   // Mode présentation : masque sidebar + barre d'onglets
   const [presentationMode, setPresentationMode] = useState(false)
 
+  // Fichiers audio en mode streaming (MP3/WAV/M4A/OGG) — parallèle au
+  // système legacy `audioFile` (utilisé uniquement pour YAMNet).
+  const [audioEntries, setAudioEntries] = useState<AudioFileEntry[]>([])
+  const [audioPointMap, setAudioPointMap] = useState<Record<string, string>>({})
+  // Fichiers en attente de calage manuel (date/heure saisie par l'utilisateur).
+  // Consommé par le panneau de calage (feature suivante) — conservé ici pour
+  // que le flux d'import puisse déjà signaler les fichiers non calés.
+  const [_pendingAudioStart, setPendingAudioStart] = useState<AudioFileEntry | null>(null)
+  void _pendingAudioStart
+  const audioSync = useAudioSync(audioEntries)
+  const handleAudioEntryAdd = useCallback((e: AudioFileEntry, point?: string) => {
+    setAudioEntries((prev) => [...prev, e])
+    if (point) setAudioPointMap((prev) => ({ ...prev, [e.id]: point }))
+  }, [])
+  const handleAudioEntryRemove = useCallback((id: string) => {
+    setAudioEntries((prev) => {
+      const removed = prev.find((e) => e.id === id)
+      if (removed) try { URL.revokeObjectURL(removed.blobUrl) } catch { /* ignore */ }
+      return prev.filter((e) => e.id !== id)
+    })
+    setAudioPointMap((prev) => {
+      const next = { ...prev }
+      delete next[id]
+      return next
+    })
+  }, [])
+  const handleAudioPointChange = useCallback((id: string, point: string) => {
+    setAudioPointMap((prev) => ({ ...prev, [id]: point }))
+  }, [])
+  /** Importe un lot de fichiers audio : probe chacun, parse le nom et crée
+   *  les AudioFileEntry correspondants. Auto-assignation du point quand
+   *  le numéro de série d'un fichier de mesure déjà chargé apparaît dans
+   *  le nom. En cas de timestamp partiel (date seulement) et de plusieurs
+   *  fichiers de la même journée, on déduit les heures de début en enchaînant
+   *  les durées. Si rien n'est extractible, on laisse `startMin=0` et on
+   *  marque l'entrée pour que l'utilisateur la cale manuellement. */
+  const handleAudioEntriesLoad = useCallback(async (rawFiles: File[]) => {
+    // Lookup serial → point (et nom de fichier → point) depuis les mesures existantes
+    const serialToPoint: Record<string, string> = {}
+    for (const f of files) {
+      const pt = pointMap[f.id]
+      if (!pt || !f.serial) continue
+      serialToPoint[f.serial] = pt
+    }
+
+    const probed: Array<{ file: File; blobUrl: string; durationSec: number; ext: AudioExt }> = []
+    for (const raw of rawFiles) {
+      const ext = audioExtOf(raw.name)
+      if (!ext) continue
+      try {
+        const { blobUrl, durationSec } = await probeAudioFile(raw)
+        probed.push({ file: raw, blobUrl, durationSec, ext })
+      } catch (err) {
+        console.warn('[audio] probe échoué', raw.name, err)
+      }
+    }
+    if (probed.length === 0) return
+
+    // Première passe : parsing du nom, détermination préliminaire de startMin
+    const preEntries = probed.map(({ file, blobUrl, durationSec, ext }) => {
+      const parsed = parseAudioFilename(file.name)
+      const fallbackDate = files[0]?.date ?? new Date().toISOString().slice(0, 10)
+      const date = parsed?.date ?? fallbackDate
+      const startMin = parsed?.startMin ?? 0
+      const entry: AudioFileEntry = {
+        id: crypto.randomUUID(),
+        name: file.name,
+        size: file.size,
+        ext,
+        blobUrl,
+        durationSec,
+        date,
+        startMin,
+        parserResult: parsed
+          ? { fileIndex: parsed.fileIndex ?? undefined, detected: parsed.detected }
+          : { detected: 'none' },
+        manualStart: !parsed || parsed.startMin === null,
+      }
+      return entry
+    })
+
+    // Deuxième passe : quand plusieurs fichiers d'un même jour n'ont qu'un
+    // fileIndex, on déduit des heures de début consécutives (hypothèse
+    // contiguë ancrée à 00:00).
+    const seqEntries = preEntries.filter(
+      (e) => e.parserResult?.fileIndex !== undefined && e.parserResult?.detected === 'dateOnly',
+    )
+    if (seqEntries.length > 1) {
+      const seqMap = deriveStartTimesFromSequence(
+        seqEntries.map((e) => ({
+          id: e.id,
+          date: e.date,
+          fileIndex: e.parserResult?.fileIndex ?? null,
+          durationSec: e.durationSec,
+        })),
+      )
+      for (const e of preEntries) {
+        if (seqMap[e.id] !== undefined) {
+          e.startMin = seqMap[e.id]
+          e.manualStart = false
+        }
+      }
+    }
+
+    // Ajout effectif avec auto-assignation des points
+    for (const e of preEntries) {
+      // Recherche d'un point via le numéro de série
+      let point: string | undefined
+      for (const [serial, pt] of Object.entries(serialToPoint)) {
+        if (e.name.includes(serial)) {
+          point = pt
+          break
+        }
+      }
+      handleAudioEntryAdd(e, point)
+    }
+    // Si au moins un fichier n'a pas pu être calé, on propose la saisie
+    // manuelle sur le premier — l'utilisateur peut aussi utiliser le panneau
+    // de calage plus tard (cf. feature suivante).
+    const firstUncalibrated = preEntries.find((e) => e.manualStart)
+    if (firstUncalibrated) setPendingAudioStart(firstUncalibrated)
+  }, [files, pointMap, handleAudioEntryAdd])
+
   // Périodes nommées — filtre les données pour le calcul des indices
   const [periods, setPeriods] = useState<Period[]>([])
   const handlePeriodAdd = useCallback((p: Period) => {
@@ -1802,6 +2085,19 @@ export default function App() {
   }, [files, pointMap])
 
   const effectiveDate = availableDates.includes(selectedDate) ? selectedDate : (availableDates[0] ?? '')
+
+  // Plages de couverture audio — alignées avec l'axe X du chart. En mode
+  // multi-jours, chaque entrée est décalée de dayIndex × 1440 min.
+  const audioCoverage = useMemo(() => {
+    const isMulti = availableDates.length > 1 && !overlayDate
+    const dayIndexOf = isMulti
+      ? (d: string) => {
+          const idx = availableDates.indexOf(d)
+          return idx < 0 ? 0 : idx
+        }
+      : undefined
+    return computeAudioCoverage(audioEntries, dayIndexOf)
+  }, [audioEntries, availableDates, overlayDate])
 
   const assignedPoints = useMemo(() => {
     const pts = new Set<string>()
@@ -2412,6 +2708,13 @@ export default function App() {
         onAudioLoaded={setAudioFile}
         onAudioRemove={() => setAudioFile(null)}
         onAudioSeek={handleAudioSeek}
+        audioEntries={audioEntries}
+        audioPointMap={audioPointMap}
+        audioCoverage={audioCoverage}
+        onAudioEntriesLoad={handleAudioEntriesLoad}
+        onAudioEntryRemove={handleAudioEntryRemove}
+        onAudioEntryPointChange={handleAudioPointChange}
+        onAudioPlayAt={audioSync.playAt}
         groupSuggestions={groupSuggestions}
         onAcceptSuggestion={acceptGroupSuggestion}
         onDismissSuggestion={dismissGroupSuggestion}
@@ -2478,6 +2781,10 @@ export default function App() {
         onPeriodAdd={handlePeriodAdd}
         onPeriodUpdate={handlePeriodUpdate}
         onPeriodRemove={handlePeriodRemove}
+        audioEntries={audioEntries}
+        audioPointMap={audioPointMap}
+        audioSync={audioSync}
+        audioCoverage={audioCoverage}
         onDateChange={setSelectedDate}
         onTabChange={setActiveTab}
         onCellChange={handleCellChange}

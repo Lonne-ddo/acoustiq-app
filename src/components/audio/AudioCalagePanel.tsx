@@ -229,9 +229,9 @@ export default function AudioCalagePanel({
         {/* Sélecteur de mode */}
         <div className="px-5 flex gap-1 border-b border-gray-800">
           {([
-            { id: 'direct', label: '1. Horodatage', icon: Clock },
-            { id: 'pointing', label: '2. Pointage', icon: MousePointerClick },
-            { id: 'correlation', label: '3. Corrélation', icon: Activity },
+            { id: 'direct', label: 'Horodatage', icon: Clock },
+            { id: 'pointing', label: 'Pointage', icon: MousePointerClick },
+            { id: 'correlation', label: 'Auto RMS', icon: Activity },
           ] as const).map(({ id, label, icon: Icon }) => (
             <button
               key={id}

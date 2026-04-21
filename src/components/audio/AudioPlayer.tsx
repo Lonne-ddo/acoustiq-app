@@ -154,18 +154,6 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
               {fmtSec(currentSec)} / {fmtSec(totalSec)}
             </span>
 
-            {/* Caler le fichier actif (raccourci global) */}
-            {active && (
-              <button
-                onClick={() => onOpenCalage(active.id)}
-                className="flex items-center gap-1 text-[11px] text-amber-300 hover:text-amber-200 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded px-2 py-1"
-                title="Caler ce fichier sur la courbe LAeq"
-              >
-                <Clock size={11} />
-                Caler
-              </button>
-            )}
-
             <div className="flex items-center gap-1">
               <Volume2 size={11} className="text-gray-500" />
               <input
@@ -180,6 +168,7 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
               />
             </div>
 
+            {/* Vitesse de lecture (poussé à droite) */}
             <div className="flex items-center gap-1 ml-auto">
               <Gauge size={11} className="text-gray-500" />
               {SPEEDS.map((s) => (
@@ -196,6 +185,20 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
                 </button>
               ))}
             </div>
+
+            {/* ⏱ Caler — TOUJOURS visible. Si aucun fichier actif (lecture
+                jamais lancée), on cale par défaut le 1er fichier de la liste. */}
+            <button
+              onClick={() => {
+                const target = active ?? entries[0]
+                if (target) onOpenCalage(target.id)
+              }}
+              className="flex items-center gap-1 text-[11px] text-amber-300 hover:text-amber-200 bg-gray-900 hover:bg-gray-800 border border-amber-700/60 rounded px-2 py-1"
+              title="Caler ce fichier sur la courbe LAeq"
+            >
+              <Clock size={12} />
+              Caler
+            </button>
           </div>
 
           {/* Liste des fichiers audio — bascule rapide + indicateur ●  + bouton ⏱ par onglet */}

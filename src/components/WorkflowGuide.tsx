@@ -11,14 +11,21 @@ export interface WorkflowGuideProps {
   allAssigned: boolean
   /** Étape 3 : un jour est sélectionné et le graphique affiche des données */
   hasChart: boolean
+  /** Forcer l'affichage même si le workflow est entamé (bouton Aide). */
+  forceShow?: boolean
 }
 
 export default function WorkflowGuide({
   hasFiles,
   allAssigned,
   hasChart,
+  forceShow,
 }: WorkflowGuideProps) {
   if (hasFiles && allAssigned && hasChart) return null
+  // Dès qu'un fichier est chargé, on masque le bandeau par défaut — il est
+  // surtout utile lors du tout premier lancement. `forceShow` le réaffiche
+  // si l'utilisateur clique sur « Aide » dans l'en-tête.
+  if (hasFiles && !forceShow) return null
 
   const steps = [
     { done: hasFiles,    label: 'Importer un fichier de mesure' },

@@ -2,7 +2,7 @@
  * Panneau des indices acoustiques réglementaires
  * LAeq, L10, L50, L90, LAFmax, LAFmin — un tableau par point de mesure
  */
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useRef } from 'react'
 import * as XLSX from 'xlsx'
 import { Download, TrendingDown, ChevronRight, Sun } from 'lucide-react'
 import HelpTooltip from './HelpTooltip'
@@ -178,6 +178,19 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
     )
   }, [files, pointMap, selectedDate, mode, startTime, endTime, pointNames])
 
+  // Réf stable pour `handleExportExcel` afin que l'écouteur global puisse
+  // l'appeler sans dépendances (le composant peut être re-rendu plusieurs fois).
+  const exportRef = useRef<() => void>(() => {})
+  useEffect(() => {
+    const onExport = () => exportRef.current()
+    document.addEventListener('acoustiq:export-indices', onExport)
+    document.addEventListener('acoustiq:export-raw-data', onExport)
+    return () => {
+      document.removeEventListener('acoustiq:export-indices', onExport)
+      document.removeEventListener('acoustiq:export-raw-data', onExport)
+    }
+  }, [])
+
   // Export Excel : 3 feuilles distinctes (Indices / Périodes / Données brutes)
   function handleExportExcel() {
     try {
@@ -289,6 +302,8 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
       alert('Export Excel échoué — voir la console pour les détails.')
     }
   }
+  // Garde la ref synchrone à la dernière version du handler.
+  exportRef.current = handleExportExcel
 
   if (pointNames.length === 0) return null
 

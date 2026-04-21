@@ -25,7 +25,7 @@ import {
 } from 'recharts'
 import html2canvas from 'html2canvas'
 import { drawQrBadge } from '../utils/qrBadge'
-import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3, Play } from 'lucide-react'
+import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3, Play, ChevronDown } from 'lucide-react'
 import ContextMenu from './ContextMenu'
 import { ReferenceDot } from 'recharts'
 import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData, Period, PeriodStatus } from '../types'
@@ -361,6 +361,26 @@ export default function TimeSeriesChart({
   const chartRef = useRef<HTMLDivElement>(null)
   const chartAreaRef = useRef<HTMLDivElement>(null)
   const [exporting, setExporting] = useState(false)
+  const [exportOpen, setExportOpen] = useState(false)
+  // Compteur de Shift+drag réussis — l'astuce est masquée à partir de 3 usages,
+  // persisté dans localStorage pour ne pas réapparaître à chaque session.
+  const SHIFT_HINT_KEY = 'acoustiq_shift_hint_count'
+  const [shiftHintCount, setShiftHintCount] = useState<number>(() => {
+    try {
+      const v = localStorage.getItem(SHIFT_HINT_KEY)
+      const n = v ? parseInt(v, 10) : 0
+      return Number.isFinite(n) ? n : 0
+    } catch {
+      return 0
+    }
+  })
+  const bumpShiftHint = useCallback(() => {
+    setShiftHintCount((prev) => {
+      const next = prev + 1
+      try { localStorage.setItem(SHIFT_HINT_KEY, String(next)) } catch { /* ignore */ }
+      return next
+    })
+  }, [])
 
   // ── Sélection non-Shift : création d'une période nommée ─────────────────
   const [periodPx, setPeriodPx] = useState<{ startX: number; endX: number } | null>(null)
@@ -1151,6 +1171,7 @@ export default function TimeSeriesChart({
       const midX = (xA + xB) / 2
       const popupY = rect ? Math.max(8, e.clientY - rect.top - 4) : 40
       setSelectionPopup({ tStart: tA, tEnd: tB, laeq, l90, x: midX, y: popupY })
+      bumpShiftHint()
       return
     }
 
@@ -1348,6 +1369,25 @@ export default function TimeSeriesChart({
           <span className="text-xs text-gray-500">{selectedDate}</span>
         )}
 
+        {/* Info instrument : modèle + n° de série (principal) — utile pour
+            retrouver un fichier en un coup d'œil. */}
+        {(() => {
+          const primary = files.find((f) => f.date === selectedDate) ?? files[0]
+          if (!primary) return null
+          const label = primary.model && primary.serial
+            ? `${primary.model} ${primary.serial}`
+            : primary.serial || primary.model || '—'
+          return (
+            <span
+              className="text-xs text-gray-300 font-medium px-2 py-0.5 rounded bg-gray-800/60 border border-gray-700"
+              title={`Modèle : ${primary.model || '—'} · N° de série : ${primary.serial || '—'}`}
+            >
+              {label}
+              <span className="ml-1 text-gray-500 font-normal">(série)</span>
+            </span>
+          )
+        })()}
+
         {/* Sélecteur d'agrégation */}
         <div className="flex items-center gap-1.5">
           <label className="text-xs text-gray-500">Agrégation</label>
@@ -1368,44 +1408,45 @@ export default function TimeSeriesChart({
               title={`${rawPointCount.toLocaleString('fr-FR')} points bruts — l'affichage peut être lent`}
             >
               <AlertTriangle size={11} />
-              {rawPointCount.toLocaleString('fr-FR')} points · rendu lent possible
+              rendu lent possible
             </span>
           )}
         </div>
 
-        {/* Plage visible */}
-        {isZoomed && (
-          <span className="text-xs text-emerald-400 font-medium">
-            {minutesToHHMM(effectiveRange.startMin)} → {minutesToHHMM(effectiveRange.endMin)}
-          </span>
-        )}
+        {/* Durée totale + plage visible (se met à jour avec le zoom). */}
+        {(() => {
+          const fullSpanMin = fullRange.endMin - fullRange.startMin
+          const visSpanMin = effectiveRange.endMin - effectiveRange.startMin
+          const fmt = (m: number) => {
+            const h = Math.floor(m / 60)
+            const mm = Math.round(m % 60)
+            return h > 0 ? `${h}h ${String(mm).padStart(2, '0')}m` : `${mm}m`
+          }
+          return (
+            <span className="text-xs text-gray-400">
+              <span className="text-gray-500">Durée :</span>{' '}
+              <span className="font-mono text-gray-300" title={`Plage complète : ${minutesToHHMM(fullRange.startMin)} → ${minutesToHHMM(fullRange.endMin)}`}>
+                {fmt(fullSpanMin)}
+              </span>
+              {' · '}
+              <span className="text-gray-500">Plage :</span>{' '}
+              <span className={`font-mono ${isZoomed ? 'text-emerald-300' : 'text-gray-300'}`}>
+                {minutesToHHMM(effectiveRange.startMin)} → {minutesToHHMM(effectiveRange.endMin)}
+              </span>
+              {isZoomed && (
+                <span className="ml-1 text-[10px] text-gray-500">
+                  ({fmt(visSpanMin)})
+                </span>
+              )}
+              {activeEvents.length > 0 && (
+                <span className="ml-2 text-gray-500">· {activeEvents.length} évén.</span>
+              )}
+            </span>
+          )
+        })()}
 
-        {/* Comparaison ON/OFF */}
-        {compPhase === 'idle' ? (
-          <button
-            onClick={() => setCompPhase('pickON')}
-            className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
-                       bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
-                       border border-gray-600 transition-colors"
-            title="Compare deux plages temporelles (Source ON vs OFF)"
-          >
-            <GitCompare size={12} />
-            Comparer ON/OFF
-          </button>
-        ) : (
-          <button
-            onClick={resetComparison}
-            className="ml-auto flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
-                       bg-rose-900/40 text-rose-300 hover:bg-rose-900/60
-                       border border-rose-800/60 transition-colors"
-          >
-            <X size={12} />
-            Annuler comparaison
-          </button>
-        )}
-
-        {/* Boutons de zoom */}
-        <div className="flex items-center gap-1">
+        {/* Zone « Navigation » : zoom + plein écran (groupée à droite) */}
+        <div className="ml-auto flex items-center gap-1 border-r border-gray-800 pr-2 mr-1">
           <button
             onClick={handleZoomIn}
             className="p-1 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800
@@ -1418,7 +1459,7 @@ export default function TimeSeriesChart({
             onClick={handleZoomOut}
             className="p-1 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800
                        border border-transparent hover:border-gray-600 transition-colors"
-            title="Zoom -"
+            title="Zoom −"
           >
             <ZoomOut size={14} />
           </button>
@@ -1430,67 +1471,147 @@ export default function TimeSeriesChart({
                 ? 'text-emerald-400 hover:text-emerald-300 hover:bg-gray-800 border-transparent hover:border-gray-600'
                 : 'text-gray-700 border-transparent cursor-default'
             }`}
-            title="Vue complète"
+            title="Réinitialiser le zoom"
           >
             <Maximize2 size={14} />
           </button>
+          {onPresentationToggle && (
+            <button
+              onClick={onPresentationToggle}
+              className="p-1 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800
+                         border border-transparent hover:border-gray-600 transition-colors"
+              title={presentationMode ? 'Quitter le mode plein écran (Échap)' : 'Plein écran'}
+              aria-label={presentationMode ? 'Quitter' : 'Plein écran'}
+            >
+              {presentationMode ? <Minimize size={14} /> : <Maximize size={14} />}
+            </button>
+          )}
         </div>
 
-        <span className="text-xs text-gray-600 mr-2">
-          {visibleData.length} points
-          {activeEvents.length > 0 && ` · ${activeEvents.length} événement(s)`}
-        </span>
+        {/* Zone « Actions » : Comparer ON/OFF + Météo + Exporter ▼ */}
+        <div className="flex items-center gap-1.5">
+          {/* Toggle Météo (vent) */}
+          {windSpeed !== null && (
+            <button
+              onClick={() => setShowWind((v) => !v)}
+              className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border transition-colors ${
+                showWind
+                  ? 'bg-gray-700 text-gray-100 border-gray-500'
+                  : 'bg-gray-800 text-gray-400 hover:text-gray-200 border-gray-600'
+              }`}
+              title={
+                windInvalid
+                  ? `Vent : ${windSpeed} km/h — ≥ 20 km/h, mesures potentiellement invalides`
+                  : `Vent : ${windSpeed} km/h — conforme MELCCFP (< 20 km/h)`
+              }
+              aria-pressed={showWind}
+            >
+              <Wind size={12} className={windInvalid ? 'text-rose-400' : 'text-emerald-400'} />
+              Météo
+            </button>
+          )}
+          {compPhase === 'idle' ? (
+            <button
+              onClick={() => setCompPhase('pickON')}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
+                         bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
+                         border border-gray-600 transition-colors"
+              title="Compare deux plages temporelles (Source ON vs OFF)"
+            >
+              <GitCompare size={12} />
+              Comparer ON/OFF
+            </button>
+          ) : (
+            <button
+              onClick={resetComparison}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
+                         bg-rose-900/40 text-rose-300 hover:bg-rose-900/60
+                         border border-rose-800/60 transition-colors"
+            >
+              <X size={12} />
+              Annuler comparaison
+            </button>
+          )}
 
-        {/* Toggle Météo (vent) */}
-        {windSpeed !== null && (
-          <button
-            onClick={() => setShowWind((v) => !v)}
-            className={`flex items-center gap-1 px-2 py-1 rounded text-xs font-medium border transition-colors ${
-              showWind
-                ? 'bg-gray-700 text-gray-100 border-gray-500'
-                : 'bg-gray-800 text-gray-400 hover:text-gray-200 border-gray-600'
-            }`}
-            title={
-              windInvalid
-                ? `Vent : ${windSpeed} km/h — ≥ 20 km/h, mesures potentiellement invalides`
-                : `Vent : ${windSpeed} km/h — conforme MELCCFP (< 20 km/h)`
-            }
-            aria-pressed={showWind}
-          >
-            <Wind size={12} className={windInvalid ? 'text-rose-400' : 'text-emerald-400'} />
-            Afficher météo
-          </button>
-        )}
-
-        <button
-          onClick={handleExportPNG}
-          disabled={exporting}
-          className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
-                     bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
-                     border border-gray-600 transition-colors disabled:opacity-50"
-          title="Exporter en PNG"
-        >
-          <Download size={12} />
-          {exporting ? 'Export…' : 'Exporter PNG'}
-        </button>
-        {onPresentationToggle && (
-          <button
-            onClick={onPresentationToggle}
-            className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
-                       bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
-                       border border-gray-600 transition-colors"
-            title={presentationMode ? 'Quitter le mode présentation (Échap)' : 'Mode présentation'}
-            aria-label={presentationMode ? 'Quitter le mode présentation' : 'Mode présentation'}
-          >
-            {presentationMode ? <Minimize size={12} /> : <Maximize size={12} />}
-          </button>
-        )}
+          {/* Dropdown Exporter — regroupe PNG + Excel + Rapport */}
+          <div className="relative">
+            <button
+              onClick={() => setExportOpen((v) => !v)}
+              disabled={exporting}
+              className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
+                         bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
+                         border border-gray-600 transition-colors disabled:opacity-50"
+              aria-haspopup="menu"
+              aria-expanded={exportOpen}
+            >
+              <Download size={12} />
+              {exporting ? 'Export…' : 'Exporter'}
+              <ChevronDown size={11} className="text-gray-500" />
+            </button>
+            {exportOpen && !exporting && (
+              <>
+                {/* Zone de clic extérieur pour fermer */}
+                <div className="fixed inset-0 z-10" onClick={() => setExportOpen(false)} />
+                <div
+                  role="menu"
+                  className="absolute right-0 top-full mt-1 w-64 rounded-md border border-gray-700
+                             bg-gray-900 shadow-xl z-20 py-1"
+                >
+                  <button
+                    onClick={() => { setExportOpen(false); void handleExportPNG() }}
+                    className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-800 flex items-center gap-2"
+                    role="menuitem"
+                  >
+                    <Download size={12} className="text-emerald-400" />
+                    Exporter le graphique en PNG
+                  </button>
+                  <button
+                    onClick={() => {
+                      setExportOpen(false)
+                      document.dispatchEvent(new CustomEvent('acoustiq:export-indices'))
+                    }}
+                    className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-800 flex items-center gap-2"
+                    role="menuitem"
+                  >
+                    <Download size={12} className="text-emerald-400" />
+                    Exporter les indices en Excel
+                  </button>
+                  <button
+                    onClick={() => {
+                      setExportOpen(false)
+                      document.dispatchEvent(new CustomEvent('acoustiq:export-raw-data'))
+                    }}
+                    className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-800 flex items-center gap-2"
+                    role="menuitem"
+                  >
+                    <Download size={12} className="text-emerald-400" />
+                    Exporter les données brutes en Excel
+                  </button>
+                  <div className="border-t border-gray-800 my-1" />
+                  <button
+                    onClick={() => {
+                      setExportOpen(false)
+                      document.dispatchEvent(new CustomEvent('acoustiq:open-report'))
+                    }}
+                    className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-800 flex items-center gap-2"
+                    role="menuitem"
+                  >
+                    <Download size={12} className="text-blue-400" />
+                    Générer le rapport complet…
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
       </div>
 
-      {/* Indice : Shift+drag */}
-      <div className="px-6 pt-1 text-[10px] text-gray-600 select-none shrink-0">
-        Astuce : <kbd className="px-1 py-0.5 bg-gray-800 border border-gray-700 rounded">Shift</kbd>+glisser pour mesurer LAeq/L90 sur une plage.
-      </div>
+      {/* Indice : Shift+drag — masqué après 3 utilisations (persisté localStorage) */}
+      {shiftHintCount < 3 && (
+        <div className="px-6 pt-1 text-[10px] text-gray-600 select-none shrink-0">
+          Astuce : <kbd className="px-1 py-0.5 bg-gray-800 border border-gray-700 rounded">Shift</kbd>+glisser pour mesurer LAeq/L90 sur une plage.
+        </div>
+      )}
 
       {/* Graphique avec zoom/pan/sélection interactif */}
       <div

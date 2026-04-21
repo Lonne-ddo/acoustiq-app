@@ -3,7 +3,7 @@
  * Permet d'ajouter des événements horodatés qui s'affichent sur le graphique
  */
 import { useState } from 'react'
-import { Plus, Trash2, Clock, Sparkles, Check, X, MessageSquare, MousePointerClick, Play } from 'lucide-react'
+import { Plus, Trash2, Clock, Sparkles, Check, X, MessageSquare, MousePointerClick, Play, Settings as SettingsIcon } from 'lucide-react'
 import type { SourceEvent, CandidateEvent, ChartAnnotation } from '../types'
 import type { AudioCoverageRange } from '../hooks/useAudioSync'
 import { findCoveringRange } from '../hooks/useAudioSync'
@@ -74,6 +74,8 @@ export default function EventsPanel({
   const [annLevel, setAnnLevel] = useState('60')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingText, setEditingText] = useState('')
+  // Sliders de détection masqués par défaut (déployables via le bouton ⚙)
+  const [showDetectParams, setShowDetectParams] = useState(false)
 
   // Synchronise le jour sélectionné si les dates disponibles changent
   const effectiveDay = availableDates.includes(day) ? day : (availableDates[0] ?? '')
@@ -128,21 +130,37 @@ export default function EventsPanel({
 
       {open && (
         <div className="px-3 pb-3 space-y-3">
-          {/* Détection automatique */}
-          <button
-            onClick={onDetect}
-            disabled={availableDates.length === 0}
-            className="w-full flex items-center justify-center gap-1.5 px-3 py-1.5 rounded
-                       bg-orange-900/40 hover:bg-orange-900/60 disabled:opacity-30
-                       border border-orange-800/60 text-xs font-medium text-orange-300
-                       transition-colors"
-            title="Détecte les émergences ≥ seuil dB sur le bruit de fond local (60 s)"
-          >
-            <Sparkles size={12} />
-            Détecter événements
-          </button>
+          {/* Détection automatique : bouton principal + ⚙ Paramètres (replié) */}
+          <div className="flex gap-1">
+            <button
+              onClick={onDetect}
+              disabled={availableDates.length === 0}
+              className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 rounded
+                         bg-orange-900/40 hover:bg-orange-900/60 disabled:opacity-30
+                         border border-orange-800/60 text-xs font-medium text-orange-300
+                         transition-colors"
+              title="Détecte les émergences ≥ seuil dB sur le bruit de fond local (60 s)"
+            >
+              <Sparkles size={12} />
+              Détecter événements
+            </button>
+            <button
+              onClick={() => setShowDetectParams((v) => !v)}
+              className={`px-2 py-1.5 rounded border text-xs transition-colors ${
+                showDetectParams
+                  ? 'bg-orange-900/60 border-orange-700 text-orange-200'
+                  : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+              }`}
+              title="Paramètres de détection (seuil, durée, fusion)"
+              aria-label="Paramètres de détection"
+              aria-expanded={showDetectParams}
+            >
+              <SettingsIcon size={11} />
+            </button>
+          </div>
 
-          {/* Paramètres configurables */}
+          {/* Paramètres configurables (déployés à la demande) */}
+          {showDetectParams && (
           <div className="bg-gray-800/40 border border-gray-700/50 rounded-md p-2 space-y-1.5">
             <div>
               <div className="flex items-center justify-between text-[10px] text-gray-400">
@@ -190,6 +208,7 @@ export default function EventsPanel({
               />
             </div>
           </div>
+          )}
 
           {candidates.length > 0 && (
             <div className="bg-orange-950/20 border border-orange-900/40 rounded-md p-2 space-y-1">

@@ -341,9 +341,9 @@ function FileList({
   const renderFileCard = (f: MeasurementFile, showAssign: boolean) => {
     const pt = pointMap[f.id]
     return (
-      <li key={f.id} className="rounded px-2.5 py-1.5 bg-gray-800/70 border border-gray-700/50">
+      <li key={f.id} className="rounded px-2 py-1 bg-gray-800/70 border border-gray-700/50">
         <div className="flex items-start gap-1">
-          <p className="text-[11px] font-medium truncate flex-1 text-gray-300" title={f.name}>{f.name}</p>
+          <p className="text-[10px] font-medium truncate flex-1 text-gray-300" title={f.name}>{f.name}</p>
           <button
             onClick={() => onFileRemove(f.id)}
             className="text-gray-600 hover:text-red-400 shrink-0 transition-colors"
@@ -354,10 +354,10 @@ function FileList({
           </button>
         </div>
         <p
-          className="text-[10px] text-gray-500"
+          className="text-[10px] text-gray-500 leading-tight"
           title={`Modèle ${f.model || '—'} · Série ${f.serial || '—'} · ${f.rowCount.toLocaleString('fr-FR')} mesures 1 s`}
         >
-          {f.startTime} → {f.stopTime} · {f.rowCount.toLocaleString('fr-FR')} mesures
+          {f.startTime} → {f.stopTime} · {f.rowCount.toLocaleString('fr-FR')} mes.
         </p>
         {showAssign && (
           <div className="mt-1.5 space-y-1">
@@ -716,18 +716,18 @@ function SidebarSection({
     <div className="border-b border-gray-800/70">
       <button
         onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center justify-between px-4 py-3 text-left
+        className="w-full flex items-center justify-between px-3 py-1.5 text-left
                    hover:bg-gray-800/40 transition-colors"
       >
-        <span className="text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
+        <span className="text-[10px] font-semibold text-gray-400 uppercase tracking-wider">
           {title}
         </span>
         <ChevronDown
-          size={12}
+          size={11}
           className={`text-gray-600 transition-transform ${open ? '' : '-rotate-90'}`}
         />
       </button>
-      {open && <div className="px-3 pb-4">{children}</div>}
+      {open && <div className="px-2 pb-2">{children}</div>}
     </div>
   )
 }
@@ -874,7 +874,8 @@ function Sidebar({
 
   return (
     <aside
-      className={`w-64 min-h-screen bg-gray-900 text-gray-100 flex flex-col border-r shrink-0 transition-colors ${
+      style={{ width: 180 }}
+      className={`min-h-screen bg-gray-900 text-gray-100 flex flex-col border-r shrink-0 transition-colors ${
         dragOver ? 'border-emerald-500 bg-emerald-950/10' : 'border-gray-700'
       }`}
       onDragOver={handleDragOver}
@@ -1260,13 +1261,16 @@ function MainPanel({
   const visibleChartFiles = chartFiles.filter((f) => !hiddenPoints.has(pointMap[f.id]))
   const hasChart = chartFiles.length > 0
   const [showRecent, setShowRecent] = useState(false)
+  // Affichage forcé du bandeau « Démarrage guidé » après qu'il a été masqué
+  // automatiquement au 1er import. Activé via le bouton ❓ « Aide » du header.
+  const [forceShowWorkflow, setForceShowWorkflow] = useState(false)
 
   // --- Hauteur du spectrogramme en pixels (défaut 120, min 80, max 400) ---
   // Mémorisée pendant la session via sessionStorage pour survivre aux
   // changements d'onglet sans polluer localStorage.
   const SPECTRO_MIN = 80
   const SPECTRO_MAX = 400
-  const SPECTRO_DEFAULT = 120
+  const SPECTRO_DEFAULT = 150
   const [spectrogramHeight, setSpectrogramHeight] = useState<number>(() => {
     try {
       const v = sessionStorage.getItem('acoustiq_spectro_height')
@@ -1410,6 +1414,20 @@ function MainPanel({
               Dev mode
             </span>
           )}
+          {files.length > 0 && (
+            <button
+              onClick={() => setForceShowWorkflow((v) => !v)}
+              className={`p-1.5 rounded transition-colors ${
+                forceShowWorkflow
+                  ? 'text-emerald-300 bg-gray-800'
+                  : 'text-gray-600 hover:text-emerald-400 hover:bg-gray-800'
+              }`}
+              title={forceShowWorkflow ? 'Masquer le bandeau de démarrage' : 'Afficher le bandeau de démarrage'}
+              aria-pressed={forceShowWorkflow}
+            >
+              <span className="text-[10px] font-semibold uppercase tracking-wide">Aide</span>
+            </button>
+          )}
           <button
             onClick={onOpenOnboarding}
             className="p-1.5 text-gray-600 hover:text-emerald-400 hover:bg-gray-800 rounded transition-colors"
@@ -1459,12 +1477,14 @@ function MainPanel({
         )
       })()}
 
-      {/* Bandeau guidé en 3 étapes (visible si workflow incomplet) */}
+      {/* Bandeau guidé en 3 étapes — masqué automatiquement après le 1er
+          import. Le bouton « Aide » du header le réaffiche si besoin. */}
       {!presentationMode && (
         <WorkflowGuide
           hasFiles={files.length > 0}
           allAssigned={files.length > 0 && files.every((f) => !!pointMap[f.id])}
           hasChart={hasChart && !!selectedDate}
+          forceShow={forceShowWorkflow}
         />
       )}
 
@@ -2608,6 +2628,13 @@ export default function App() {
     setLoading(false)
     setLoadProgress(0)
   }, [handleFilesAdded])
+
+  // ---- Bascule vers l'onglet Rapport via le menu Exporter du chart ----
+  useEffect(() => {
+    const onOpenReport = () => setActiveTab('report')
+    document.addEventListener('acoustiq:open-report', onOpenReport)
+    return () => document.removeEventListener('acoustiq:open-report', onOpenReport)
+  }, [])
 
   // ---- Raccourcis clavier ----
   useEffect(() => {

@@ -493,11 +493,15 @@ function FileList({
                           ? 'bg-emerald-500'
                           : status === 'date_only'
                           ? 'bg-amber-400'
+                          : status === 'uncertain'
+                          ? 'bg-orange-500'
                           : 'bg-rose-500'
                         const dotTitle = status === 'calibrated'
                           ? 'Calage appliqué'
                           : status === 'date_only'
                           ? 'Date estimée, heure à vérifier'
+                          : status === 'uncertain'
+                          ? 'Date estimée non fiable — à vérifier'
                           : 'Non calé (00:00 par défaut)'
                         return (
                           <li
@@ -2043,12 +2047,17 @@ export default function App() {
       const fallbackDate = files[0]?.date ?? new Date().toISOString().slice(0, 10)
       const date = parsed?.date ?? fallbackDate
       const startMin = parsed?.startMin ?? 0
-      // Qualité initiale : jaune si le parser a tiré une info du nom,
-      // rouge sinon. Vert seulement après un calage utilisateur.
+      // Qualité initiale :
+      //   - rouge  : pas de timestamp dans le nom
+      //   - orange : pattern ambigu (YYMMDD_NNNN des enregistreurs)
+      //   - jaune  : date ISO ou timestamp complet plausible
+      //   - vert   : seulement après un calage utilisateur
       const caleStatus: AudioCaleStatus = !parsed
         ? 'none'
         : parsed.detected === 'none'
         ? 'none'
+        : parsed.detected === 'uncertain'
+        ? 'uncertain'
         : 'date_only'
       const entry: AudioFileEntry = {
         id: crypto.randomUUID(),
@@ -2969,11 +2978,40 @@ export default function App() {
           const { pow, n } = buckets[m]
           laeqByMinute[m] = n > 0 ? 10 * Math.log10(pow / n) : 0
         }
+
+        // Jours de mesure disponibles pour le point assigné à cette entrée
+        // — pour alimenter l'assistant « Je ne connais pas la date ».
+        const assignedPoint = audioPointMap[entry.id]
+        const measurementDays = (() => {
+          if (!assignedPoint) return []
+          const byDate = new Map<string, { startMin: number; endMin: number }>()
+          for (const f of files) {
+            if (pointMap[f.id] !== assignedPoint) continue
+            const [h1, m1] = (f.startTime || '00:00').split(':')
+            const [h2, m2] = (f.stopTime || '00:00').split(':')
+            const sMin = parseInt(h1, 10) * 60 + parseInt(m1, 10)
+            const eMin = parseInt(h2, 10) * 60 + parseInt(m2, 10)
+            const existing = byDate.get(f.date)
+            if (!existing) {
+              byDate.set(f.date, { startMin: sMin, endMin: eMin })
+            } else {
+              byDate.set(f.date, {
+                startMin: Math.min(existing.startMin, sMin),
+                endMin: Math.max(existing.endMin, eMin),
+              })
+            }
+          }
+          return [...byDate.entries()]
+            .sort(([a], [b]) => a.localeCompare(b))
+            .map(([date, r]) => ({ date, startMin: r.startMin, endMin: r.endMin }))
+        })()
+
         return (
           <AudioCalagePanel
             entry={entry}
             sync={audioSync}
             laeqByMinute={laeqByMinute}
+            measurementDays={measurementDays}
             onRequestChartPick={requestChartPick}
             onCancelChartPick={cancelChartPick}
             onRequestChartRangePick={requestChartRangePick}

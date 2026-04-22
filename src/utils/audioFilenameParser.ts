@@ -30,8 +30,14 @@ export interface AudioFilenameResult {
   startMin: number | null
   /** Index séquentiel du fichier dans la journée (0001 → 1), utile pour l'ordre */
   fileIndex: number | null
-  /** Degré de confiance du parsing */
-  detected: 'full' | 'dateOnly' | 'none'
+  /** Degré de confiance du parsing :
+   *    - 'full'      : timestamp explicite (YYYY-MM-DD_HH-MM-SS ou équivalent)
+   *    - 'dateOnly'  : date ISO détectée de façon plausible (YYYY-MM-DD)
+   *    - 'uncertain' : pattern YYMMDD_NNNN des enregistreurs — la date peut
+   *                     être une séquence interne et non un horodatage réel
+   *    - 'none'      : rien d'exploitable
+   */
+  detected: 'full' | 'dateOnly' | 'uncertain' | 'none'
 }
 
 function pad(n: number): string { return String(n).padStart(2, '0') }
@@ -112,7 +118,10 @@ export function parseAudioFilename(name: string): AudioFilenameResult | null {
     }
   }
 
-  // 4. YYMMDD_NNNN (date courte, fréquente sur les enregistreurs)
+  // 4. YYMMDD_NNNN (date courte, fréquente sur les enregistreurs Tascam/Zoom)
+  //    Ce format est ambigu : "180720_0013" peut être le fichier #13 du
+  //    20 juillet 2018, OU simplement un numéro interne de session. On
+  //    retourne `uncertain` pour que l'UI force l'utilisateur à vérifier.
   const shortDatePlusIndex = base.match(/(^|[^\d])(\d{2})(\d{2})(\d{2})[-_](\d{3,4})(?!\d)/)
   if (shortDatePlusIndex) {
     const [, , yy, mo, d, idx] = shortDatePlusIndex
@@ -123,7 +132,7 @@ export function parseAudioFilename(name: string): AudioFilenameResult | null {
         date: makeIsoDate(Y, M, D),
         startMin: null,
         fileIndex: parseInt(idx, 10),
-        detected: 'dateOnly',
+        detected: 'uncertain',
       }
     }
   }

@@ -236,10 +236,13 @@ export interface AudioFile {
 /**
  * Qualité de calage d'un fichier audio par rapport à la courbe LAeq :
  *   - calibrated : calage appliqué (horodatage manuel, pointage ou corrélation)
- *   - date_only  : date déduite du nom mais heure inconnue → heure à 00:00
- *   - none       : rien de fiable, début forcé à 00:00 par défaut
+ *   - date_only  : date déduite du nom de façon plausible, heure à 00:00
+ *   - uncertain  : date déduite mais format ambigu (ex: YYMMDD_NNNN des
+ *                  enregistreurs Tascam où 180720 peut n'être qu'un numéro
+ *                  interne et non 2018-07-20). À vérifier par l'utilisateur.
+ *   - none       : rien d'exploitable, début forcé à 00:00 par défaut
  */
-export type AudioCaleStatus = 'calibrated' | 'date_only' | 'none'
+export type AudioCaleStatus = 'calibrated' | 'date_only' | 'uncertain' | 'none'
 
 /**
  * Entrée audio en mode streaming — ne décode pas le fichier en AudioBuffer
@@ -266,7 +269,7 @@ export interface AudioFileEntry {
   /** Informations extraites du nom pour aider au regroupement si timestamp partiel */
   parserResult?: {
     fileIndex?: number
-    detected: 'full' | 'dateOnly' | 'none'
+    detected: 'full' | 'dateOnly' | 'uncertain' | 'none'
   }
   /** Vrai si l'heure n'a pas pu être déduite → l'utilisateur a dû la saisir manuellement */
   manualStart?: boolean

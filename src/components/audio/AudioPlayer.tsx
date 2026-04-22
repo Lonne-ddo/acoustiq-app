@@ -34,6 +34,7 @@ function fmtSec(s: number): string {
 function statusDot(s: AudioFileEntry['caleStatus']): { color: string; label: string } {
   if (s === 'calibrated') return { color: 'bg-emerald-500', label: 'Calé' }
   if (s === 'date_only') return { color: 'bg-amber-400', label: 'Date estimée, non calé' }
+  if (s === 'uncertain') return { color: 'bg-orange-500', label: 'Date estimée non fiable — à vérifier' }
   return { color: 'bg-rose-500', label: 'Non calé' }
 }
 

@@ -20,7 +20,7 @@
  *   - la série LAeq pour le mode 3 (récupérée côté App depuis `files`)
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { X, Clock, MousePointerClick, Activity, Loader2, Check, Target, Pencil } from 'lucide-react'
+import { X, Clock, MousePointerClick, Activity, Loader2, Check, Target, Pencil, AlertTriangle, Lightbulb, CalendarClock } from 'lucide-react'
 import type { AudioFileEntry } from '../../types'
 import type { UseAudioSyncResult } from '../../hooks/useAudioSync'
 import {
@@ -46,6 +46,9 @@ interface Props {
   onHighlightRange: (range: { startMin: number; endMin: number } | null) => void
   /** Applique un nouveau calage (met à jour startMin, date, caleStatus=calibrated) */
   onApply: (patch: { startMin: number; date: string }) => void
+  /** Jours de mesure disponibles pour le point assigné — suggestions dans
+   *  l'assistant « Je ne connais pas la date ». Trié chrono. */
+  measurementDays?: Array<{ date: string; startMin: number; endMin: number }>
   onClose: () => void
 }
 
@@ -77,9 +80,13 @@ export default function AudioCalagePanel({
   onRequestChartPick, onCancelChartPick,
   onRequestChartRangePick, onCancelChartRangePick,
   onHighlightRange,
-  onApply, onClose,
+  onApply, measurementDays = [], onClose,
 }: Props) {
   const [mode, setMode] = useState<CalageMode>('pointing')
+  /** Ouvre l'éditeur inline de la date/heure de début. */
+  const [editingStart, setEditingStart] = useState(false)
+  /** Ouvre l'assistant « Je ne connais pas la date ». */
+  const [showAssistant, setShowAssistant] = useState(false)
   /** Quand vrai, le modal se réduit en petit bandeau en haut-droite pour laisser
    *  voir le graphique. Déclenché par les boutons de sélection graphique. */
   const [minimized, setMinimized] = useState(false)
@@ -276,11 +283,34 @@ export default function AudioCalagePanel({
       const currentStartSec = entry.startMin * 60
       const laeqStartSec = laeqStartMin * 60
       const laeqEndSec = laeqEndMin * 60
-      const MARGIN = 30 * 60 // secondes
+      const MARGIN = 30 * 60 // secondes — marge de recherche autour de la position attendue
+
+      // Validation de plausibilité avec tolérance ±12 h entre la date du
+      // fichier audio et la fenêtre LAeq choisie. Si on est strictement
+      // hors, c'est que l'utilisateur a probablement importé un fichier
+      // dont la date parsée du nom est fausse.
+      const audioCenterSec = (laeqStartSec + laeqEndSec) / 2 - currentStartSec
+      const TOLERANCE_SEC = 12 * 3600
+      if (audioCenterSec < -TOLERANCE_SEC || audioCenterSec > entry.durationSec + TOLERANCE_SEC) {
+        const laeqLabel = (() => {
+          const totalMin = Math.floor((laeqStartSec + laeqEndSec) / 120)
+          const h = Math.floor(totalMin / 60) % 24
+          const m = totalMin % 60
+          return `${entry.date.replace(/T.+/, '')} ${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
+        })()
+        // Erreur spéciale : on ajoute un tag pour afficher le bouton « Corriger la date »
+        throw new Error(
+          `__DATE_MISMATCH__La fenêtre LAeq choisie (${laeqLabel}) ne peut pas correspondre au fichier audio dont la date de début est ${entry.date} ${minToHHMMSS(entry.startMin).slice(0, 5)}.\n\nCorrigez la date du fichier pour qu'elle colle à votre mesure, puis relancez la corrélation.`,
+        )
+      }
+
       const audioWindowStart = Math.max(0, (laeqStartSec - currentStartSec) - MARGIN)
       const audioWindowEnd = Math.min(entry.durationSec, (laeqEndSec - currentStartSec) + MARGIN)
       if (audioWindowEnd - audioWindowStart < 60) {
-        throw new Error('La fenêtre LAeq choisie tombe hors de la plage audio disponible (ajustez la date du fichier ou déplacez la fenêtre).')
+        throw new Error(
+          '__DATE_MISMATCH__La fenêtre LAeq choisie tombe hors de la plage audio disponible. Corrigez la date du fichier (le début actuel est ' +
+          `${entry.date} ${minToHHMMSS(entry.startMin).slice(0, 5)}) ou déplacez la fenêtre sur le graphique.`,
+        )
       }
 
       const { env, audioStartSec } = await computePartialRmsEnvelope(
@@ -339,6 +369,7 @@ export default function AudioCalagePanel({
   const statusDot = useMemo(() => {
     if (entry.caleStatus === 'calibrated') return { color: 'bg-emerald-500', label: 'Calé' }
     if (entry.caleStatus === 'date_only') return { color: 'bg-amber-400', label: 'Date estimée, non calé' }
+    if (entry.caleStatus === 'uncertain') return { color: 'bg-orange-500', label: 'Date estimée non fiable — à vérifier' }
     return { color: 'bg-rose-500', label: 'Non calé (00:00 par défaut)' }
   }, [entry.caleStatus])
 
@@ -405,9 +436,135 @@ export default function AudioCalagePanel({
           </button>
         </div>
 
-        <div className="px-5 py-3 text-[11px] text-gray-400">
-          Durée : <span className="font-mono text-gray-300">{minToHHMMSS(durationMin)}</span> · Début actuel : <span className="font-mono text-gray-300">{entry.date} {minToHHMMSS(entry.startMin)}</span>
+        {/* Ligne info : durée + début actuel éditable en un clic. */}
+        <div className="px-5 py-3 text-[11px] text-gray-400 flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <span>Durée :&nbsp;<span className="font-mono text-gray-300">{minToHHMMSS(durationMin)}</span></span>
+          <span>·</span>
+          <span className="flex items-center gap-1">
+            Début actuel :
+            {editingStart ? (
+              <input
+                autoFocus
+                type="datetime-local"
+                step="1"
+                defaultValue={`${entry.date}T${minToHHMMSS(entry.startMin)}`}
+                onBlur={(e) => {
+                  const v = e.currentTarget.value
+                  const m = v.match(/^(\d{4}-\d{2}-\d{2})T(\d{1,2}):(\d{2})(?::(\d{2}))?$/)
+                  if (m) {
+                    const [, dateISO, hh, mi, ss] = m
+                    const startMin = parseInt(hh, 10) * 60 + parseInt(mi, 10) + (ss ? parseInt(ss, 10) / 60 : 0)
+                    onApply({ startMin, date: dateISO })
+                  }
+                  setEditingStart(false)
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') e.currentTarget.blur()
+                  if (e.key === 'Escape') setEditingStart(false)
+                }}
+                className="text-[11px] font-mono bg-gray-800 text-gray-100 border border-emerald-600 rounded px-1.5 py-0.5"
+              />
+            ) : (
+              <button
+                onClick={() => setEditingStart(true)}
+                className="font-mono text-gray-200 hover:text-emerald-300 underline decoration-dotted decoration-gray-600 hover:decoration-emerald-500"
+                title="Cliquez pour modifier la date/heure de début"
+              >
+                {entry.date} {minToHHMMSS(entry.startMin)}
+              </button>
+            )}
+          </span>
+          {!editingStart && (
+            <button
+              onClick={() => setShowAssistant(true)}
+              className="ml-auto flex items-center gap-1 text-[10px] text-amber-300 hover:text-amber-200 bg-amber-950/40 hover:bg-amber-900/60 border border-amber-800/60 rounded px-2 py-0.5"
+              title="Ouvrir l'assistant pour définir la date à partir du projet"
+            >
+              <Lightbulb size={10} />
+              Je ne connais pas la date
+            </button>
+          )}
         </div>
+
+        {/* Bannière : date incertaine → recommander le mode Pointage */}
+        {entry.caleStatus === 'uncertain' && !editingStart && (
+          <div className="mx-5 mb-2 flex items-start gap-2 rounded border border-orange-700/60 bg-orange-950/30 p-2">
+            <AlertTriangle size={14} className="text-orange-400 shrink-0 mt-0.5" />
+            <div className="flex-1 text-[11px] text-orange-200 leading-snug">
+              Date du fichier <span className="font-semibold">incertaine</span> — le nom
+              ressemble à <span className="font-mono">YYMMDD_NNNN</span> qui peut n'être
+              qu'un numéro de session de l'enregistreur. Le mode Pointage est
+              recommandé : il ne nécessite pas de connaître la date à l'avance.
+            </div>
+            <button
+              onClick={() => setMode('pointing')}
+              className="text-[11px] bg-orange-600 hover:bg-orange-500 text-white rounded px-2 py-1 shrink-0"
+            >
+              Utiliser Pointage
+            </button>
+          </div>
+        )}
+
+        {/* Assistant : « Je ne connais pas la date » */}
+        {showAssistant && (
+          <div className="mx-5 mb-2 rounded border border-amber-700/60 bg-amber-950/20 p-3 space-y-2">
+            <div className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-200">
+              <Lightbulb size={12} />
+              Quand cet enregistrement a-t-il été réalisé ?
+            </div>
+            <div className="space-y-1">
+              {measurementDays.map((d) => (
+                <button
+                  key={d.date}
+                  onClick={() => {
+                    onApply({ date: d.date, startMin: d.startMin })
+                    setShowAssistant(false)
+                  }}
+                  className="w-full text-left flex items-center gap-2 text-[11px] bg-gray-900 hover:bg-gray-800 border border-gray-800 hover:border-emerald-700/60 rounded px-2 py-1.5 text-gray-200"
+                >
+                  <CalendarClock size={11} className="text-emerald-400 shrink-0" />
+                  <span>
+                    Pendant la mesure du{' '}
+                    <span className="font-mono text-gray-100">{d.date}</span>
+                    {' '}
+                    (<span className="font-mono text-gray-400">
+                      {String(Math.floor(d.startMin / 60)).padStart(2, '0')}:
+                      {String(Math.round(d.startMin % 60)).padStart(2, '0')}
+                      {' → '}
+                      {String(Math.floor(d.endMin / 60)).padStart(2, '0')}:
+                      {String(Math.round(d.endMin % 60)).padStart(2, '0')}
+                    </span>)
+                  </span>
+                </button>
+              ))}
+              {measurementDays.length === 0 && (
+                <p className="text-[10px] text-gray-500 italic">
+                  Aucun fichier de mesure importé pour ce point.
+                </p>
+              )}
+              <button
+                onClick={() => { setShowAssistant(false); setEditingStart(true) }}
+                className="w-full text-left text-[11px] bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded px-2 py-1.5 text-gray-300"
+              >
+                Saisir une date/heure précise…
+              </button>
+              <button
+                onClick={() => { setShowAssistant(false); setMode('pointing') }}
+                className="w-full text-left text-[11px] bg-gray-900 hover:bg-gray-800 border border-gray-800 rounded px-2 py-1.5 text-gray-300"
+              >
+                Je ne sais vraiment pas → utiliser <span className="text-orange-300 font-semibold">Pointage</span> (plus robuste)
+              </button>
+            </div>
+            <div className="flex justify-end">
+              <button
+                onClick={() => setShowAssistant(false)}
+                className="text-[10px] text-gray-500 hover:text-gray-300 underline"
+              >
+                Fermer l'assistant
+              </button>
+            </div>
+          </div>
+        )}
 
         {/* Sélecteur de mode */}
         <div className="px-5 flex gap-1 border-b border-gray-800">
@@ -701,11 +858,35 @@ export default function AudioCalagePanel({
                 plusieurs heures si la fenêtre reste ≤ 1h.
               </p>
 
-              {m3Error && (
-                <div className="rounded border border-rose-700/60 bg-rose-950/30 p-2 text-[11px] text-rose-200 whitespace-pre-line">
-                  {m3Error}
-                </div>
-              )}
+              {m3Error && (() => {
+                const isDateMismatch = m3Error.startsWith('__DATE_MISMATCH__')
+                const displayMsg = isDateMismatch ? m3Error.replace('__DATE_MISMATCH__', '') : m3Error
+                return (
+                  <div className="rounded border border-rose-700/60 bg-rose-950/30 p-2.5 text-[11px] text-rose-200 whitespace-pre-line space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle size={13} className="shrink-0 text-rose-400 mt-0.5" />
+                      <span className="flex-1">{displayMsg}</span>
+                    </div>
+                    {isDateMismatch && (
+                      <div className="flex flex-wrap gap-1.5 pt-1">
+                        <button
+                          onClick={() => { setM3Error(null); setEditingStart(true) }}
+                          className="text-[11px] bg-amber-600 hover:bg-amber-500 text-white rounded px-2 py-1 flex items-center gap-1"
+                        >
+                          <Pencil size={10} />
+                          Corriger la date du fichier
+                        </button>
+                        <button
+                          onClick={() => { setM3Error(null); setMode('pointing') }}
+                          className="text-[11px] bg-gray-800 hover:bg-gray-700 border border-gray-700 text-gray-200 rounded px-2 py-1"
+                        >
+                          Utiliser Pointage
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )
+              })()}
 
               {m3Result && (
                 <div className="rounded-md border border-emerald-700/60 bg-emerald-950/30 p-3 text-[11px] text-emerald-200 space-y-0.5">

@@ -1018,37 +1018,64 @@ export default function TimeSeriesChart({
     })
   }, [effectiveRange, fullRange, onZoomChange])
 
-  // Mouse down : délègue au handler selon le mode d'interaction courant.
-  // Priorités (du plus prioritaire au plus bas) :
-  //   1. Calage audio POINTAGE armé   → clic simple = capture minute
-  //   2. Calage audio RANGE armé      → drag = capture [start, end]
-  //      (doit passer AVANT audio-seek pour ne pas être intercepté)
-  //   3. Annotation en attente        → clic = place annotation
-  //   4. Comparaison ON/OFF en cours  → drag
-  //   5. Audio en lecture + couvert   → clic simple = seek
-  //   6. Shift + drag                  → mesure LAeq/L90
-  //   7. Drag simple                   → création de période (défaut)
+  // Mode d'interaction courant du graphique — calculé à chaque render
+  // depuis les props/états d'armement. Un seul mode peut être actif,
+  // ce qui élimine toute ambiguïté de priorité et rend le dispatch clair.
+  // Modes avec un comportement UI dédié déterminé AU MOMENT du mousedown.
+  // Les cas « audio_seek » et « measure » dépendent de Shift + audio-playing
+  // au runtime, donc gérés hors switch.
+  type GraphMode =
+    | 'period'          // drag = créer une période (défaut)
+    | 'caling_point'    // clic simple = capture la minute (Pointage)
+    | 'caling_rms'      // drag = capture [start, end] (Auto RMS)
+    | 'annotate'        // clic = place une annotation (toolbar Annoter)
+    | 'compare'         // drag = plage Source ON/OFF
+  const graphInteractionMode: GraphMode = chartPickArmed
+    ? 'caling_point'
+    : chartRangePickArmed
+    ? 'caling_rms'
+    : pendingAnnotationText
+    ? 'annotate'
+    : compPhase === 'pickON' || compPhase === 'pickOFF'
+    ? 'compare'
+    : 'period'
+
+  // Mouse down : dispatch explicite par mode. Le calage audio prime sur
+  // l'audio-seek pour que le drag de sélection ne soit pas préempté.
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return
     const rect = chartAreaRef.current?.getBoundingClientRect()
     if (!rect) return
     const xLocal = e.clientX - rect.left
 
-    // 1. Calage audio Pointage armé : simple clic = capture minute
-    if (chartPickArmed && onChartPicked) {
-      const tMin = xPxToMinutes(xLocal)
-      onChartPicked(tMin)
-      return
-    }
-
-    // 2. Calage audio Auto RMS armé : drag = capture une plage
-    //    ⚠ doit être traité AVANT l'audio-seek pour que le drag ne soit pas
-    //    préempté quand l'audio est en lecture sur un fichier couvrant.
-    if (chartRangePickArmed) {
-      periodStartRef.current = xLocal
-      setPeriodPx({ startX: xLocal, endX: xLocal })
-      setPeriodPopup(null)
-      return
+    switch (graphInteractionMode) {
+      case 'caling_point': {
+        if (onChartPicked) onChartPicked(xPxToMinutes(xLocal))
+        return
+      }
+      case 'caling_rms': {
+        // Démarre un drag de capture de plage. On réutilise periodStartRef /
+        // periodPx pour bénéficier du rendu visuel existant ; handleMouseUp
+        // saura rediriger vers onChartRangePicked au lieu d'ouvrir la popup.
+        periodStartRef.current = xLocal
+        setPeriodPx({ startX: xLocal, endX: xLocal })
+        setPeriodPopup(null)
+        return
+      }
+      case 'annotate': {
+        // Cas géré ci-dessous (trop verbeux pour rester dans le switch).
+        break
+      }
+      case 'compare': {
+        compStartRef.current = xLocal
+        setCompPx({ startX: xLocal, endX: xLocal })
+        return
+      }
+      case 'period': {
+        // Le mode par défaut est traité plus bas car il doit aussi
+        // évaluer Shift (mesure LAeq/L90) et audio-seek dynamiquement.
+        break
+      }
     }
 
     // Placement d'annotation en attente : transformer le clic en placement
@@ -1083,13 +1110,7 @@ export default function TimeSeriesChart({
       return
     }
 
-    // Mode comparaison : drag = sélection ON puis OFF
-    if (compPhase === 'pickON' || compPhase === 'pickOFF') {
-      compStartRef.current = xLocal
-      setCompPx({ startX: xLocal, endX: xLocal })
-      return
-    }
-
+    // À ce point : mode 'period' (défaut), 'audio_seek' ou 'measure'.
     // Audio en lecture sur une plage couverte → clic simple = seek
     if (audioPlaying && audioCoverage && audioCoverage.length > 0 && !e.shiftKey) {
       const tMin = xPxToMinutes(xLocal)
@@ -1111,7 +1132,7 @@ export default function TimeSeriesChart({
     periodStartRef.current = xLocal
     setPeriodPx({ startX: xLocal, endX: xLocal })
     setPeriodPopup(null)
-  }, [compPhase, pendingAnnotationText, xPxToMinutes, chartData, lineSpecs, yDomain, selectedDate, onAnnotationPlace, onPendingAnnotationCleared, chartPickArmed, onChartPicked, chartRangePickArmed, audioPlaying, audioCoverage, onAudioSeekMin])
+  }, [graphInteractionMode, pendingAnnotationText, xPxToMinutes, chartData, lineSpecs, yDomain, selectedDate, onAnnotationPlace, onPendingAnnotationCleared, onChartPicked, audioPlaying, audioCoverage, onAudioSeekMin])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const rect = chartAreaRef.current?.getBoundingClientRect()

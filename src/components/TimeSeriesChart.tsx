@@ -1018,30 +1018,37 @@ export default function TimeSeriesChart({
     })
   }, [effectiveRange, fullRange, onZoomChange])
 
-  // Mouse down : pan, sélection (Shift), comparaison ON/OFF, ou placement d'annotation
+  // Mouse down : délègue au handler selon le mode d'interaction courant.
+  // Priorités (du plus prioritaire au plus bas) :
+  //   1. Calage audio POINTAGE armé   → clic simple = capture minute
+  //   2. Calage audio RANGE armé      → drag = capture [start, end]
+  //      (doit passer AVANT audio-seek pour ne pas être intercepté)
+  //   3. Annotation en attente        → clic = place annotation
+  //   4. Comparaison ON/OFF en cours  → drag
+  //   5. Audio en lecture + couvert   → clic simple = seek
+  //   6. Shift + drag                  → mesure LAeq/L90
+  //   7. Drag simple                   → création de période (défaut)
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     if (e.button !== 0) return
     const rect = chartAreaRef.current?.getBoundingClientRect()
     if (!rect) return
     const xLocal = e.clientX - rect.left
 
-    // Mode "pick" (calage audio) : le prochain clic remonte la minute
-    // absolue au callback — court-circuite toutes les autres actions.
+    // 1. Calage audio Pointage armé : simple clic = capture minute
     if (chartPickArmed && onChartPicked) {
       const tMin = xPxToMinutes(xLocal)
       onChartPicked(tMin)
       return
     }
 
-    // Si l'audio joue et qu'on clique dans une plage couverte → seek au lieu
-    // de démarrer une sélection de période.
-    if (audioPlaying && audioCoverage && audioCoverage.length > 0 && !e.shiftKey) {
-      const tMin = xPxToMinutes(xLocal)
-      const r = findCoveringRange(audioCoverage, tMin)
-      if (r && onAudioSeekMin) {
-        onAudioSeekMin(tMin)
-        return
-      }
+    // 2. Calage audio Auto RMS armé : drag = capture une plage
+    //    ⚠ doit être traité AVANT l'audio-seek pour que le drag ne soit pas
+    //    préempté quand l'audio est en lecture sur un fichier couvrant.
+    if (chartRangePickArmed) {
+      periodStartRef.current = xLocal
+      setPeriodPx({ startX: xLocal, endX: xLocal })
+      setPeriodPopup(null)
+      return
     }
 
     // Placement d'annotation en attente : transformer le clic en placement
@@ -1083,6 +1090,16 @@ export default function TimeSeriesChart({
       return
     }
 
+    // Audio en lecture sur une plage couverte → clic simple = seek
+    if (audioPlaying && audioCoverage && audioCoverage.length > 0 && !e.shiftKey) {
+      const tMin = xPxToMinutes(xLocal)
+      const r = findCoveringRange(audioCoverage, tMin)
+      if (r && onAudioSeekMin) {
+        onAudioSeekMin(tMin)
+        return
+      }
+    }
+
     if (e.shiftKey) {
       selectionStartRef.current = xLocal
       setSelectionPx({ startX: xLocal, endX: xLocal })
@@ -1094,7 +1111,7 @@ export default function TimeSeriesChart({
     periodStartRef.current = xLocal
     setPeriodPx({ startX: xLocal, endX: xLocal })
     setPeriodPopup(null)
-  }, [compPhase, pendingAnnotationText, xPxToMinutes, chartData, lineSpecs, yDomain, selectedDate, onAnnotationPlace, onPendingAnnotationCleared, chartPickArmed, onChartPicked, audioPlaying, audioCoverage, onAudioSeekMin])
+  }, [compPhase, pendingAnnotationText, xPxToMinutes, chartData, lineSpecs, yDomain, selectedDate, onAnnotationPlace, onPendingAnnotationCleared, chartPickArmed, onChartPicked, chartRangePickArmed, audioPlaying, audioCoverage, onAudioSeekMin])
 
   const handleMouseMove = useCallback((e: React.MouseEvent) => {
     const rect = chartAreaRef.current?.getBoundingClientRect()

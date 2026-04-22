@@ -124,6 +124,34 @@ export default function AudioCalagePanel({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // Escape : si un pick est en cours on l'annule, sinon on ferme le modal.
+  useEffect(() => {
+    function onKey(ev: KeyboardEvent) {
+      if (ev.key !== 'Escape') return
+      if (waitingRangePick) {
+        ev.preventDefault()
+        onCancelChartRangePick()
+        setWaitingRangePick(false)
+        setMinimized(false)
+        return
+      }
+      if (waitingChartClick) {
+        ev.preventDefault()
+        onCancelChartPick()
+        setWaitingChartClick(false)
+        setMinimized(false)
+        return
+      }
+      if (minimized) {
+        ev.preventDefault()
+        setMinimized(false)
+        return
+      }
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [waitingRangePick, waitingChartClick, minimized, onCancelChartRangePick, onCancelChartPick])
+
   // Durée audio pour caler les bornes de mode 1/2
   const durationMin = entry.durationSec / 60
 

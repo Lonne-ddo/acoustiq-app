@@ -97,6 +97,13 @@ import Spectrogram from './components/Spectrogram'
 import LwCalculator from './components/LwCalculator'
 const Vue3DTab = lazy(() => import('./components/Vue3DTab'))
 const IsolementPage = lazy(() => import('./pages/IsolementPage'))
+const MeteoPage = lazy(() => import('./pages/MeteoPage'))
+import {
+  makeDefaultMeteoState,
+  recevabiliteForDate,
+  type MeteoModuleState,
+  type ProjectPointHint,
+} from './utils/meteoModule'
 import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
 import StreamAudioPlayer from './components/audio/AudioPlayer'
@@ -226,7 +233,7 @@ function saveRecent(projects: RecentProject[]) {
   localStorage.setItem(RECENT_KEY, JSON.stringify(projects.slice(0, MAX_RECENT)))
 }
 
-type Tab = 'chart' | 'map' | 'lw' | 'isolement' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation' | 'carriere' | 'yamnet' | 'ecme' | 'vue3d'
+type Tab = 'chart' | 'map' | 'lw' | 'isolement' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation' | 'carriere' | 'yamnet' | 'ecme' | 'vue3d' | 'meteo'
 
 /**
  * Regroupement des onglets en 4 catégories principales pour réduire le bruit
@@ -250,6 +257,7 @@ const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
   yamnet: 'outils',
   ecme: 'outils',
   vue3d: 'outils',
+  meteo: 'outils',
 }
 
 // Feature flags — modules masqués temporairement sans suppression du code.
@@ -272,6 +280,7 @@ const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
     ...(ENABLED_CARRIERE ? [{ id: 'carriere' as Tab, label: 'Carrière / Sablière' }] : []),
     { id: 'yamnet', label: 'Audio IA' },
     { id: 'ecme', label: 'Parc ECME' },
+    { id: 'meteo', label: 'Météo' },
     { id: 'map', label: 'Carte' },
     { id: 'regulation', label: 'Réglementation' },
     { id: 'history', label: 'Historique' },
@@ -690,6 +699,11 @@ interface SidebarProps {
   onTogglePointVisibility: (pt: string) => void
   detectParams: { emergenceDb: number; minDurationSec: number; mergeGapSec: number }
   onDetectParamsChange: (p: { emergenceDb: number; minDurationSec: number; mergeGapSec: number }) => void
+  /** Données météo récupérées pour activer l'overlay LAeq + bouton d'exclusion. */
+  hasMeteoResults: boolean
+  showMeteoRecevabilite: boolean
+  onToggleMeteoRecevabilite: (v: boolean) => void
+  onExcludeNonRecevable: () => void
 }
 
 export interface GroupSuggestion {
@@ -757,6 +771,7 @@ function Sidebar({
   groupSuggestions, onAcceptSuggestion, onDismissSuggestion, onAcceptAllSuggestions,
   hiddenPoints, onTogglePointVisibility,
   detectParams, onDetectParamsChange,
+  hasMeteoResults, showMeteoRecevabilite, onToggleMeteoRecevabilite, onExcludeNonRecevable,
 }: SidebarProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const projectInputRef = useRef<HTMLInputElement>(null)
@@ -1107,6 +1122,29 @@ function Sidebar({
         <SidebarSection title="⚙️ Options">
           <div className="-mx-3 space-y-0">
             <MeteoSection meteo={meteo} onChange={onMeteoChange} />
+            {hasMeteoResults && (
+              <div className="px-3 py-2.5 border-t border-gray-800 space-y-1.5">
+                <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={showMeteoRecevabilite}
+                    onChange={(e) => onToggleMeteoRecevabilite(e.target.checked)}
+                    className="accent-emerald-500"
+                  />
+                  Afficher la recevabilité météo
+                </label>
+                {showMeteoRecevabilite && (
+                  <button
+                    onClick={onExcludeNonRecevable}
+                    className="w-full px-2 py-1.5 rounded bg-gray-800 text-gray-300 border border-gray-700
+                               hover:bg-rose-900/30 hover:text-rose-300 hover:border-rose-700
+                               text-[11px] transition-colors"
+                  >
+                    Exclure les heures non recevables
+                  </button>
+                )}
+              </div>
+            )}
             <TemplatesSection
               templates={templates}
               userCount={userTemplateCount}
@@ -1238,6 +1276,11 @@ interface MainPanelProps {
   onOpenShortcuts: () => void
   onOpenOnboarding: () => void
   onOpenChangelog: () => void
+  meteoModule: MeteoModuleState
+  onMeteoModuleChange: (state: MeteoModuleState) => void
+  meteoProjectPoints: ProjectPointHint[]
+  recevabiliteOverlay: { startMs: number; endMs: number; recevable: boolean }[]
+  showMeteoRecevabilite: boolean
 }
 
 function MainPanel({
@@ -1266,6 +1309,8 @@ function MainPanel({
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
+  meteoModule, onMeteoModuleChange, meteoProjectPoints,
+  recevabiliteOverlay, showMeteoRecevabilite,
 }: MainPanelProps) {
   const chartFiles = files.filter((f) => !!pointMap[f.id])
   const visibleChartFiles = chartFiles.filter((f) => !hiddenPoints.has(pointMap[f.id]))
@@ -1566,6 +1611,7 @@ function MainPanel({
                   chartRangePickArmed={chartRangePickArmed}
                   onChartRangePicked={onChartRangePicked}
                   chartHighlightRange={chartHighlightRange}
+                  recevabiliteOverlay={showMeteoRecevabilite ? recevabiliteOverlay : undefined}
                 />
               </div>
 
@@ -1782,6 +1828,18 @@ function MainPanel({
         </div>
       )}
 
+      {effectiveTab === 'meteo' && (
+        <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
+          <Suspense fallback={<LazyTabFallback label="Météo" />}>
+            <MeteoPage
+              state={meteoModule}
+              onChange={onMeteoModuleChange}
+              projectPoints={meteoProjectPoints}
+            />
+          </Suspense>
+        </div>
+      )}
+
       {effectiveTab === 'reafie' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           {hasChart ? (
@@ -1920,6 +1978,13 @@ export default function App() {
   const [lwSources, setLwSources] = useState<LwSourceSummary[]>([])
   // Scène 3D (bâtiment + positions des sources)
   const [scene3D, setScene3D] = useState<Scene3DData | undefined>(undefined)
+
+  // Module Météo (multi-sources + recevabilité acoustique)
+  const [meteoModule, setMeteoModule] = useState<MeteoModuleState>(() =>
+    makeDefaultMeteoState(),
+  )
+  // Affichage de la recevabilité météo en overlay sur le graphique LAeq
+  const [showMeteoRecevabilite, setShowMeteoRecevabilite] = useState(false)
 
   // Mode présentation : masque sidebar + barre d'onglets
   const [presentationMode, setPresentationMode] = useState(false)
@@ -2246,6 +2311,68 @@ export default function App() {
     for (const f of files) { if (pointMap[f.id]) pts.add(pointMap[f.id]) }
     return [...pts].sort()
   }, [files, pointMap])
+
+  // Points du projet exposés au module Météo : on enrichit avec les
+  // coordonnées de la scène 3D quand elles existent.
+  const meteoProjectPoints = useMemo<ProjectPointHint[]>(() => {
+    const sources = scene3D?.sources ?? []
+    return assignedPoints.map((id): ProjectPointHint => {
+      const s = sources.find((x) => x.id === id && x.placed)
+      const label = pointLabels[id] || id
+      return {
+        id,
+        label,
+        lat: s?.lat,
+        lng: s?.lng,
+      }
+    })
+  }, [assignedPoints, pointLabels, scene3D])
+
+  // Overlay de recevabilité météo pour le graphique LAeq de la date courante.
+  const recevabiliteOverlay = useMemo(() => {
+    const hours = recevabiliteForDate(meteoModule, selectedDate)
+    // chartAnchorMs = midnight de la date courante : convertir minutes → epoch ms.
+    const [y, m, d] = selectedDate.split('-').map(Number)
+    if (!y || !m || !d) return []
+    const anchor = new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
+    return hours.map((h) => ({
+      startMs: anchor + h.startMin * 60_000,
+      endMs: anchor + h.endMin * 60_000,
+      recevable: h.recevable,
+    }))
+  }, [meteoModule, selectedDate])
+
+  // Crée des périodes "exclude" pour chaque heure non recevable de la date courante,
+  // en fusionnant les heures contiguës pour limiter le nombre de périodes.
+  const handleExcludeNonRecevable = useCallback(() => {
+    const non = recevabiliteOverlay.filter((h) => !h.recevable)
+    if (non.length === 0) {
+      showToast('Aucune heure non recevable à exclure.', 'info')
+      return
+    }
+    // Fusion contiguë (gap < 30 s = continuité)
+    const merged: { startMs: number; endMs: number }[] = []
+    for (const h of non) {
+      const last = merged[merged.length - 1]
+      if (last && h.startMs - last.endMs < 30_000) last.endMs = h.endMs
+      else merged.push({ startMs: h.startMs, endMs: h.endMs })
+    }
+    let n = 0
+    for (const w of merged) {
+      setPeriods((prev) => [
+        ...prev,
+        {
+          id: `meteo-excl-${w.startMs}`,
+          name: 'Météo non recevable',
+          startMs: w.startMs,
+          endMs: w.endMs,
+          status: 'exclude',
+        } as Period,
+      ])
+      n++
+    }
+    showToast(`${n} période(s) « exclude » créée(s) depuis la météo.`, 'success')
+  }, [recevabiliteOverlay])
 
   // Suggestion de regroupement en attente (bannière dans la sidebar).
   const [groupSuggestions, setGroupSuggestions] = useState<GroupSuggestion[]>([])
@@ -2873,6 +3000,10 @@ export default function App() {
         onTogglePointVisibility={togglePointVisibility}
         detectParams={detectParams}
         onDetectParamsChange={setDetectParams}
+        hasMeteoResults={meteoModule.results.length > 0}
+        showMeteoRecevabilite={showMeteoRecevabilite}
+        onToggleMeteoRecevabilite={setShowMeteoRecevabilite}
+        onExcludeNonRecevable={handleExcludeNonRecevable}
       />
       )}
       <MainPanel
@@ -2952,6 +3083,11 @@ export default function App() {
         onOpenShortcuts={() => setShowShortcuts(true)}
         onOpenOnboarding={() => { resetOnboarding(); setShowOnboarding(true) }}
         onOpenChangelog={() => setShowChangelog(true)}
+        meteoModule={meteoModule}
+        onMeteoModuleChange={setMeteoModule}
+        meteoProjectPoints={meteoProjectPoints}
+        recevabiliteOverlay={recevabiliteOverlay}
+        showMeteoRecevabilite={showMeteoRecevabilite}
       />
 
       {/* Panneau de calage audio */}

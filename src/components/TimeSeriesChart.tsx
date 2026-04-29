@@ -307,6 +307,9 @@ interface Props {
   onChartRangePicked?: (startMin: number, endMin: number) => void
   /** Fenêtre surlignée de façon persistante sur le chart (bleu translucide). */
   chartHighlightRange?: { startMin: number; endMin: number } | null
+  /** Bandes de recevabilité météo (vert/rouge) en fond — une entrée par heure.
+   *  startMs/endMs sont des epoch ms ; le chart convertit en minutes via son ancre. */
+  recevabiliteOverlay?: { startMs: number; endMs: number; recevable: boolean }[]
 }
 
 /** Format court d'une date ISO en français : "2026-03-09" → "09 mars" */
@@ -365,6 +368,7 @@ export default function TimeSeriesChart({
   chartRangePickArmed,
   onChartRangePicked,
   chartHighlightRange,
+  recevabiliteOverlay,
 }: Props) {
   // Affichage des données météo (vent) sur le graphique
   const [showWind, setShowWind] = useState(false)
@@ -2002,6 +2006,30 @@ export default function TimeSeriesChart({
                   />
                 )
               })()}
+
+              {/* Recevabilité météo (overlay de fond, sous les périodes nommées). */}
+              {recevabiliteOverlay && recevabiliteOverlay.length > 0 &&
+                Number.isFinite(chartAnchorMs) &&
+                recevabiliteOverlay.map((h, i) => {
+                  const startMin = (h.startMs - chartAnchorMs) / 60_000
+                  const endMin = (h.endMs - chartAnchorMs) / 60_000
+                  if (endMin < fullRange.startMin || startMin > fullRange.endMin) return null
+                  const x1 = Math.max(fullRange.startMin, startMin)
+                  const x2 = Math.min(fullRange.endMin, endMin)
+                  const color = h.recevable ? '#10b981' : '#ef4444'
+                  return (
+                    <ReferenceArea
+                      key={`recv-${i}`}
+                      yAxisId="left"
+                      x1={x1}
+                      x2={x2}
+                      fill={color}
+                      fillOpacity={0.1}
+                      stroke="none"
+                      ifOverflow="hidden"
+                    />
+                  )
+                })}
 
               {/* Périodes nommées :
                    - include  → vert

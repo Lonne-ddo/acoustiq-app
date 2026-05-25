@@ -22,6 +22,7 @@ const ALLOWED_HOSTS = [
   'news.google.com',
   'www.donneesquebec.ca',
   'donneesquebec.ca',
+  'www.bing.com',
 ];
 
 const CORS_HEADERS: Record<string, string> = {

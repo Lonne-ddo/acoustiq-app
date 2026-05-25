@@ -23,6 +23,8 @@ export interface MeteoModuleState {
   endDate: string
   selectedSources: Set<SourceId>
   results: PointMeteoResults[]
+  /** « Asphalte à proximité » (§3.6) — active le critère de chaussée sèche. */
+  asphalt: boolean
 }
 
 export interface ProjectPointHint {
@@ -53,6 +55,7 @@ export function makeDefaultMeteoState(): MeteoModuleState {
     endDate: end,
     selectedSources: new Set<SourceId>(['openmeteo', 'gem', 'eccc']),
     results: [],
+    asphalt: true,
   }
 }
 
@@ -69,7 +72,7 @@ export function recevabiliteForDate(
   if (!first) return []
   const firstOk = first.outcomes.find((o): o is SourceResult => !isError(o))
   if (!firstOk) return []
-  const ev = evaluateRecevabilite(firstOk.rows)
+  const ev = evaluateRecevabilite(firstOk.rows, state.asphalt)
   const out: { startMin: number; endMin: number; recevable: boolean }[] = []
   for (const h of ev) {
     const d = h.date instanceof Date ? h.date : parseHourTimestamp(h.datetime)

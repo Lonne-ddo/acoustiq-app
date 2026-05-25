@@ -6,6 +6,7 @@ import {
   FileSpreadsheet,
   Loader2,
   Play,
+  Printer,
   RefreshCw,
 } from 'lucide-react'
 import { showToast } from '../components/Toast'
@@ -26,6 +27,7 @@ import {
 } from '../utils/meteoSources'
 import {
   evaluateRecevabilite,
+  RECEVABILITE_LABEL,
   type RecevabiliteHour,
 } from '../utils/recevabilite'
 import type {
@@ -176,10 +178,10 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
     const out: Record<string, RecevabiliteHour[]> = {}
     for (const o of activeResult.outcomes) {
       if (isError(o)) continue
-      out[o.source] = evaluateRecevabilite(o.rows)
+      out[o.source] = evaluateRecevabilite(o.rows, state.asphalt)
     }
     return out
-  }, [activeResult])
+  }, [activeResult, state.asphalt])
 
   const activeSources: SourceResult[] = useMemo(() => {
     if (!activeResult) return []
@@ -204,7 +206,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         'precip_mm',
         'vent_kmh',
         'direction_deg',
-        'recevable',
+        'recevabilite',
+        'asphalte',
         'raisons',
       ],
     ]
@@ -220,7 +223,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
           fmtCsv(h.precipitation, 2),
           fmtCsv(h.windSpeed, 1),
           fmtCsv(h.windDirection, 0),
-          h.recevable ? 'oui' : 'non',
+          RECEVABILITE_LABEL[h.level],
+          state.asphalt ? 'oui' : 'non',
           h.reasons.join(' · '),
         ])
       }
@@ -297,7 +301,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         'Précip mm': h.precipitation,
         'Vent km/h': h.windSpeed,
         'Direction °': h.windDirection,
-        Recevable: h.recevable ? 'oui' : 'non',
+        'Recevabilité §3.6': RECEVABILITE_LABEL[h.level],
+        Asphalte: state.asphalt ? 'oui' : 'non',
         Raisons: h.reasons.join(' · '),
       }))
       XLSX.utils.book_append_sheet(
@@ -337,10 +342,14 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
       { Champ: 'Coordonnées', Valeur: `${activePoint.lat ?? ''}, ${activePoint.lng ?? ''}` },
       { Champ: 'Plage', Valeur: `${state.startDate} → ${state.endDate}` },
       { Champ: 'Sources', Valeur: sourceIds.map((id) => SOURCES[id].shortLabel).join(', ') },
-      { Champ: 'Référentiel', Valeur: 'Critères MELCC / REAFIE' },
+      { Champ: 'Référentiel', Valeur: 'Lignes directrices MELCCFP — §3.6' },
+      { Champ: 'Vent', Valeur: '< 20 km/h sinon non recevable' },
+      { Champ: 'Précipitations', Valeur: '= 0 mm sinon mesures à retirer' },
       {
-        Champ: 'Vent jour < 18 km/h ; nuit < 10.8 km/h',
-        Valeur: 'Chaussée sèche : pas de précip 4 h, T > 2 °C, HR < 95 %',
+        Champ: 'Chaussée',
+        Valeur: state.asphalt
+          ? 'sèche exigée (asphalte à proximité) — sinon « à signaler »'
+          : 'non considérée (pas d’asphalte à proximité)',
       },
       { Champ: 'Généré par AcoustiQ', Valeur: 'https://acoustiq-app.pages.dev' },
     ]
@@ -358,8 +367,30 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
 
   return (
     <div className="h-full overflow-auto">
-      <div className="max-w-6xl mx-auto p-6 space-y-6">
-        <div className="flex items-start gap-3 pb-4 border-b border-gray-800">
+      <div className="max-w-6xl mx-auto p-6 space-y-6 print-content">
+        {/* En-tête imprimable — visible uniquement à l'impression */}
+        <div className="print-only" style={{ borderBottom: '2px solid black', paddingBottom: '0.6rem', marginBottom: '1rem' }}>
+          <h1 style={{ fontSize: '14pt', fontWeight: 700, marginBottom: '0.3rem' }}>
+            Rapport météo — recevabilité acoustique §3.6
+          </h1>
+          <div style={{ fontSize: '9pt', color: '#444' }}>
+            {[
+              activePoint
+                ? `Point : ${activePoint.label}${activePoint.displayName ? ' — ' + activePoint.displayName : ''}`
+                : null,
+              `Période : ${state.startDate} → ${state.endDate}`,
+              `Asphalte à proximité : ${(state.asphalt ?? true) ? 'oui' : 'non'}`,
+              activeSources.length > 0
+                ? `Sources : ${activeSources.map((s) => SOURCES[s.source].shortLabel).join(', ')}`
+                : null,
+              `Généré : ${new Date().toLocaleString('fr-CA')}`,
+            ]
+              .filter(Boolean)
+              .join(' · ')}
+          </div>
+        </div>
+
+        <div className="flex items-start gap-3 pb-4 border-b border-gray-800 no-print">
           <Cloud size={28} className="text-emerald-400 mt-0.5" />
           <div>
             <h1 className="text-xl font-semibold text-gray-100">
@@ -373,7 +404,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         </div>
 
         {/* SECTION 1 — POINTS */}
-        <section className="space-y-3">
+        <section className="space-y-3 no-print">
           <SectionHeader index={1} title="Points de mesure" />
           <PointsList
             points={state.points}
@@ -389,7 +420,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         </section>
 
         {/* SECTION 2 — PARAMÈTRES */}
-        <section className="space-y-3">
+        <section className="space-y-3 no-print">
           <SectionHeader index={2} title="Paramètres" />
           <div className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-3 items-end">
             <div>
@@ -452,6 +483,28 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
                   </label>
                 )
               })}
+            </div>
+          </div>
+
+          <div className="rounded border border-gray-800 bg-gray-900/40 px-3 py-2 space-y-1.5">
+            <label className="flex items-center gap-2 text-xs text-gray-300 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={state.asphalt ?? true}
+                onChange={(e) => update({ asphalt: e.target.checked })}
+                className="accent-emerald-500"
+              />
+              <span className="font-medium">Asphalte à proximité</span>
+              <span className="text-gray-500">
+                — active le critère « chaussée sèche » (§3.6)
+              </span>
+            </label>
+            <div className="text-[10px] text-gray-500 leading-relaxed">
+              Recevabilité §3.6 : vent <span className="text-gray-300">&lt; 20 km/h</span> ·
+              précipitations <span className="text-gray-300">= 0 mm</span>
+              {(state.asphalt ?? true)
+                ? ' · chaussée sèche (sinon « à signaler »)'
+                : ' · chaussée non considérée'}
             </div>
           </div>
 
@@ -559,6 +612,15 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
                            hover:bg-emerald-500 disabled:opacity-40 text-xs flex items-center gap-1.5"
               >
                 <FileSpreadsheet size={12} /> XLSX formaté
+              </button>
+              <button
+                onClick={() => window.print()}
+                disabled={activeSources.length === 0}
+                className="px-3 py-1.5 rounded bg-gray-800 text-gray-300 border border-gray-700
+                           hover:bg-gray-700 disabled:opacity-40 text-xs flex items-center gap-1.5"
+                title="Imprimer un rapport (masque l'interface, ne garde que les données du point actif)"
+              >
+                <Printer size={12} /> Imprimer le rapport
               </button>
             </div>
           </section>

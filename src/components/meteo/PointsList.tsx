@@ -22,6 +22,9 @@ interface Props {
   importHint?: string
 }
 
+/** Nombre maximum de points météo analysables en parallèle (v0.6). */
+export const MAX_METEO_POINTS = 10
+
 let nextId = 1
 export function makeMeteoPoint(label?: string): MeteoPoint {
   return {
@@ -53,8 +56,11 @@ export default function PointsList({
   }
 
   function add() {
+    if (points.length >= MAX_METEO_POINTS) return
     onChange([...points, makeMeteoPoint(`Point ${points.length + 1}`)])
   }
+
+  const atMax = points.length >= MAX_METEO_POINTS
 
   async function resolveQuery(p: MeteoPoint) {
     const query = p.query.trim()
@@ -168,11 +174,14 @@ export default function PointsList({
       <div className="flex flex-wrap gap-2">
         <button
           onClick={add}
+          disabled={atMax}
+          title={atMax ? `Maximum ${MAX_METEO_POINTS} points` : undefined}
           className="px-3 py-1.5 rounded border border-dashed border-gray-700
                      text-gray-400 hover:text-gray-200 hover:border-gray-500
+                     disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-gray-400
                      text-xs flex items-center gap-1.5"
         >
-          <Plus size={12} /> Ajouter un point
+          <Plus size={12} /> Ajouter un point{atMax ? ` (max ${MAX_METEO_POINTS})` : ''}
         </button>
         {onImportFromProject && (
           <button

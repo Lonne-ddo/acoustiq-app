@@ -1,7 +1,10 @@
 import { useMemo, useState } from 'react'
-import { Check, X } from 'lucide-react'
+import { Check, AlertTriangle, X } from 'lucide-react'
 import {
   type RecevabiliteHour,
+  type RecevabiliteLevel,
+  RECEVABILITE_LABEL,
+  SEUIL_VENT_KMH,
   computeStats,
   parseHourTimestamp,
 } from '../../utils/recevabilite'
@@ -43,7 +46,8 @@ export default function SourceTable({ sources, recevabiliteBySource }: Props) {
     })
   }, [hours, periodFilter, recevableOnly])
 
-  const stats = useMemo(() => computeStats(hours), [hours])
+  // Stats recalculées sur le sous-ensemble filtré (comme le standalone v0.6).
+  const stats = useMemo(() => computeStats(filtered), [filtered])
 
   if (sources.length === 0) {
     return (
@@ -86,21 +90,15 @@ export default function SourceTable({ sources, recevabiliteBySource }: Props) {
         </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-        <Stat label="Total heures" value={String(stats.total)} />
+      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+        <Stat label="Heures (filtré)" value={`${stats.total} / ${hours.length}`} />
+        <Stat label="Recevables" value={String(stats.recevables)} accent="emerald" />
+        <Stat label="À signaler" value={String(stats.warn)} accent="amber" />
+        <Stat label="Non recevables" value={String(stats.bad)} accent="rose" />
         <Stat
-          label="Recevables"
-          value={`${stats.recevables} / ${stats.total}`}
-          accent="emerald"
-        />
-        <Stat
-          label="Pourcentage"
+          label="% recevable"
           value={`${stats.pourcentage.toFixed(0)}%`}
           accent={stats.pourcentage >= 50 ? 'emerald' : 'amber'}
-        />
-        <Stat
-          label="Jour / Nuit recev."
-          value={`${stats.jourRecevable} / ${stats.nuitRecevable}`}
         />
       </div>
 
@@ -150,15 +148,18 @@ export default function SourceTable({ sources, recevabiliteBySource }: Props) {
             {filtered.map((h, i) => {
               const d = h.date instanceof Date ? h.date : parseHourTimestamp(h.datetime)
               const precipBad = h.precipitation != null && h.precipitation > 0
-              const seuilVent = h.period === 'jour' ? 18 : 10.8
-              const windBad = h.windSpeed != null && h.windSpeed >= seuilVent
+              const windBad = h.windSpeed != null && h.windSpeed >= SEUIL_VENT_KMH
+              const rowText =
+                h.level === 'ok'
+                  ? 'text-gray-200'
+                  : h.level === 'warn'
+                    ? 'text-amber-300'
+                    : 'text-gray-500'
               return (
                 <tr
                   key={i}
-                  className={`border-t border-gray-800 ${
-                    h.recevable ? 'text-gray-200' : 'text-gray-500'
-                  }`}
-                  title={h.reasons.join(' · ')}
+                  className={`border-t border-gray-800 ${rowText}`}
+                  title={h.reasons.join(' · ') || RECEVABILITE_LABEL[h.level]}
                 >
                   <td className="px-2 py-1 whitespace-nowrap">{fmtDateLabel(d)}</td>
                   <td className="px-2 py-1">
@@ -190,11 +191,7 @@ export default function SourceTable({ sources, recevabiliteBySource }: Props) {
                     {fmtNum(h.windDirection, 0)}
                   </td>
                   <td className="px-2 py-1 text-center">
-                    {h.recevable ? (
-                      <Check size={14} className="inline text-emerald-400" />
-                    ) : (
-                      <X size={14} className="inline text-rose-400" />
-                    )}
+                    <RecevabiliteBadge level={h.level} />
                   </td>
                 </tr>
               )
@@ -220,14 +217,16 @@ function Stat({
 }: {
   label: string
   value: string
-  accent?: 'emerald' | 'amber'
+  accent?: 'emerald' | 'amber' | 'rose'
 }) {
   const valueClass =
     accent === 'emerald'
       ? 'text-emerald-400'
       : accent === 'amber'
         ? 'text-amber-400'
-        : 'text-gray-200'
+        : accent === 'rose'
+          ? 'text-rose-400'
+          : 'text-gray-200'
   return (
     <div className="px-3 py-2 rounded border border-gray-800 bg-gray-900/40">
       <div className="text-[10px] uppercase tracking-wider text-gray-500">
@@ -236,4 +235,21 @@ function Stat({
       <div className={`text-base font-semibold mt-0.5 ${valueClass}`}>{value}</div>
     </div>
   )
+}
+
+/** Pastille de recevabilité §3.6 : recevable / à signaler / non recevable. */
+function RecevabiliteBadge({ level }: { level: RecevabiliteLevel }) {
+  if (level === 'ok') {
+    return <Check size={14} className="inline text-emerald-400" aria-label={RECEVABILITE_LABEL.ok} />
+  }
+  if (level === 'warn') {
+    return (
+      <AlertTriangle
+        size={14}
+        className="inline text-amber-400"
+        aria-label={RECEVABILITE_LABEL.warn}
+      />
+    )
+  }
+  return <X size={14} className="inline text-rose-400" aria-label={RECEVABILITE_LABEL.bad} />
 }

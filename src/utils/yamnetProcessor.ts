@@ -1,32 +1,150 @@
 /**
- * Pipeline de classification audio YAMNet — entièrement client-side.
+ * Pipeline de classification audio YAMNet — 100 % client-side.
  *
- *  1. Le modèle YAMNet est chargé depuis TF Hub via `tf.loadGraphModel`
- *     (mis en cache navigateur après le premier chargement).
- *  2. L'AudioBuffer est ramené à mono 16 kHz via `OfflineAudioContext`
- *     (resampling natif, beaucoup plus rapide que la lecture temps réel).
- *  3. L'audio est découpé en segments de 1 seconde (16 000 échantillons).
- *  4. Pour chaque segment : forward pass → score moyen sur les frames →
- *     classe top-1 → mapping vers une des 7 catégories AcoustiQ.
- *  5. Traitement par blocs de 60 segments avec un `await setTimeout(0)`
- *     pour rendre la main à l'UI et mettre à jour la progress bar.
+ * Aligné sur le standalone yamnet_classifier_standalone.html :
+ *  1. AudioBuffer → mono 16 kHz via OfflineAudioContext (resampling natif).
+ *  2. Backend TensorFlow.js forcé sur CPU (fiabilité maximale ; évite les
+ *     bugs WebGL/WebGPU selon les pilotes / GPU intégrés).
+ *  3. Inférence par chunks de 240 s → scores de frames YAMNet (hop ≈ 0,48 s),
+ *     de shape [N_frames, 521], concaténés.
+ *  4. Segmentation configurable (durée + chevauchement). Pour chaque segment :
+ *       moyenne des scores de frames par classe
+ *       → somme par catégorie (mapping 521 → 7)
+ *       → normalisation (somme = 1)
+ *       → catégorie dominante (argmax) + drapeau « incertain » sous le seuil.
  *
- * Le modèle expose 3 sorties [scores, embeddings, log-mel] ; on n'utilise
- * que la première (scores) qui est de shape [N_frames, 521].
+ * Le modèle YAMNet expose [scores, embeddings, log-mel] ; on prend la sortie
+ * dont la dernière dimension vaut 521 (les scores).
  */
 import * as tf from '@tensorflow/tfjs'
-import { mapYamnetIndex, type CategoryMapping } from './yamnetMapping'
+import {
+  CATEGORIES,
+  CATEGORY_IDS,
+  CLASS_NAMES,
+  CLASS_TO_CAT,
+  INDETERMINE_ID,
+  type CategoryId,
+} from '../data/yamnetCategories'
 
 const TARGET_RATE = 16000
-const FRAME_SAMPLES = 16000 // 1 seconde
-const MODEL_URL = 'https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1'
+/** Hop natif YAMNet entre frames (s). */
+const FRAME_HOP = 0.48
+/** Taille de chunk d'inférence (s) pour borner la RAM. */
+const CHUNK_SECONDS = 240
+/** Couleur des segments incertains (= catégorie « Indéterminé »). */
+const UNCERTAIN_COLOR = CATEGORIES[INDETERMINE_ID].color
 
-// Module-level cache pour ne charger le modèle qu'une fois par session
+/** Sources du modèle, essayées dans l'ordre. */
+const MODEL_CANDIDATES: { url: string; opts: tf.io.LoadOptions }[] = [
+  { url: 'https://tfhub.dev/google/tfjs-model/yamnet/tfjs/1', opts: { fromTFHub: true } },
+  { url: 'https://storage.googleapis.com/tfjs-models/savedmodel/yamnet/model.json', opts: {} },
+]
+
+// ─── Paramètres par défaut (alignés sur le standalone) ──────────────────────
+export const DEFAULT_SEGMENT_DURATION = 5 // s (plage 1–10)
+export const DEFAULT_OVERLAP = 0 // 0 | 0.25 | 0.5 | 0.75
+export const DEFAULT_THRESHOLD = 0.3 // 30 % (plage 0–0.8)
+
+// ─── Types publics ──────────────────────────────────────────────────────────
+
+export interface SegmentTopClass {
+  name: string
+  /** Score brut YAMNet (moyenne sur les frames du segment). */
+  score: number
+  /** Catégorie (1..7) de cette classe. */
+  catId: number
+}
+
+export interface ClassifiedSegment {
+  /** Début du segment depuis le début de l'audio (s). */
+  timeStart: number
+  /** Fin du segment depuis le début de l'audio (s). */
+  timeEnd: number
+  /** Catégorie dominante (id "1".."7"). */
+  dominantCat: CategoryId
+  /** Nom affiché : catégorie dominante, ou « Incertain » sous le seuil. */
+  category: string
+  /** Couleur d'affichage (catégorie dominante, ou gris si incertain). */
+  color: string
+  /** Score normalisé de la catégorie dominante (0–1). */
+  score: number
+  /** Vrai si le score dominant est sous le seuil de confiance. */
+  uncertain: boolean
+  /** Scores normalisés par catégorie (somme = 1). */
+  catScores: Record<CategoryId, number>
+  /** Top 3 des classes YAMNet brutes du segment. */
+  top3: SegmentTopClass[]
+}
+
+export interface ClassifyOptions {
+  /** Durée de segment (s) — défaut 5. */
+  segmentDuration?: number
+  /** Chevauchement 0–0,75 — défaut 0. */
+  overlap?: number
+  /** Seuil de confiance 0–1 — défaut 0,30. */
+  threshold?: number
+  /** Plage à analyser : début (s) — défaut 0. */
+  rangeStartSec?: number
+  /** Plage à analyser : durée (s) — défaut totalité. */
+  rangeDurationSec?: number
+  onModelLoading?: () => void
+  onModelReady?: () => void
+  onProgress?: (progress: number) => void
+  /** Journal technique (panneau diagnostic). */
+  onLog?: (level: 'info' | 'warn' | 'error' | 'success', msg: string) => void
+  signal?: AbortSignal
+}
+
+// ─── Backend + modèle ───────────────────────────────────────────────────────
+
 let modelPromise: Promise<tf.GraphModel> | null = null
+let loadedModelUrl = ''
+let backendName = ''
 
-export async function loadYamnetModel(): Promise<tf.GraphModel> {
+export function getYamnetDiagnostics(): { backend: string; modelUrl: string } {
+  return { backend: backendName, modelUrl: loadedModelUrl }
+}
+
+async function ensureCpuBackend(
+  log?: ClassifyOptions['onLog'],
+): Promise<void> {
+  await tf.ready()
+  log?.('info', `Backend TF.js initial : ${tf.getBackend()}`)
+  try {
+    await tf.setBackend('cpu')
+    await tf.ready()
+    log?.('info', 'Backend forcé sur CPU (fiabilité maximale, ~2–3× plus lent que WebGL)')
+  } catch (e) {
+    log?.('warn', `Impossible de forcer CPU : ${(e as Error).message || e}`)
+  }
+  backendName = tf.getBackend()
+}
+
+async function loadYamnetModel(
+  log?: ClassifyOptions['onLog'],
+): Promise<tf.GraphModel> {
   if (modelPromise) return modelPromise
-  modelPromise = tf.loadGraphModel(MODEL_URL, { fromTFHub: true })
+  modelPromise = (async () => {
+    await ensureCpuBackend(log)
+    let lastErr: unknown = null
+    for (const c of MODEL_CANDIDATES) {
+      try {
+        const m = await tf.loadGraphModel(c.url, c.opts)
+        loadedModelUrl = c.url
+        log?.('success', `Modèle YAMNet chargé : ${c.url}`)
+        return m
+      } catch (e) {
+        lastErr = e
+        log?.('warn', `Échec du chargement (${c.url}) : ${(e as Error).message}`)
+      }
+    }
+    modelPromise = null // permettre une nouvelle tentative
+    throw new Error(
+      `Chargement du modèle YAMNet impossible. ${
+        lastErr instanceof Error ? lastErr.message : ''
+      }`,
+    )
+  })()
   return modelPromise
 }
 
@@ -35,111 +153,128 @@ export async function loadYamnetModel(): Promise<tf.GraphModel> {
  * Float32Array mono 16 kHz via OfflineAudioContext (resampling natif rapide).
  */
 export async function resampleToMono16k(buffer: AudioBuffer): Promise<Float32Array> {
-  const targetLength = Math.ceil(buffer.duration * TARGET_RATE)
-  const offline = new OfflineAudioContext(1, targetLength, TARGET_RATE)
-
-  let mono: AudioBuffer
-  if (buffer.numberOfChannels === 1) {
-    mono = buffer
-  } else {
-    // Mixage downmix → 1 canal (moyenne)
-    mono = offline.createBuffer(1, buffer.length, buffer.sampleRate)
-    const out = mono.getChannelData(0)
-    for (let c = 0; c < buffer.numberOfChannels; c++) {
-      const data = buffer.getChannelData(c)
-      for (let i = 0; i < buffer.length; i++) {
-        out[i] += data[i] / buffer.numberOfChannels
-      }
-    }
+  // Downmix mono d'abord (moyenne des canaux), au sample rate d'origine.
+  const lenSrc = buffer.length
+  const numCh = buffer.numberOfChannels
+  const monoSrc = new Float32Array(lenSrc)
+  for (let ch = 0; ch < numCh; ch++) {
+    const data = buffer.getChannelData(ch)
+    for (let i = 0; i < lenSrc; i++) monoSrc[i] += data[i] / numCh
   }
+  if (buffer.sampleRate === TARGET_RATE) return monoSrc
 
+  const offline = new OfflineAudioContext(
+    1,
+    Math.ceil(buffer.duration * TARGET_RATE),
+    TARGET_RATE,
+  )
+  const monoBuf = offline.createBuffer(1, lenSrc, buffer.sampleRate)
+  monoBuf.getChannelData(0).set(monoSrc)
   const source = offline.createBufferSource()
-  source.buffer = mono
+  source.buffer = monoBuf
   source.connect(offline.destination)
   source.start(0)
   const rendered = await offline.startRendering()
   return rendered.getChannelData(0).slice()
 }
 
-// ─── Types publics ──────────────────────────────────────────────────────────
-
-export interface ClassifiedSegment {
-  /** Début du segment depuis le début de l'audio (secondes) */
-  timeStart: number
-  /** Fin du segment depuis le début de l'audio (secondes) */
-  timeEnd: number
-  /** Catégorie AcoustiQ (parmi les 7 + Autre) */
-  category: CategoryMapping['category']
-  /** Couleur associée (hex) */
-  color: string
-  /** Score de confiance 0–1 (probabilité du top class) */
-  score: number
-  /** Index brut YAMNet (0–520) */
-  rawIndex: number
-  /** Nom brut YAMNet (best-effort, sinon "class_<idx>") */
-  rawClass: string
-}
-
-export interface ClassifyOptions {
-  /** Notifié dès que le chargement du modèle commence (UI : "Chargement…") */
-  onModelLoading?: () => void
-  /** Notifié quand le modèle est prêt (UI : "Analyse en cours…") */
-  onModelReady?: () => void
-  /** Progression : 0..1 */
-  onProgress?: (progress: number) => void
-  /** Plage à analyser : début (s) — défaut 0 */
-  rangeStartSec?: number
-  /** Plage à analyser : durée (s) — défaut totalité */
-  rangeDurationSec?: number
-  /** Annulation utilisateur */
-  signal?: AbortSignal
-}
-
-// ─── Noms YAMNet (best-effort, lazy-fetch) ──────────────────────────────────
-const CLASS_MAP_URL =
-  'https://raw.githubusercontent.com/tensorflow/models/master/research/audioset/yamnet/yamnet_class_map.csv'
-let classNamesPromise: Promise<string[]> | null = null
-
-async function loadClassNames(): Promise<string[]> {
-  if (classNamesPromise) return classNamesPromise
-  classNamesPromise = (async () => {
-    try {
-      const res = await fetch(CLASS_MAP_URL)
-      if (!res.ok) return []
-      const csv = await res.text()
-      const lines = csv.split('\n').slice(1)
-      const names: string[] = []
-      for (const line of lines) {
-        // Format CSV: index,mid,display_name
-        const parts = parseCsvLine(line)
-        if (parts.length >= 3) names.push(parts[2])
-      }
-      return names
-    } catch {
-      return []
-    }
-  })()
-  return classNamesPromise
-}
-
-function parseCsvLine(line: string): string[] {
-  const out: string[] = []
-  let cur = ''
-  let inQ = false
-  for (let i = 0; i < line.length; i++) {
-    const c = line[i]
-    if (inQ) {
-      if (c === '"' && line[i + 1] === '"') { cur += '"'; i++ }
-      else if (c === '"') inQ = false
-      else cur += c
-    } else {
-      if (c === '"') inQ = true
-      else if (c === ',') { out.push(cur); cur = '' }
-      else cur += c
-    }
+/** Inférence d'un chunk → scores de frames [N_frames][521]. */
+async function inferChunk(
+  model: tf.GraphModel,
+  wave: Float32Array,
+): Promise<number[][]> {
+  const input = tf.tensor1d(wave, 'float32')
+  let output: tf.Tensor | tf.Tensor[]
+  try {
+    output = model.predict(input) as tf.Tensor | tf.Tensor[]
+  } catch {
+    // Certaines versions exposent execute({waveform})
+    output = model.execute({ waveform: input }) as tf.Tensor | tf.Tensor[]
   }
-  out.push(cur)
-  return out
+  const tensors = Array.isArray(output) ? output : [output]
+  let scoresT: tf.Tensor =
+    tensors.find((t) => t.shape[t.shape.length - 1] === 521) ?? tensors[0]
+  const arr = (await scoresT.array()) as number[] | number[][]
+  input.dispose()
+  tensors.forEach((t) => t.dispose())
+  // [N,521] attendu ; si 1D (un seul frame), on enveloppe.
+  return Array.isArray(arr[0]) ? (arr as number[][]) : [arr as number[]]
+}
+
+/** Agrège les scores de frames en segments configurables. */
+function buildSegments(
+  allFrames: number[][],
+  opts: Required<
+    Pick<ClassifyOptions, 'segmentDuration' | 'overlap' | 'threshold' | 'rangeStartSec'>
+  >,
+): ClassifiedSegment[] {
+  const { segmentDuration: segDur, overlap, threshold, rangeStartSec: offset } = opts
+  const stepDur = segDur * (1 - overlap)
+  const totalDur = allFrames.length * FRAME_HOP
+  const numClasses = 521
+
+  const segments: ClassifiedSegment[] = []
+  for (let segStart = 0; segStart < totalDur; segStart += stepDur) {
+    const segEnd = Math.min(segStart + segDur, totalDur)
+    if (segEnd - segStart < segDur * 0.5) break // segment final trop court
+    const frameStart = Math.floor(segStart / FRAME_HOP)
+    const frameEnd = Math.min(Math.ceil(segEnd / FRAME_HOP), allFrames.length)
+    if (frameEnd <= frameStart) continue
+    const nF = frameEnd - frameStart
+
+    // Moyenne des scores de frames par classe.
+    const meanScores = new Float32Array(numClasses)
+    for (let f = frameStart; f < frameEnd; f++) {
+      const fs = allFrames[f]
+      for (let k = 0; k < numClasses; k++) meanScores[k] += fs[k] / nF
+    }
+
+    // Somme par catégorie puis normalisation.
+    const catScores = {} as Record<CategoryId, number>
+    for (const id of CATEGORY_IDS) catScores[id] = 0
+    for (let k = 0; k < numClasses; k++) {
+      const cat = String(CLASS_TO_CAT[k]) as CategoryId
+      catScores[cat] += meanScores[k]
+    }
+    let sumCat = 0
+    for (const id of CATEGORY_IDS) sumCat += catScores[id]
+    sumCat = sumCat || 1
+    for (const id of CATEGORY_IDS) catScores[id] /= sumCat
+
+    // Catégorie dominante.
+    let dominantCat: CategoryId = INDETERMINE_ID
+    let dominantScore = 0
+    for (const id of CATEGORY_IDS) {
+      if (catScores[id] > dominantScore) {
+        dominantScore = catScores[id]
+        dominantCat = id
+      }
+    }
+    const uncertain = dominantScore < threshold
+
+    // Top 3 classes brutes.
+    const order = Array.from(meanScores.keys()).sort(
+      (a, b) => meanScores[b] - meanScores[a],
+    )
+    const top3: SegmentTopClass[] = order.slice(0, 3).map((k) => ({
+      name: CLASS_NAMES[k] ?? `class_${k}`,
+      score: meanScores[k],
+      catId: CLASS_TO_CAT[k],
+    }))
+
+    segments.push({
+      timeStart: offset + segStart,
+      timeEnd: offset + segEnd,
+      dominantCat,
+      category: uncertain ? 'Incertain' : CATEGORIES[dominantCat].name,
+      color: uncertain ? UNCERTAIN_COLOR : CATEGORIES[dominantCat].color,
+      score: dominantScore,
+      uncertain,
+      catScores,
+      top3,
+    })
+  }
+  return segments
 }
 
 // ─── Classification ─────────────────────────────────────────────────────────
@@ -148,8 +283,9 @@ export async function classifyAudio(
   buffer: AudioBuffer,
   options: ClassifyOptions = {},
 ): Promise<ClassifiedSegment[]> {
+  const log = options.onLog
   options.onModelLoading?.()
-  const [model, classNames] = await Promise.all([loadYamnetModel(), loadClassNames()])
+  const model = await loadYamnetModel(log)
   options.onModelReady?.()
 
   const samples = await resampleToMono16k(buffer)
@@ -159,107 +295,86 @@ export async function classifyAudio(
     options.rangeDurationSec !== undefined
       ? Math.min(options.rangeDurationSec, buffer.duration - startSec)
       : buffer.duration - startSec
-
   const startSample = Math.floor(startSec * TARGET_RATE)
-  const endSample = Math.min(samples.length, startSample + Math.floor(durSec * TARGET_RATE))
-  const totalSegments = Math.max(0, Math.ceil((endSample - startSample) / FRAME_SAMPLES))
+  const endSample = Math.min(
+    samples.length,
+    startSample + Math.floor(durSec * TARGET_RATE),
+  )
+  const wave = samples.subarray(startSample, endSample)
+  log?.('info', `Audio : ${durSec.toFixed(0)} s à 16 kHz (${wave.length} échantillons)`)
 
-  const out: ClassifiedSegment[] = []
-  const padded = new Float32Array(FRAME_SAMPLES)
+  // Inférence par chunks.
+  const chunkSamples = CHUNK_SECONDS * TARGET_RATE
+  const totalChunks = Math.max(1, Math.ceil(wave.length / chunkSamples))
+  log?.('info', `Inférence en ${totalChunks} chunk(s) de ${CHUNK_SECONDS} s max`)
 
-  for (let segIdx = 0; segIdx < totalSegments; segIdx++) {
+  const allFrames: number[][] = []
+  for (let c = 0; c < totalChunks; c++) {
     if (options.signal?.aborted) break
-
-    const a = startSample + segIdx * FRAME_SAMPLES
-    const b = Math.min(endSample, a + FRAME_SAMPLES)
-    const slice = samples.subarray(a, b)
-    let chunk: Float32Array
-    if (slice.length === FRAME_SAMPLES) {
-      chunk = slice
-    } else {
-      padded.fill(0)
-      padded.set(slice)
-      chunk = padded
-    }
-
-    // Forward pass — tf.tidy nettoie tous les tensors intermédiaires
-    const meanScores = tf.tidy(() => {
-      const input = tf.tensor1d(chunk)
-      const output = model.predict(input) as tf.Tensor | tf.Tensor[]
-      // YAMNet renvoie [scores, embeddings, spectrogram] sur certaines versions,
-      // ou un seul Tensor scores. On prend la sortie de plus haut rang qui ait
-      // 521 dans sa dernière dimension.
-      const tensors = Array.isArray(output) ? output : [output]
-      let scoresT: tf.Tensor | null = null
-      for (const t of tensors) {
-        const last = t.shape[t.shape.length - 1]
-        if (last === 521) {
-          scoresT = t
-          break
-        }
-      }
-      if (!scoresT) scoresT = tensors[0]
-      // Si rang ≥ 2, mean sur l'axe 0 (frames) ; sinon déjà 1D
-      const meanT = scoresT.rank >= 2 ? scoresT.mean(0) : scoresT
-      return meanT.dataSync() as Float32Array
-    })
-
-    // Top-1
-    let maxIdx = 0
-    let maxVal = -Infinity
-    for (let i = 0; i < meanScores.length; i++) {
-      if (meanScores[i] > maxVal) {
-        maxVal = meanScores[i]
-        maxIdx = i
-      }
-    }
-
-    const mapping = mapYamnetIndex(maxIdx)
-    out.push({
-      timeStart: a / TARGET_RATE,
-      timeEnd: b / TARGET_RATE,
-      category: mapping.category,
-      color: mapping.color,
-      score: Math.max(0, Math.min(1, maxVal)),
-      rawIndex: maxIdx,
-      rawClass: classNames[maxIdx] ?? `class_${maxIdx}`,
-    })
-
-    // Yield à l'UI tous les 60 segments pour éviter le blocage
-    if ((segIdx + 1) % 60 === 0 || segIdx === totalSegments - 1) {
-      options.onProgress?.((segIdx + 1) / totalSegments)
-      // microtask + setTimeout(0) pour laisser respirer le navigateur
-      await new Promise<void>((r) => setTimeout(r, 0))
-    }
+    const a = c * chunkSamples
+    const b = Math.min(wave.length, a + chunkSamples)
+    const t0 = performance.now()
+    const frames = await inferChunk(model, wave.subarray(a, b))
+    for (const fr of frames) allFrames.push(fr)
+    log?.(
+      'info',
+      `Chunk ${c + 1}/${totalChunks} : ${frames.length} frames en ${(
+        (performance.now() - t0) / 1000
+      ).toFixed(2)} s`,
+    )
+    options.onProgress?.(((c + 1) / totalChunks) * 0.92)
+    await new Promise<void>((r) => setTimeout(r, 0))
   }
 
+  if (options.signal?.aborted) {
+    log?.('warn', 'Analyse interrompue.')
+    return []
+  }
+
+  const segments = buildSegments(allFrames, {
+    segmentDuration: options.segmentDuration ?? DEFAULT_SEGMENT_DURATION,
+    overlap: options.overlap ?? DEFAULT_OVERLAP,
+    threshold: options.threshold ?? DEFAULT_THRESHOLD,
+    rangeStartSec: startSec,
+  })
   options.onProgress?.(1)
-  return out
+  log?.('success', `${segments.length} segment(s) classifié(s)`)
+  return segments
 }
 
-// ─── Helpers post-traitement (résumé / export) ──────────────────────────────
+// ─── Post-traitement (résumé / export) ───────────────────────────────────────
 
 export interface CategoryStat {
-  category: CategoryMapping['category']
+  /** id "1".."7" ou "uncertain". */
+  key: string
+  label: string
   color: string
   seconds: number
   fraction: number
 }
 
+/**
+ * Distribution temporelle par catégorie dominante (les segments incertains
+ * forment leur propre bucket « Incertain »).
+ */
 export function summarizeByCategory(segments: ClassifiedSegment[]): CategoryStat[] {
-  const totals = new Map<string, { color: string; seconds: number }>()
+  const totals = new Map<string, { label: string; color: string; seconds: number }>()
   let total = 0
   for (const s of segments) {
     const dur = s.timeEnd - s.timeStart
     total += dur
-    const existing = totals.get(s.category)
+    const key = s.uncertain ? 'uncertain' : s.dominantCat
+    const label = s.uncertain ? 'Incertain' : CATEGORIES[s.dominantCat].name
+    const color = s.color
+    const existing = totals.get(key)
     if (existing) existing.seconds += dur
-    else totals.set(s.category, { color: s.color, seconds: dur })
+    else totals.set(key, { label, color, seconds: dur })
   }
   const out: CategoryStat[] = []
-  for (const [category, v] of totals) {
+  for (const [key, v] of totals) {
     out.push({
-      category: category as CategoryMapping['category'],
+      key,
+      label: v.label,
       color: v.color,
       seconds: v.seconds,
       fraction: total > 0 ? v.seconds / total : 0,
@@ -270,18 +385,31 @@ export function summarizeByCategory(segments: ClassifiedSegment[]): CategoryStat
 }
 
 export function segmentsToCSV(segments: ClassifiedSegment[]): string {
-  const headers = ['time_start_s', 'time_end_s', 'category', 'score', 'raw_class_name']
+  const headers = [
+    'time_start_s',
+    'time_end_s',
+    'categorie_dominante',
+    'score_dominant',
+    'incertain',
+    ...CATEGORY_IDS.map((id) => `pct_${CATEGORIES[id].short}`),
+    'top1',
+    'top2',
+    'top3',
+  ]
   const lines = [headers.join(',')]
+  const q = (s: string) => `"${String(s).replace(/"/g, '""')}"`
   for (const s of segments) {
     lines.push(
       [
         s.timeStart.toFixed(2),
         s.timeEnd.toFixed(2),
-        `"${s.category}"`,
+        q(s.uncertain ? 'Incertain' : CATEGORIES[s.dominantCat].name),
         s.score.toFixed(4),
-        `"${s.rawClass.replace(/"/g, '""')}"`,
+        s.uncertain ? 'oui' : 'non',
+        ...CATEGORY_IDS.map((id) => (s.catScores[id] * 100).toFixed(1)),
+        ...s.top3.map((t) => q(`${t.name} (${(t.score * 100).toFixed(0)}%)`)),
       ].join(','),
     )
   }
-  return '\uFEFF' + lines.join('\n')
+  return '﻿' + lines.join('\n')
 }

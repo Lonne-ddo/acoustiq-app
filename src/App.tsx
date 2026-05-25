@@ -115,6 +115,7 @@ import SiteMap from './components/SiteMap'
 import Settings from './components/Settings'
 import UserMenu from './components/UserMenu'
 import { AUTH_ENABLED } from './config/auth'
+import { FEATURES } from './config/features'
 import ShortcutsModal from './components/ShortcutsModal'
 import Onboarding, { shouldShowOnboarding, resetOnboarding } from './components/Onboarding'
 import Changelog from './components/Changelog'
@@ -260,28 +261,30 @@ const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
   meteo: 'outils',
 }
 
-// Feature flags — modules masqués temporairement sans suppression du code.
-// Passer à `true` pour réactiver le module (+ décommenter l'entrée correspondante dans SUBTABS).
-const ENABLED_CARRIERE = false
-
+// Sous-onglets dérivés des feature flags (src/config/features.ts).
+// Les onglets désactivés sont retirés de la navigation ; leur code reste intact.
+// Un onglet primaire dont la liste de sous-onglets est vide est masqué entièrement
+// (cf. barre d'onglets primaires plus bas, filtrée sur `SUBTABS[pid].length > 0`).
 const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
   analyse: [
     { id: 'chart', label: 'Visualisation' },
-    { id: 'lw', label: 'Calcul Lw' },
-    { id: 'isolement', label: 'Isolement' },
-    { id: 'concordance', label: 'Concordance' },
+    ...(FEATURES.calculLw ? [{ id: 'lw' as Tab, label: 'Calcul Lw' }] : []),
+    ...(FEATURES.isolement ? [{ id: 'isolement' as Tab, label: 'Isolement' }] : []),
+    ...(FEATURES.concordance ? [{ id: 'concordance' as Tab, label: 'Concordance' }] : []),
   ],
-  conformite: [{ id: 'reafie', label: 'Conformité 2026' }],
+  conformite: [
+    ...(FEATURES.conformite ? [{ id: 'reafie' as Tab, label: 'Conformité 2026' }] : []),
+  ],
   rapport: [
-    { id: 'report', label: 'Rapport' },
+    ...(FEATURES.rapport ? [{ id: 'report' as Tab, label: 'Rapport' }] : []),
   ],
   outils: [
     { id: 'vue3d', label: 'Vue 3D' },
-    ...(ENABLED_CARRIERE ? [{ id: 'carriere' as Tab, label: 'Carrière / Sablière' }] : []),
+    ...(FEATURES.carriere ? [{ id: 'carriere' as Tab, label: 'Carrière / Sablière' }] : []),
     { id: 'yamnet', label: 'Audio IA' },
-    { id: 'ecme', label: 'Parc ECME' },
+    ...(FEATURES.parcEcme ? [{ id: 'ecme' as Tab, label: 'Parc ECME' }] : []),
     { id: 'meteo', label: 'Météo' },
-    { id: 'map', label: 'Carte' },
+    ...(FEATURES.carte ? [{ id: 'map' as Tab, label: 'Carte' }] : []),
     { id: 'regulation', label: 'Réglementation' },
     { id: 'history', label: 'Historique' },
   ],
@@ -1432,7 +1435,9 @@ function MainPanel({
             ['conformite', <Shield size={13} key="c" />,     'Conformité'],
             ['rapport',    <FileText size={13} key="r" />,   'Rapport'],
             ['outils',     <Layers size={13} key="o" />,     'Outils'],
-          ] as [PrimaryTab, React.ReactNode, string][]).map(([pid, icon, label]) => {
+          ] as [PrimaryTab, React.ReactNode, string][])
+            .filter(([pid]) => SUBTABS[pid].length > 0)
+            .map(([pid, icon, label]) => {
             const isActive = PRIMARY_TAB_OF[activeTab] === pid
             return (
               <TabButton
@@ -1800,7 +1805,7 @@ function MainPanel({
         </div>
       )}
 
-      {ENABLED_CARRIERE && effectiveTab === 'carriere' && (
+      {FEATURES.carriere && effectiveTab === 'carriere' && (
         <div className="flex-1 min-h-0 overflow-hidden animate-[fadeIn_0.15s_ease-out]">
           <Suspense fallback={<LazyTabFallback label="Carrière" />}>
             <CarrierePage state={carriereState} setState={setCarriereState} />
@@ -2814,7 +2819,7 @@ export default function App() {
 
   // ---- Bascule vers l'onglet Rapport via le menu Exporter du chart ----
   useEffect(() => {
-    const onOpenReport = () => setActiveTab('report')
+    const onOpenReport = () => { if (FEATURES.rapport) setActiveTab('report') }
     document.addEventListener('acoustiq:open-report', onOpenReport)
     return () => document.removeEventListener('acoustiq:open-report', onOpenReport)
   }, [])

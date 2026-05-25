@@ -1,5 +1,5 @@
 // TODO: réactiver quand la fonctionnalité sera validée
-// (masqué via ENABLED_CARRIERE = false dans App.tsx, code conservé intact)
+// (masqué via FEATURES.carriere = false dans src/config/features.ts, code conservé intact)
 /**
  * Page Carrière / Sablière
  *

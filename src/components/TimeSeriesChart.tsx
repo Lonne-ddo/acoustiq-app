@@ -25,6 +25,7 @@ import {
 } from 'recharts'
 import html2canvas from 'html2canvas'
 import { drawQrBadge } from '../utils/qrBadge'
+import { FEATURES } from '../config/features'
 import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3, Play, ChevronDown } from 'lucide-react'
 import ContextMenu from './ContextMenu'
 import { ReferenceDot } from 'recharts'
@@ -1678,18 +1679,22 @@ export default function TimeSeriesChart({
                     <Download size={12} className="text-emerald-400" />
                     Exporter les données brutes en Excel
                   </button>
-                  <div className="border-t border-gray-800 my-1" />
-                  <button
-                    onClick={() => {
-                      setExportOpen(false)
-                      document.dispatchEvent(new CustomEvent('acoustiq:open-report'))
-                    }}
-                    className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-800 flex items-center gap-2"
-                    role="menuitem"
-                  >
-                    <Download size={12} className="text-blue-400" />
-                    Générer le rapport complet…
-                  </button>
+                  {FEATURES.rapport && (
+                    <>
+                      <div className="border-t border-gray-800 my-1" />
+                      <button
+                        onClick={() => {
+                          setExportOpen(false)
+                          document.dispatchEvent(new CustomEvent('acoustiq:open-report'))
+                        }}
+                        className="w-full text-left px-3 py-1.5 text-xs text-gray-200 hover:bg-gray-800 flex items-center gap-2"
+                        role="menuitem"
+                      >
+                        <Download size={12} className="text-blue-400" />
+                        Générer le rapport complet…
+                      </button>
+                    </>
+                  )}
                 </div>
               </>
             )}

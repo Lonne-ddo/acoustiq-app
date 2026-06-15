@@ -406,6 +406,15 @@ export default function TimeSeriesChart({
       return next
     })
   }, [])
+  // Fermeture manuelle de l'astuce (× immédiat, persistant).
+  const TIP_DISMISSED_KEY = 'acoustiq.tip.shiftDrag.dismissed'
+  const [tipDismissed, setTipDismissed] = useState<boolean>(() => {
+    try { return localStorage.getItem(TIP_DISMISSED_KEY) === 'true' } catch { return false }
+  })
+  const dismissTip = useCallback(() => {
+    setTipDismissed(true)
+    try { localStorage.setItem(TIP_DISMISSED_KEY, 'true') } catch { /* ignore */ }
+  }, [])
 
   // ── Sélection non-Shift : création d'une période nommée ─────────────────
   const [periodPx, setPeriodPx] = useState<{ startX: number; endX: number } | null>(null)
@@ -1721,10 +1730,20 @@ export default function TimeSeriesChart({
         </div>
       </div>
 
-      {/* Indice : Shift+drag — masqué après 3 utilisations (persisté localStorage) */}
-      {shiftHintCount < 3 && (
-        <div className="px-6 pt-1 text-[10px] text-gray-600 select-none shrink-0">
-          Astuce : <kbd className="px-1 py-0.5 bg-gray-800 border border-gray-700 rounded">Shift</kbd>+glisser pour mesurer LAeq/L90 sur une plage.
+      {/* Indice : Shift+drag — masqué après 3 utilisations ou fermeture manuelle */}
+      {shiftHintCount < 3 && !tipDismissed && (
+        <div className="px-6 pt-1 text-[10px] text-gray-600 select-none shrink-0 flex items-center gap-1.5">
+          <span>
+            Astuce : <kbd className="px-1 py-0.5 bg-gray-800 border border-gray-700 rounded">Shift</kbd>+glisser pour mesurer LAeq/L90 sur une plage.
+          </span>
+          <button
+            onClick={dismissTip}
+            className="text-gray-600 hover:text-gray-300 transition-colors"
+            title="Ne plus afficher cette astuce"
+            aria-label="Masquer l'astuce"
+          >
+            <X size={11} />
+          </button>
         </div>
       )}
 

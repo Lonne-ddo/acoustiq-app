@@ -412,11 +412,13 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
       return Number.isFinite(n) ? n : undefined
     })() : undefined
 
-    // Spectres 1/3 octave : colonnes nommées par fréquence si détectées,
-    // sinon bloc « LZeq… » / positions fixes (fallback historique).
+    // Spectres : colonnes 1/3 (ou 1/1) LZeq détectées par en-tête, sinon bloc
+    // « LZeq… » / positions fixes (fallback historique).
     let spectra: number[] = []
+    let spectraMax: number[] | undefined
     if (freqCols) {
-      spectra = extractSpectrumRow(row, freqCols) ?? []
+      spectra = extractSpectrumRow(row, freqCols.cols) ?? []
+      if (freqCols.maxCols) spectraMax = extractSpectrumRow(row, freqCols.maxCols) ?? undefined
     } else if (spectraStart >= 0) {
       for (let c = spectraStart; c <= spectraEnd && c < row.length; c++) {
         const v = row[c]
@@ -430,6 +432,7 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
       laeq,
       ...(lceq !== undefined ? { lceq } : {}),
       ...(spectra.length > 0 ? { spectra } : {}),
+      ...(spectraMax && spectraMax.length > 0 ? { spectraMax } : {}),
     })
   }
 

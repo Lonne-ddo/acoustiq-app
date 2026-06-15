@@ -328,11 +328,13 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
       if (Number.isFinite(n)) lceqNum = n
     }
 
-    // Spectres : colonnes nommées par fréquence si détectées, sinon bloc
+    // Spectres : colonnes 1/3 (ou 1/1) LZeq détectées par en-tête, sinon bloc
     // positionnel / LZeq (fallback historique).
     let spectra: number[] = []
+    let spectraMax: number[] | undefined
     if (freqCols) {
-      spectra = extractSpectrumRow(row, freqCols) ?? []
+      spectra = extractSpectrumRow(row, freqCols.cols) ?? []
+      if (freqCols.maxCols) spectraMax = extractSpectrumRow(row, freqCols.maxCols) ?? undefined
     } else if (spectraStart >= 0) {
       for (let c = spectraStart; c <= spectraEnd && c < row.length; c++) {
         const v = row[c]
@@ -346,6 +348,7 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
       laeq,
       ...(lceqNum !== undefined ? { lceq: lceqNum } : {}),
       ...(spectra.length > 0 ? { spectra } : {}),
+      ...(spectraMax && spectraMax.length > 0 ? { spectraMax } : {}),
     })
 
     if (i % 5000 === 0) {
@@ -366,6 +369,9 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
   const spectraFreqs = freqCols
     ? freqCols.freqs
     : nBands === sourceFreqs.length ? sourceFreqs : sourceFreqs.slice(0, nBands)
+
+  // Validation : doit afficher 36 fréquences (tiers d'octave) pour un 831C.
+  console.log('[worker] Bandes détectées:', spectraFreqs, '— premier spectre:', data.find((d) => d.spectra)?.spectra)
 
   const date = metaStartDate || firstDate || ''
 

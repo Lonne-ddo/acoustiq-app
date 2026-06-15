@@ -26,7 +26,8 @@ export interface DataPoint {
   laeq: number
   lceq?: number       // LCeq (pondération C) — utilisé pour le terme Kb
   laftEq?: number     // LAImax / LAFTeq (proxy) — utilisé pour le terme Ki
-  spectra?: number[]  // bandes tiers d'octave si disponibles
+  spectra?: number[]  // bandes tiers/octave LZeq si disponibles (aligné sur spectraFreqs)
+  spectraMax?: number[] // LZFmax par bande (même ordre) si disponible
 }
 
 export interface SourceEvent {

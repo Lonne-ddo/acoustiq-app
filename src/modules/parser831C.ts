@@ -178,11 +178,13 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
     const laftNum = typeof laftVal === 'number' ? laftVal : parseFloat(String(laftVal))
     const laftEq = isNaN(laftNum) ? undefined : laftNum
 
-    // Spectres 1/3 octave : colonnes nommées par fréquence si détectées,
-    // sinon bloc positionnel historique 41–67 (LZeq, 6.3 Hz – 20 kHz).
+    // Spectres : colonnes 1/3 (ou 1/1) LZeq détectées par en-tête, sinon bloc
+    // positionnel historique 41–67 (LZeq, 6.3 Hz – 20 kHz).
     let spectra: number[] = []
+    let spectraMax: number[] | undefined
     if (freqCols) {
-      spectra = extractSpectrumRow(row, freqCols) ?? []
+      spectra = extractSpectrumRow(row, freqCols.cols) ?? []
+      if (freqCols.maxCols) spectraMax = extractSpectrumRow(row, freqCols.maxCols) ?? undefined
     } else {
       for (let c = 41; c <= 67 && c < row.length; c++) {
         const v = row[c]
@@ -197,6 +199,7 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
       ...(lceq !== undefined ? { lceq } : {}),
       ...(laftEq !== undefined ? { laftEq } : {}),
       ...(spectra.length > 0 ? { spectra } : {}),
+      ...(spectraMax && spectraMax.length > 0 ? { spectraMax } : {}),
     })
   }
 
@@ -212,6 +215,10 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
     : nBands === SE831C_FREQ_BANDS.length
       ? SE831C_FREQ_BANDS
       : SE831C_FREQ_BANDS.slice(0, nBands)
+
+  // Validation : doit afficher 36 fréquences (tiers d'octave) et un premier
+  // spectre de 36 valeurs distinctes pour un export 831C.
+  console.log('[831C] Bandes détectées:', spectraFreqs, '— premier spectre:', data.find((d) => d.spectra)?.spectra)
 
   return {
     id: crypto.randomUUID(),

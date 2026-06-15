@@ -414,25 +414,6 @@ function SingleSpectrogram({
     })
     tctx.putImageData(img, 0, 0)
 
-    // [DIAG] bug 1 — vérif couleurs basses fréquences (à retirer après diagnostic).
-    // NB : sp[] contient déjà la pondération A appliquée en amont (A_WEIGHT = 0
-    // pour les bandes < 31.5 Hz, donc valeur ≈ LZeq brut pour celles-ci).
-    {
-      const midSp = sorted[Math.floor(sorted.length / 2)]?.[1]
-      if (midSp) {
-        const dbRange2 = maxDb - minDb || 1
-        console.log('[Spectro low-freq check]', {
-          point: pointName, dbMin: minDb, dbMax: maxDb,
-          lowBands: freqBands.slice(0, 8).map((f, bi) => {
-            const v = midSp[bi]
-            const norm = (v - minDb) / dbRange2
-            const [r, g, b] = colormap(norm, palette)
-            return { freq: f, valueAffichee: Math.round(v * 10) / 10, normalized: Math.round(norm * 100) / 100, rgb: `${r},${g},${b}` }
-          }),
-        })
-      }
-    }
-
     // Dessiner chaque bucket à sa position temporelle exacte
     ctx.imageSmoothingEnabled = false
     const aggMin = aggSec / 60

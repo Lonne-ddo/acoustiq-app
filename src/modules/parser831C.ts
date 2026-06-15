@@ -216,10 +216,6 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
       ? SE831C_FREQ_BANDS
       : SE831C_FREQ_BANDS.slice(0, nBands)
 
-  // Validation : doit afficher 36 fréquences (tiers d'octave) et un premier
-  // spectre de 36 valeurs distinctes pour un export 831C.
-  console.log('[831C] Bandes détectées:', spectraFreqs, '— premier spectre:', data.find((d) => d.spectra)?.spectra)
-
   return {
     id: crypto.randomUUID(),
     name: fileName,

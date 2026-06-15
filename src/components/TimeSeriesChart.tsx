@@ -135,90 +135,6 @@ function shortSlashDate(iso: string): string {
 }
 
 
-/**
- * Calcule des ticks adaptatifs pour l'axe X selon la plage visible.
- * Retourne la liste des labels (sous-ensemble de ceux présents dans visibleData)
- * et un formatter qui supprime ":00" final pour les labels HH:MM:SS.
- *
- * Règles :
- *  - > 4h     : HH:MM, pas de 30 ou 60 min
- *  - 1h – 4h  : HH:MM, pas de 15 ou 30 min
- *  - 15min–1h : HH:MM, pas de 5 ou 10 min
- *  - < 15min  : HH:MM:SS, pas de 1 ou 2 min
- *  - Toujours au moins 4 ticks
- */
-function computeAdaptiveTicks(
-  visibleData: ChartEntry[],
-  rangeMin: number,
-  aggSec: number,
-): { ticks: string[]; formatter: (s: string) => string } {
-  const formatter = (s: string): string => {
-    // Strip trailing :00 from HH:MM:SS labels
-    if (typeof s === 'string' && s.length === 8 && s.endsWith(':00')) return s.slice(0, 5)
-    return s
-  }
-  if (visibleData.length === 0) return { ticks: [], formatter }
-
-  // Pas idéal en secondes selon la plage visible
-  let idealStepSec: number
-  if (rangeMin > 240) idealStepSec = 3600       // 1 h
-  else if (rangeMin > 120) idealStepSec = 1800  // 30 min
-  else if (rangeMin > 60) idealStepSec = 900    // 15 min
-  else if (rangeMin > 30) idealStepSec = 600    // 10 min
-  else if (rangeMin > 15) idealStepSec = 300    // 5 min
-  else if (rangeMin > 5) idealStepSec = 120     // 2 min
-  else idealStepSec = 60                        // 1 min
-
-  // Le pas doit être au moins égal à l'agrégation pour aligner sur les buckets
-  let stepSec = Math.max(idealStepSec, aggSec)
-
-  // Sélection des labels alignés sur le pas
-  const pickByStep = (sec: number): string[] => {
-    const out: string[] = []
-    const seen = new Set<number>()
-    for (const row of visibleData) {
-      const tSec = Math.round(row.t * 60)
-      if (tSec % sec !== 0) continue
-      const k = Math.floor(tSec / sec)
-      if (seen.has(k)) continue
-      seen.add(k)
-      out.push(row.label as string)
-    }
-    return out
-  }
-
-  let ticks = pickByStep(stepSec)
-
-  // Garantir au moins 4 ticks : réduire le pas progressivement
-  const fallbackSteps = [stepSec / 2, stepSec / 3, aggSec]
-  for (const s of fallbackSteps) {
-    if (ticks.length >= 4) break
-    if (s > 0 && Number.isFinite(s)) {
-      ticks = pickByStep(Math.max(1, Math.round(s)))
-      stepSec = Math.max(1, Math.round(s))
-    }
-  }
-
-  // Dernier recours : échantillonnage uniforme sur visibleData
-  if (ticks.length < 4 && visibleData.length >= 4) {
-    ticks = []
-    const n = Math.min(8, visibleData.length)
-    for (let i = 0; i < n; i++) {
-      const idx = Math.round((i * (visibleData.length - 1)) / (n - 1))
-      ticks.push(visibleData[idx].label as string)
-    }
-  }
-
-  // Anti-chevauchement : limite la densité (~1 tick / 60 px → max ~12 ticks pour
-  // une largeur typique de chart). On dégrade en gardant 1 tick sur N.
-  const MAX_TICKS = 12
-  if (ticks.length > MAX_TICKS) {
-    const stride = Math.ceil(ticks.length / MAX_TICKS)
-    ticks = ticks.filter((_, i) => i % stride === 0)
-  }
-
-  return { ticks, formatter }
-}
 
 interface ChartEntry {
   t: number          // minutes (float possible)
@@ -904,12 +820,6 @@ export default function TimeSeriesChart({
     return [Math.floor(lo - 5), Math.ceil(hi + 5)]
   }, [isZoomed, visibleData, lineSpecs, hiddenLines, settingsYMin, settingsYMax])
 
-  // Ticks adaptatifs sur l'axe X
-  const adaptiveTicks = useMemo(
-    () => computeAdaptiveTicks(visibleData, effectiveRange.endMin - effectiveRange.startMin, aggSec),
-    [visibleData, effectiveRange, aggSec],
-  )
-
   /** Formate un temps absolu (minutes) en HH:MM ou DD/MM HH:MM selon le mode
    *  et la portée visible. En multi-jours et vue large (> 1 j) : DD/MM HH:MM.
    *  Sinon : HH:MM. */
@@ -923,10 +833,10 @@ export default function TimeSeriesChart({
     return `${shortSlashDate(dateIso)} ${hhmm}`
   }, [isMultiDay, sortedDates, effectiveRange])
 
-  /** Ticks numériques (minutes absolues) pour l'axe numeric. Fallback sur les
-   *  ticks adaptatifs HH:MM si pas en multi-jours. */
+  /** Ticks numériques (minutes absolues) pour l'axe numérique — utilisé en
+   *  mono-jour comme en multi-jours (l'axe est toujours numérique pour que les
+   *  overlays positionnés en minutes — périodes, événements — se mappent). */
   const numericTicks = useMemo<number[]>(() => {
-    if (!isMultiDay) return []
     const span = effectiveRange.endMin - effectiveRange.startMin
     // Stride en minutes : 1h, 3h, 6h, 12h, 24h selon la portée
     let stride: number
@@ -981,7 +891,13 @@ export default function TimeSeriesChart({
   /** Ancre epoch ms correspondant à l'axe X du graphique (minute 0 = ancre). */
   const chartAnchorMs = useMemo(() => {
     const iso = isMultiDay ? anchorDate : selectedDate
-    return dateMsMidnight(iso)
+    const ms = dateMsMidnight(iso)
+    if (Number.isFinite(ms)) return ms
+    // Fallback : minuit du jour courant. Garantit que création de période ET
+    // rendu (periodBounds) partagent une ancre finie même si la date du fichier
+    // n'est pas au format YYYY-MM-DD.
+    const d = new Date(); d.setHours(0, 0, 0, 0)
+    return d.getTime()
   }, [isMultiDay, anchorDate, selectedDate])
 
   /** Pour une période, retourne ses bornes dans la coord X du graphique, ou null. */
@@ -1836,30 +1752,22 @@ export default function TimeSeriesChart({
                 )
               })}
 
-              {isMultiDay ? (
-                <XAxis
-                  dataKey="t"
-                  type="number"
-                  domain={[effectiveRange.startMin, effectiveRange.endMin]}
-                  allowDataOverflow
-                  tick={{ fontSize: 11, fill: '#9ca3af' }}
-                  tickLine={false}
-                  axisLine={{ stroke: '#374151' }}
-                  ticks={numericTicks}
-                  tickFormatter={(v) => formatAxisLabel(Number(v))}
-                  scale="linear"
-                />
-              ) : (
-                <XAxis
-                  dataKey="label"
-                  tick={{ fontSize: 11, fill: '#9ca3af' }}
-                  tickLine={false}
-                  axisLine={{ stroke: '#374151' }}
-                  interval={0}
-                  ticks={adaptiveTicks.ticks}
-                  tickFormatter={adaptiveTicks.formatter}
-                />
-              )}
+              {/* Axe X toujours numérique (minutes) — indispensable pour que les
+                  overlays positionnés en minutes (bandes de période, événements,
+                  comparaison ON/OFF) se mappent correctement, en mono comme en
+                  multi-jours. */}
+              <XAxis
+                dataKey="t"
+                type="number"
+                domain={[effectiveRange.startMin, effectiveRange.endMin]}
+                allowDataOverflow
+                tick={{ fontSize: 11, fill: '#9ca3af' }}
+                tickLine={false}
+                axisLine={{ stroke: '#374151' }}
+                ticks={numericTicks}
+                tickFormatter={(v) => formatAxisLabel(Number(v))}
+                scale="linear"
+              />
 
               <YAxis
                 yAxisId="left"

@@ -189,25 +189,6 @@ export default function InstantSpectrum({
     return { series: out, title, exportLabel: `spectre_${clock.replace(/:/g, '')}` }
   }, [mode, periods, instantMin, instantSource, isMulti, sortedDates, selectedDate, pointNames, hidden, samplesByPointDate, refFreqs, weighting])
 
-  // [DIAG] bug 2 — pourquoi aucune barre (à retirer après diagnostic).
-  useEffect(() => {
-    const visiblePts = pointNames.filter((pt) => !hidden.has(pt))
-    const dayIndex = isMulti && instantMin != null ? Math.floor(instantMin / 1440) : 0
-    const date = isMulti ? (sortedDates[dayIndex] ?? selectedDate) : selectedDate
-    const tIn = instantMin != null ? (isMulti ? instantMin - dayIndex * 1440 : instantMin) : null
-    const pt0 = visiblePts[0]
-    const samples0 = pt0 ? samplesByPointDate.get(`${pt0}|${date}`) : undefined
-    const sp0 = samples0 && tIn != null ? spectrumAtInstant(samples0, tIn) : null
-    console.log('[InstantSpectrum render]', {
-      mode, cursorTime: instantMin, instantSource, visiblePts, date, tIn,
-      refFreqsLen: refFreqs.length, refFreqsSample: refFreqs.slice(0, 6),
-      samplesForPt0: samples0?.length ?? 0,
-      spectrumAtInstantSample: sp0?.slice(0, 6) ?? null,
-      barsToRender: series.length,
-      seriesLeqSample: series[0]?.leq?.slice(0, 6) ?? null,
-    })
-  }, [series, instantMin, instantSource, mode, pointNames, hidden, isMulti, sortedDates, selectedDate, samplesByPointDate, refFreqs])
-
   // ── Auto échelle dB ────────────────────────────────────────────────────────
   const autoScale = useCallback(() => {
     let lo = Infinity, hi = -Infinity

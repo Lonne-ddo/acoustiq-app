@@ -370,9 +370,6 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     ? freqCols.freqs
     : nBands === sourceFreqs.length ? sourceFreqs : sourceFreqs.slice(0, nBands)
 
-  // Validation : doit afficher 36 fréquences (tiers d'octave) pour un 831C.
-  console.log('[worker] Bandes détectées:', spectraFreqs, '— premier spectre:', data.find((d) => d.spectra)?.spectra)
-
   const date = metaStartDate || firstDate || ''
 
   return {

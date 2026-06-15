@@ -39,29 +39,59 @@ export interface SourceEvent {
 
 export type ConcordanceState = 'Confirmé' | 'Incertain' | 'Non visible'
 
-/** Statut d'une période :
- *   - include / exclude : filtrent les données pour le calcul des indices
- *   - annotate : purement documentaire, n'affecte pas les calculs
- */
+/** Ancien statut d'une période — conservé uniquement pour la migration douce
+ *  des projets au format pré-catégories. */
 export type PeriodStatus = 'include' | 'exclude' | 'annotate'
 
-/** Palette de couleurs proposée pour une période annotée (ou autre usage). */
+/** Palette de couleurs proposée pour les catégories de périodes. */
 export const PERIOD_PALETTE: string[] = [
+  '#22c55e', // vert
   '#3b82f6', // bleu
+  '#ef4444', // rouge
+  '#eab308', // jaune
   '#f97316', // orange
   '#a855f7', // violet
   '#14b8a6', // teal
-  '#eab308', // jaune
   '#ec4899', // rose
   '#6b7280', // gris
 ]
 
 /**
- * Période nommée — sélectionnée par l'utilisateur sur le graphique. Les
- * périodes « include » / « exclude » filtrent les données utilisées pour
- * le calcul des indices acoustiques (LAeq, L10…) ; les périodes
- * « annotate » documentent une zone sans l'affecter. Les timestamps
- * sont stockés en epoch ms pour gérer les plages qui traversent minuit.
+ * Catégorie de périodes — nommable, colorable, avec un toggle « inclus dans
+ * les calculs ». Les indices acoustiques sont calculés sur l'union des
+ * périodes appartenant à des catégories `included === true && isAnnotation === false`.
+ */
+export interface Category {
+  id: string
+  name: string
+  color: string
+  /** La catégorie est-elle incluse dans le calcul des indices ? */
+  included: boolean
+  /** true = purement visuelle (documentaire) — n'affecte jamais les calculs. */
+  isAnnotation: boolean
+}
+
+/** Identifiants stables des 4 catégories par défaut (clé de migration). */
+export const DEFAULT_CATEGORY_IDS = {
+  ambiant: 'cat-ambiant',
+  residuel: 'cat-residuel',
+  exclure: 'cat-exclure',
+  annotation: 'cat-annotation',
+} as const
+
+/** Crée les 4 catégories par défaut d'un nouveau projet. */
+export function makeDefaultCategories(): Category[] {
+  return [
+    { id: DEFAULT_CATEGORY_IDS.ambiant, name: 'Ambiant', color: '#22c55e', included: true, isAnnotation: false },
+    { id: DEFAULT_CATEGORY_IDS.residuel, name: 'Résiduel', color: '#3b82f6', included: true, isAnnotation: false },
+    { id: DEFAULT_CATEGORY_IDS.exclure, name: 'À exclure', color: '#ef4444', included: false, isAnnotation: false },
+    { id: DEFAULT_CATEGORY_IDS.annotation, name: 'Annotation', color: '#eab308', included: true, isAnnotation: true },
+  ]
+}
+
+/**
+ * Période nommée — assignée à une catégorie. Les timestamps sont stockés en
+ * epoch ms pour gérer les plages qui traversent minuit.
  */
 export interface Period {
   id: string
@@ -70,11 +100,66 @@ export interface Period {
   startMs: number
   /** Epoch ms (exclus) */
   endMs: number
-  status: PeriodStatus
-  /** Couleur d'affichage — utilisée surtout pour les annotations */
-  color?: string
-  /** Commentaire libre (uniquement pour status='annotate') */
-  comment?: string
+  /** Référence à une Category */
+  categoryId: string
+  /** Commentaire / note libre (optionnel) */
+  notes?: string
+}
+
+/** Migre une période ancien format (status) vers le format catégorie. */
+function migratePeriodRaw(p: Record<string, unknown>): Period | null {
+  const startMs = Number(p.startMs)
+  const endMs = Number(p.endMs)
+  if (!Number.isFinite(startMs) || !Number.isFinite(endMs)) return null
+  const id = typeof p.id === 'string' && p.id ? p.id : crypto.randomUUID()
+  const name = typeof p.name === 'string' ? p.name : 'Période'
+  const notes = typeof p.notes === 'string' ? p.notes
+    : typeof p.comment === 'string' ? p.comment : undefined
+  if (typeof p.categoryId === 'string' && p.categoryId) {
+    return { id, name, startMs, endMs, categoryId: p.categoryId, notes }
+  }
+  const map: Record<string, string> = {
+    include: DEFAULT_CATEGORY_IDS.ambiant,
+    exclude: DEFAULT_CATEGORY_IDS.exclure,
+    annotate: DEFAULT_CATEGORY_IDS.annotation,
+  }
+  const status = typeof p.status === 'string' ? p.status : 'include'
+  return { id, name, startMs, endMs, categoryId: map[status] ?? DEFAULT_CATEGORY_IDS.ambiant, notes }
+}
+
+/**
+ * Normalise catégories + périodes au chargement d'un projet (migration douce) :
+ *   - périodes ancien format (status) → categoryId via les ids par défaut ;
+ *   - catégories absentes → les 4 par défaut ;
+ *   - ajoute toute catégorie par défaut référencée mais manquante ;
+ *   - réaffecte les périodes orphelines à la 1re catégorie.
+ */
+export function normalizeProjectPeriods(
+  rawCategories: unknown,
+  rawPeriods: unknown,
+): { categories: Category[]; periods: Period[] } {
+  const periods = Array.isArray(rawPeriods)
+    ? rawPeriods.map((p) => migratePeriodRaw(p as Record<string, unknown>)).filter((p): p is Period => p !== null)
+    : []
+  let categories: Category[] = Array.isArray(rawCategories) && rawCategories.length
+    ? (rawCategories as Array<Record<string, unknown>>).map((c) => ({
+        id: String(c.id),
+        name: typeof c.name === 'string' ? c.name : 'Catégorie',
+        color: typeof c.color === 'string' ? c.color : PERIOD_PALETTE[0],
+        included: c.included !== false,
+        isAnnotation: !!c.isAnnotation,
+      }))
+    : []
+  if (categories.length === 0) categories = makeDefaultCategories()
+  const have = new Set(categories.map((c) => c.id))
+  const defaults = makeDefaultCategories()
+  for (const p of periods) {
+    if (have.has(p.categoryId)) continue
+    const d = defaults.find((c) => c.id === p.categoryId)
+    if (d) { categories.push(d); have.add(d.id) }
+    else p.categoryId = categories[0].id
+  }
+  return { categories, periods }
 }
 
 /** Candidat d'événement issu de la détection automatique (émergence sur bruit de fond local) */
@@ -373,4 +458,8 @@ export interface ProjectData {
   projectName?: string
   /** État de la scène 3D (bâtiment + positions des sources) */
   scene3D?: Scene3DData
+  /** Catégories de périodes (incluses/exclues/annotations) */
+  categories?: Category[]
+  /** Périodes nommées définies sur le graphique */
+  periods?: Period[]
 }

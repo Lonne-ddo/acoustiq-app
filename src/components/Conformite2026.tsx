@@ -32,7 +32,7 @@ import {
 } from 'lucide-react'
 import { loadAll as loadRegulationDocs, OFFICIAL_SOURCES } from '../modules/regulationDB'
 import HelpTooltip from './HelpTooltip'
-import type { MeasurementFile, DataPoint, ConformiteSummary, Period as NamedPeriod } from '../types'
+import type { MeasurementFile, DataPoint, ConformiteSummary, Period as NamedPeriod, Category } from '../types'
 import {
   laeqAvg,
   computeL90,
@@ -90,6 +90,8 @@ interface Props {
   onPeriodChange?: (p: Period) => void
   /** Périodes nommées globales — filtrent les données pour Ba/LAeq, Br... */
   periods?: NamedPeriod[]
+  /** Catégories de périodes (déterminent quelles périodes sont incluses) */
+  categories?: Category[]
 }
 
 interface PointResult {
@@ -138,7 +140,7 @@ export default function Conformite2026({
   files, pointMap, selectedDate, onSummaryChange,
   receptor: receptorProp, onReceptorChange,
   period: periodProp, onPeriodChange,
-  periods,
+  periods, categories,
 }: Props) {
   // Référentiel sélectionné — contrôlé si props fournies, sinon état local
   const [receptorLocal, setReceptorLocal] = useState<ReceptorType>('I')
@@ -196,11 +198,11 @@ export default function Conformite2026({
     for (const pt of pointNames) {
       const dps = files
         .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-        .flatMap((f) => filterDataByPeriods(f.data, f.date, periods))
+        .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories))
       map.set(pt, dps)
     }
     return map
-  }, [files, pointMap, selectedDate, pointNames, periods])
+  }, [files, pointMap, selectedDate, pointNames, periods, categories])
 
   /** Auto-calcul de Br jour/nuit à partir du L90 sur la période calme. */
   function computeBrFromQuietPeriod() {

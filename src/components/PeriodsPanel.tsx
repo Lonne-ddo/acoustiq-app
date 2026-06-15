@@ -1,17 +1,14 @@
 /**
- * Panneau de gestion des périodes nommées — pilote le filtre des indices.
+ * Panneau de gestion des périodes — système de catégories.
  *
- * Trois statuts possibles :
- *   - include  : seules les données dans l'union des includes sont utilisées
- *                pour les indices (s'il y en a au moins un).
- *   - exclude  : retire systématiquement les points tombant dans la plage.
- *   - annotate : purement documentaire — n'affecte aucun calcul.
- *
- * Aucune période → calcul sur tout.
+ * Chaque période est assignée à une catégorie. Chaque catégorie a un toggle
+ * « incluse dans les calculs ». Les indices acoustiques sont calculés sur
+ * l'union des périodes des catégories `included === true && isAnnotation === false`.
+ * Aucune période active → calcul sur tout.
  */
 import { useMemo, useState } from 'react'
-import { ChevronDown, Plus, Trash2, Check, X, StickyNote, MessageSquare } from 'lucide-react'
-import type { Period, PeriodStatus } from '../types'
+import { ChevronDown, Plus, Trash2, Check, X } from 'lucide-react'
+import type { Period, Category } from '../types'
 import { PERIOD_PALETTE } from '../types'
 
 interface Props {
@@ -19,18 +16,16 @@ interface Props {
   onAdd: (p: Period) => void
   onUpdate: (id: string, patch: Partial<Period>) => void
   onRemove: (id: string) => void
-  selectedDate: string // YYYY-MM-DD — sert d'ancre pour les périodes ajoutées manuellement
+  categories: Category[]
+  onCategoryAdd: (c: Category) => void
+  onCategoryUpdate: (id: string, patch: Partial<Category>) => void
+  onCategoryRemove: (id: string, reassignTo: string | null) => void
+  selectedDate: string // YYYY-MM-DD — ancre pour les périodes ajoutées manuellement
 }
 
 function fmtHHMMSS(ms: number): string {
   const d = new Date(ms)
   return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}:${String(d.getSeconds()).padStart(2, '0')}`
-}
-
-function fmtDateTime(ms: number): string {
-  const d = new Date(ms)
-  const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-  return `${iso} ${fmtHHMMSS(ms)}`
 }
 
 function fmtDuration(ms: number): string {
@@ -61,52 +56,59 @@ function dateToMsAtMidnight(iso: string): number {
   return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10)).getTime()
 }
 
-/** Cycle include → exclude → annotate → include */
-function nextStatus(s: PeriodStatus): PeriodStatus {
-  if (s === 'include') return 'exclude'
-  if (s === 'exclude') return 'annotate'
-  return 'include'
-}
-
-function statusLabel(s: PeriodStatus): string {
-  if (s === 'include') return 'Inclure'
-  if (s === 'exclude') return 'Exclure'
-  return 'Annotation'
-}
-
-function statusClass(s: PeriodStatus): string {
-  if (s === 'include') return 'bg-emerald-950/60 border-emerald-700 text-emerald-300 hover:bg-emerald-900/80'
-  if (s === 'exclude') return 'bg-rose-950/60 border-rose-700 text-rose-300 hover:bg-rose-900/80 line-through'
-  return 'bg-blue-950/60 border-blue-700 text-blue-300 hover:bg-blue-900/80'
-}
-
-export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selectedDate }: Props) {
+export default function PeriodsPanel({
+  periods, onAdd, onUpdate, onRemove,
+  categories, onCategoryAdd, onCategoryUpdate, onCategoryRemove,
+  selectedDate,
+}: Props) {
   const [open, setOpen] = useState(true)
   const [adding, setAdding] = useState(false)
   const [formName, setFormName] = useState('')
   const [formStart, setFormStart] = useState('09:00:00')
   const [formEnd, setFormEnd] = useState('17:00:00')
-  const [formStatus, setFormStatus] = useState<PeriodStatus>('include')
-  const [formColor, setFormColor] = useState<string>(PERIOD_PALETTE[0])
-  const [formComment, setFormComment] = useState('')
+  const [formCat, setFormCat] = useState<string>('')
+  const [formNotes, setFormNotes] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
-  const [commentEditId, setCommentEditId] = useState<string | null>(null)
-  const [commentDraft, setCommentDraft] = useState('')
+  // Catégories
+  const [catEditId, setCatEditId] = useState<string | null>(null)
+  const [catEditName, setCatEditName] = useState('')
+  const [colorPickerId, setColorPickerId] = useState<string | null>(null)
+  const [newCat, setNewCat] = useState(false)
+  const [newCatName, setNewCatName] = useState('')
+  const [newCatColor, setNewCatColor] = useState<string>(PERIOD_PALETTE[0])
+  const [filterCat, setFilterCat] = useState<string>('all')
 
-  const totals = useMemo(() => {
-    const includes = periods.filter((p) => p.status === 'include')
-    const excludes = periods.filter((p) => p.status === 'exclude')
-    const annotations = periods.filter((p) => p.status === 'annotate')
-    const anchors = includes.length > 0 ? includes : excludes
-    const totalMs = anchors.reduce((sum, p) => sum + Math.max(0, p.endMs - p.startMs), 0)
-    return {
-      includeCount: includes.length,
-      excludeCount: excludes.length,
-      annotateCount: annotations.length,
-      totalMs,
+  const catById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
+
+  // Statistiques par catégorie : nombre de périodes + durée cumulée.
+  const statsByCat = useMemo(() => {
+    const m = new Map<string, { count: number; ms: number }>()
+    for (const c of categories) m.set(c.id, { count: 0, ms: 0 })
+    for (const p of periods) {
+      const s = m.get(p.categoryId)
+      if (!s) continue
+      s.count++
+      s.ms += Math.max(0, p.endMs - p.startMs)
     }
-  }, [periods])
+    return m
+  }, [periods, categories])
+
+  // Résumé « calculé sur » : catégories incluses non-annotation actives.
+  const calcSummary = useMemo(() => {
+    const active = categories.filter((c) => c.included && !c.isAnnotation)
+    const activeIds = new Set(active.map((c) => c.id))
+    const used = periods.filter((p) => activeIds.has(p.categoryId))
+    const totalMs = used.reduce((sum, p) => sum + Math.max(0, p.endMs - p.startMs), 0)
+    return { names: active.map((c) => c.name), count: used.length, totalMs }
+  }, [categories, periods])
+
+  const visiblePeriods = useMemo(
+    () => (filterCat === 'all' ? periods : periods.filter((p) => p.categoryId === filterCat)),
+    [periods, filterCat],
+  )
+
+  const defaultAddCat = categories.find((c) => c.included && !c.isAnnotation)?.id ?? categories[0]?.id ?? ''
 
   function submitAdd() {
     const start = parseHHMMSS(formStart)
@@ -114,7 +116,7 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
     if (start === null || end === null || !selectedDate) return
     const base = dateToMsAtMidnight(selectedDate)
     if (!Number.isFinite(base)) return
-    let startMs = base + start
+    const startMs = base + start
     let endMs = base + end
     if (endMs <= startMs) endMs += 24 * 3600 * 1000
     onAdd({
@@ -122,27 +124,39 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
       name: formName.trim() || `Période ${periods.length + 1}`,
       startMs,
       endMs,
-      status: formStatus,
-      color: formColor,
-      comment: formStatus === 'annotate' ? formComment.trim() || undefined : undefined,
+      categoryId: formCat || defaultAddCat,
+      notes: formNotes.trim() || undefined,
     })
-    setAdding(false)
-    setFormName('')
-    setFormComment('')
+    setAdding(false); setFormName(''); setFormNotes('')
   }
 
-  function updateBounds(p: Period, field: 'start' | 'end', hhmmss: string) {
-    const parsed = parseHHMMSS(hhmmss)
-    if (parsed === null) return
-    const dayBase = new Date(p.startMs)
-    dayBase.setHours(0, 0, 0, 0)
-    const newMs = dayBase.getTime() + parsed
-    if (field === 'start') {
-      onUpdate(p.id, { startMs: newMs })
-    } else {
-      const endMs = newMs <= p.startMs ? newMs + 24 * 3600 * 1000 : newMs
-      onUpdate(p.id, { endMs })
+  function removeCategory(c: Category) {
+    const stat = statsByCat.get(c.id)
+    if (!stat || stat.count === 0) {
+      if (!window.confirm(`Supprimer la catégorie « ${c.name} » ?`)) return
+      onCategoryRemove(c.id, null)
+      return
     }
+    const others = categories.filter((o) => o.id !== c.id)
+    const target = others[0]
+    const reassign = window.confirm(
+      `La catégorie « ${c.name} » contient ${stat.count} période(s).\n\n` +
+      (target
+        ? `OK = réaffecter ses périodes à « ${target.name} »\nAnnuler = supprimer aussi ces périodes`
+        : `Aucune autre catégorie : OK = supprimer aussi ces périodes`),
+    )
+    onCategoryRemove(c.id, reassign && target ? target.id : null)
+  }
+
+  function createCategory() {
+    onCategoryAdd({
+      id: crypto.randomUUID(),
+      name: newCatName.trim() || `Catégorie ${categories.length + 1}`,
+      color: newCatColor,
+      included: true,
+      isAnnotation: false,
+    })
+    setNewCat(false); setNewCatName('')
   }
 
   return (
@@ -151,294 +165,242 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, selec
         onClick={() => setOpen((v) => !v)}
         className="w-full flex items-center gap-2 px-4 py-2 text-left hover:bg-gray-900/60 transition-colors"
       >
-        <ChevronDown
-          size={11}
-          className={`text-gray-500 transition-transform ${open ? '' : '-rotate-90'}`}
-        />
-        <span className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">
-          Périodes
-        </span>
+        <ChevronDown size={11} className={`text-gray-500 transition-transform ${open ? '' : '-rotate-90'}`} />
+        <span className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Périodes</span>
         <span className="text-[10px] text-gray-500">
           {periods.length === 0
             ? 'aucune — calcul sur tout'
-            : `${totals.includeCount} incluse${totals.includeCount > 1 ? 's' : ''} · ${totals.excludeCount} exclue${totals.excludeCount > 1 ? 's' : ''} · ${totals.annotateCount} annotation${totals.annotateCount > 1 ? 's' : ''}`}
+            : `${periods.length} période${periods.length > 1 ? 's' : ''} · ${categories.length} catégorie${categories.length > 1 ? 's' : ''}`}
         </span>
         <button
           onClick={(e) => { e.stopPropagation(); setAdding((v) => !v) }}
           className="ml-auto flex items-center gap-1 text-[10px] text-emerald-400 hover:text-emerald-300 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded px-2 py-0.5"
         >
-          <Plus size={10} />
-          Ajouter une période
+          <Plus size={10} /> Ajouter une période
         </button>
       </button>
 
       {open && (
-        <div className="px-4 pb-3">
-          {adding && (
-            <div className="mb-2 p-2 rounded border border-gray-700/60 bg-gray-900/70 space-y-2">
-              <div className="grid grid-cols-[2fr_1fr_1fr_1.2fr] gap-2">
-                <input
-                  type="text"
-                  value={formName}
-                  onChange={(e) => setFormName(e.target.value)}
-                  placeholder={`Période ${periods.length + 1}`}
-                  className="text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                />
-                <input
-                  type="text"
-                  value={formStart}
-                  onChange={(e) => setFormStart(e.target.value)}
-                  placeholder="HH:MM:SS"
-                  className="text-[11px] font-mono bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                />
-                <input
-                  type="text"
-                  value={formEnd}
-                  onChange={(e) => setFormEnd(e.target.value)}
-                  placeholder="HH:MM:SS"
-                  className="text-[11px] font-mono bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
-                />
-                <div className="grid grid-cols-3 gap-1">
-                  <button
-                    onClick={() => setFormStatus('include')}
-                    className={`text-[10px] rounded px-1 py-1 border ${
-                      formStatus === 'include'
-                        ? 'bg-emerald-950/60 border-emerald-600 text-emerald-200'
-                        : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
-                    }`}
-                  >
-                    Inclure
-                  </button>
-                  <button
-                    onClick={() => setFormStatus('exclude')}
-                    className={`text-[10px] rounded px-1 py-1 border ${
-                      formStatus === 'exclude'
-                        ? 'bg-rose-950/60 border-rose-600 text-rose-200'
-                        : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
-                    }`}
-                  >
-                    Exclure
-                  </button>
-                  <button
-                    onClick={() => setFormStatus('annotate')}
-                    className={`text-[10px] rounded px-1 py-1 border ${
-                      formStatus === 'annotate'
-                        ? 'bg-blue-950/60 border-blue-600 text-blue-200'
-                        : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
-                    }`}
-                  >
-                    Annoter
-                  </button>
-                </div>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[10px] text-gray-500 uppercase tracking-wide">Couleur</span>
-                <div className="flex gap-1">
-                  {PERIOD_PALETTE.map((c) => (
-                    <button
-                      key={c}
-                      onClick={() => setFormColor(c)}
-                      className={`w-4 h-4 rounded-full border-2 ${
-                        formColor === c ? 'border-white' : 'border-gray-700 hover:border-gray-500'
-                      }`}
-                      style={{ backgroundColor: c }}
-                      aria-label={`Couleur ${c}`}
+        <div className="px-4 pb-3 space-y-2">
+          {/* ── Gestionnaire de catégories ─────────────────────────────── */}
+          <div className="rounded border border-gray-800">
+            <div className="px-2 py-1 text-[10px] uppercase tracking-wide text-gray-500 border-b border-gray-800">
+              Catégories
+            </div>
+            <div className="divide-y divide-gray-900">
+              {categories.map((c) => {
+                const stat = statsByCat.get(c.id) ?? { count: 0, ms: 0 }
+                return (
+                  <div key={c.id} className="flex items-center gap-2 px-2 py-1">
+                    {/* Toggle inclus */}
+                    <input
+                      type="checkbox"
+                      checked={c.included}
+                      disabled={c.isAnnotation}
+                      onChange={(e) => onCategoryUpdate(c.id, { included: e.target.checked })}
+                      title={c.isAnnotation ? "Annotation — n'affecte jamais les calculs" : 'Inclure dans le calcul des indices'}
+                      className="accent-emerald-500 disabled:opacity-40"
                     />
-                  ))}
+                    {/* Pastille couleur — clic = palette */}
+                    <div className="relative">
+                      <button
+                        onClick={() => setColorPickerId((v) => (v === c.id ? null : c.id))}
+                        className="w-3 h-3 rounded-full border border-black/30 shrink-0"
+                        style={{ backgroundColor: c.color }}
+                        title="Changer la couleur"
+                      />
+                      {colorPickerId === c.id && (
+                        <div className="absolute z-30 top-4 left-0 flex gap-1 p-1 bg-gray-900 border border-gray-700 rounded shadow-lg">
+                          {PERIOD_PALETTE.map((col) => (
+                            <button
+                              key={col}
+                              onClick={() => { onCategoryUpdate(c.id, { color: col }); setColorPickerId(null) }}
+                              className="w-3.5 h-3.5 rounded-full border border-gray-700 hover:scale-110 transition-transform"
+                              style={{ backgroundColor: col }}
+                              aria-label={`Couleur ${col}`}
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    {/* Nom — clic = renommer */}
+                    {catEditId === c.id ? (
+                      <input
+                        autoFocus
+                        value={catEditName}
+                        onChange={(e) => setCatEditName(e.target.value)}
+                        onBlur={() => { onCategoryUpdate(c.id, { name: catEditName.trim() || c.name }); setCatEditId(null) }}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') { onCategoryUpdate(c.id, { name: catEditName.trim() || c.name }); setCatEditId(null) }
+                          else if (e.key === 'Escape') setCatEditId(null)
+                        }}
+                        className="text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                      />
+                    ) : (
+                      <button
+                        onClick={() => { setCatEditId(c.id); setCatEditName(c.name) }}
+                        className="text-[11px] text-gray-200 hover:text-emerald-300"
+                        title="Renommer"
+                      >
+                        {c.name}
+                        {c.isAnnotation && <span className="ml-1 text-[9px] text-blue-400">(annotation)</span>}
+                      </button>
+                    )}
+                    <span className="text-[10px] text-gray-500">
+                      {stat.count} période{stat.count > 1 ? 's' : ''}
+                      {!c.isAnnotation && stat.count > 0 && <> · <span className="font-mono text-gray-400">{fmtDuration(stat.ms)}</span></>}
+                    </span>
+                    <button
+                      onClick={() => removeCategory(c)}
+                      className="ml-auto text-gray-600 hover:text-red-400"
+                      title="Supprimer cette catégorie"
+                    >
+                      <Trash2 size={11} />
+                    </button>
+                  </div>
+                )
+              })}
+            </div>
+            {/* + Nouvelle catégorie */}
+            <div className="px-2 py-1 border-t border-gray-800">
+              {newCat ? (
+                <div className="flex items-center gap-1.5">
+                  <input
+                    autoFocus
+                    value={newCatName}
+                    onChange={(e) => setNewCatName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') createCategory(); else if (e.key === 'Escape') setNewCat(false) }}
+                    placeholder="Nom"
+                    className="flex-1 text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  />
+                  <div className="flex gap-0.5">
+                    {PERIOD_PALETTE.map((col) => (
+                      <button
+                        key={col}
+                        onClick={() => setNewCatColor(col)}
+                        className={`w-3.5 h-3.5 rounded-full border ${newCatColor === col ? 'border-white scale-110' : 'border-gray-700'}`}
+                        style={{ backgroundColor: col }}
+                        aria-label={`Couleur ${col}`}
+                      />
+                    ))}
+                  </div>
+                  <button onClick={createCategory} className="text-emerald-400 hover:text-emerald-300" title="Créer"><Check size={12} /></button>
+                  <button onClick={() => setNewCat(false)} className="text-gray-500 hover:text-gray-300" title="Annuler"><X size={12} /></button>
                 </div>
-              </div>
-              {formStatus === 'annotate' && (
-                <textarea
-                  value={formComment}
-                  onChange={(e) => setFormComment(e.target.value)}
-                  rows={2}
-                  placeholder="Commentaire (optionnel)"
-                  className="w-full text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
-                />
+              ) : (
+                <button onClick={() => setNewCat(true)} className="flex items-center gap-1 text-[10px] text-emerald-400 hover:text-emerald-300">
+                  <Plus size={10} /> Nouvelle catégorie
+                </button>
               )}
+            </div>
+          </div>
+
+          {/* ── Formulaire d'ajout manuel ──────────────────────────────── */}
+          {adding && (
+            <div className="p-2 rounded border border-gray-700/60 bg-gray-900/70 space-y-2">
+              <div className="grid grid-cols-[2fr_1fr_1fr_1.4fr] gap-2">
+                <input value={formName} onChange={(e) => setFormName(e.target.value)} placeholder={`Période ${periods.length + 1}`}
+                  className="text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                <input value={formStart} onChange={(e) => setFormStart(e.target.value)} placeholder="HH:MM:SS"
+                  className="text-[11px] font-mono bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                <input value={formEnd} onChange={(e) => setFormEnd(e.target.value)} placeholder="HH:MM:SS"
+                  className="text-[11px] font-mono bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500" />
+                <select value={formCat || defaultAddCat} onChange={(e) => setFormCat(e.target.value)}
+                  className="text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-1 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500">
+                  {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <textarea value={formNotes} onChange={(e) => setFormNotes(e.target.value)} rows={2} placeholder="Notes (optionnel)"
+                className="w-full text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500 resize-none" />
               <div className="flex gap-1 justify-end">
-                <button
-                  onClick={() => setAdding(false)}
-                  className="text-[10px] text-gray-400 hover:text-gray-200 bg-gray-800 hover:bg-gray-700 rounded px-2 py-1"
-                >
-                  Annuler
-                </button>
-                <button
-                  onClick={submitAdd}
-                  className="text-[10px] text-white bg-emerald-600 hover:bg-emerald-500 rounded px-2 py-1 flex items-center gap-1"
-                >
-                  <Check size={10} />
-                  Ajouter
-                </button>
+                <button onClick={() => setAdding(false)} className="text-[10px] text-gray-400 hover:text-gray-200 bg-gray-800 hover:bg-gray-700 rounded px-2 py-1">Annuler</button>
+                <button onClick={submitAdd} className="text-[10px] text-white bg-emerald-600 hover:bg-emerald-500 rounded px-2 py-1 flex items-center gap-1"><Check size={10} /> Ajouter</button>
               </div>
             </div>
           )}
 
+          {/* ── Tableau des périodes ───────────────────────────────────── */}
           {periods.length > 0 && (
             <div className="rounded border border-gray-800">
+              <div className="flex items-center gap-2 px-2 py-1 border-b border-gray-800">
+                <span className="text-[10px] uppercase tracking-wide text-gray-500">Périodes</span>
+                <select value={filterCat} onChange={(e) => setFilterCat(e.target.value)}
+                  className="ml-auto text-[10px] bg-gray-800 text-gray-300 border border-gray-700 rounded px-1 py-0.5 focus:outline-none">
+                  <option value="all">Toutes les catégories</option>
+                  {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
               <table className="w-full text-[11px]">
                 <thead>
                   <tr className="text-[10px] text-gray-500 uppercase tracking-wide border-b border-gray-800">
                     <th className="text-left px-2 py-1 font-semibold">Nom</th>
+                    <th className="text-left px-2 py-1 font-semibold">Cat.</th>
                     <th className="text-left px-2 py-1 font-semibold">Début</th>
                     <th className="text-left px-2 py-1 font-semibold">Fin</th>
                     <th className="text-left px-2 py-1 font-semibold">Durée</th>
-                    <th className="text-left px-2 py-1 font-semibold">Type</th>
-                    <th className="text-left px-2 py-1 font-semibold">Couleur</th>
-                    <th className="text-left px-2 py-1 font-semibold">Commentaire</th>
                     <th className="text-right px-2 py-1 font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {periods.map((p) => {
+                  {visiblePeriods.map((p) => {
                     const dur = Math.max(0, p.endMs - p.startMs)
                     const isEditing = editingId === p.id
-                    const isCommenting = commentEditId === p.id
-                    const color = p.color ?? PERIOD_PALETTE[0]
+                    const cat = catById.get(p.categoryId)
                     return (
-                      <tr key={p.id} className="border-b border-gray-900 last:border-0 align-top">
+                      <tr key={p.id} className="border-b border-gray-900 last:border-0">
                         <td className="px-2 py-1 text-gray-200">
                           {isEditing ? (
                             <input
-                              autoFocus
-                              value={editingName}
+                              autoFocus value={editingName}
                               onChange={(e) => setEditingName(e.target.value)}
-                              onBlur={() => {
-                                onUpdate(p.id, { name: editingName.trim() || p.name })
-                                setEditingId(null)
-                              }}
+                              onBlur={() => { onUpdate(p.id, { name: editingName.trim() || p.name }); setEditingId(null) }}
                               onKeyDown={(e) => {
-                                if (e.key === 'Enter') {
-                                  onUpdate(p.id, { name: editingName.trim() || p.name })
-                                  setEditingId(null)
-                                } else if (e.key === 'Escape') setEditingId(null)
+                                if (e.key === 'Enter') { onUpdate(p.id, { name: editingName.trim() || p.name }); setEditingId(null) }
+                                else if (e.key === 'Escape') setEditingId(null)
                               }}
                               className="text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500 w-full"
                             />
                           ) : (
-                            <button
-                              onClick={() => { setEditingId(p.id); setEditingName(p.name) }}
-                              className="text-left w-full hover:text-emerald-300 truncate"
-                              title="Cliquer pour renommer"
-                            >
+                            <button onClick={() => { setEditingId(p.id); setEditingName(p.name) }} className="text-left w-full hover:text-emerald-300 truncate" title={p.notes || 'Renommer'}>
                               {p.name}
                             </button>
                           )}
                         </td>
-                        <td className="px-2 py-1 font-mono text-gray-300" title={fmtDateTime(p.startMs)}>
-                          <input
-                            type="text"
-                            defaultValue={fmtHHMMSS(p.startMs)}
-                            onBlur={(e) => updateBounds(p, 'start', e.currentTarget.value)}
-                            className="text-[11px] font-mono bg-transparent text-gray-200 border border-transparent hover:border-gray-700 focus:border-emerald-500 focus:outline-none rounded px-1 w-[82px]"
-                          />
-                        </td>
-                        <td className="px-2 py-1 font-mono text-gray-300" title={fmtDateTime(p.endMs)}>
-                          <input
-                            type="text"
-                            defaultValue={fmtHHMMSS(p.endMs)}
-                            onBlur={(e) => updateBounds(p, 'end', e.currentTarget.value)}
-                            className="text-[11px] font-mono bg-transparent text-gray-200 border border-transparent hover:border-gray-700 focus:border-emerald-500 focus:outline-none rounded px-1 w-[82px]"
-                          />
-                        </td>
-                        <td className="px-2 py-1 font-mono text-gray-400">{fmtDuration(dur)}</td>
                         <td className="px-2 py-1">
-                          <button
-                            onClick={() => onUpdate(p.id, { status: nextStatus(p.status) })}
-                            className={`text-[10px] rounded px-2 py-0.5 border transition-colors ${statusClass(p.status)}`}
-                            title="Cliquer pour basculer Inclure → Exclure → Annotation"
-                          >
-                            {statusLabel(p.status)}
-                          </button>
-                        </td>
-                        <td className="px-2 py-1">
-                          <div className="flex items-center gap-0.5">
-                            {PERIOD_PALETTE.map((c) => (
-                              <button
-                                key={c}
-                                onClick={() => onUpdate(p.id, { color: c })}
-                                className={`w-3.5 h-3.5 rounded-full border transition-transform ${
-                                  color === c
-                                    ? 'border-white scale-110'
-                                    : 'border-gray-800 hover:border-gray-500'
-                                }`}
-                                style={{ backgroundColor: c }}
-                                aria-label={`Couleur ${c}`}
-                                title={c}
-                              />
-                            ))}
+                          <div className="flex items-center gap-1">
+                            <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ backgroundColor: cat?.color ?? '#6b7280' }} />
+                            <select
+                              value={p.categoryId}
+                              onChange={(e) => onUpdate(p.id, { categoryId: e.target.value })}
+                              className="text-[10px] bg-transparent text-gray-300 border border-transparent hover:border-gray-700 rounded px-0.5 py-0.5 focus:outline-none focus:border-emerald-500"
+                              title="Changer de catégorie"
+                            >
+                              {categories.map((c) => <option key={c.id} value={c.id} className="bg-gray-800">{c.name}</option>)}
+                            </select>
                           </div>
                         </td>
-                        <td className="px-2 py-1 text-gray-300 max-w-[240px]">
-                          {p.status !== 'annotate' ? (
-                            <span className="text-gray-600 italic text-[10px]">—</span>
-                          ) : isCommenting ? (
-                            <textarea
-                              autoFocus
-                              rows={2}
-                              value={commentDraft}
-                              onChange={(e) => setCommentDraft(e.target.value)}
-                              onBlur={() => {
-                                onUpdate(p.id, { comment: commentDraft.trim() || undefined })
-                                setCommentEditId(null)
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Escape') setCommentEditId(null)
-                                else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
-                                  onUpdate(p.id, { comment: commentDraft.trim() || undefined })
-                                  setCommentEditId(null)
-                                }
-                              }}
-                              className="w-full text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
-                              placeholder="Note libre…"
-                            />
-                          ) : (
-                            <button
-                              onClick={() => { setCommentEditId(p.id); setCommentDraft(p.comment ?? '') }}
-                              className="text-left w-full text-[11px] text-gray-300 hover:text-blue-300 truncate flex items-center gap-1"
-                              title={p.comment || 'Cliquer pour ajouter un commentaire'}
-                            >
-                              <MessageSquare size={10} className="shrink-0 opacity-60" />
-                              {p.comment
-                                ? <span className="truncate">{p.comment}</span>
-                                : <span className="italic text-gray-500">Ajouter…</span>}
-                            </button>
-                          )}
-                        </td>
+                        <td className="px-2 py-1 font-mono text-gray-300">{fmtHHMMSS(p.startMs)}</td>
+                        <td className="px-2 py-1 font-mono text-gray-300">{fmtHHMMSS(p.endMs)}</td>
+                        <td className="px-2 py-1 font-mono text-gray-400">{fmtDuration(dur)}</td>
                         <td className="px-2 py-1 text-right">
-                          <button
-                            onClick={() => onRemove(p.id)}
-                            className="text-gray-600 hover:text-red-400"
-                            aria-label="Supprimer la période"
-                            title="Supprimer"
-                          >
-                            <Trash2 size={11} />
-                          </button>
+                          <button onClick={() => onRemove(p.id)} className="text-gray-600 hover:text-red-400" title="Supprimer"><Trash2 size={11} /></button>
                         </td>
                       </tr>
                     )
                   })}
                 </tbody>
               </table>
-              <div className="px-2 py-1 text-[10px] text-gray-500 border-t border-gray-900 flex items-center gap-2">
-                <span>
-                  Calculé sur {totals.includeCount > 0 ? `${totals.includeCount} période${totals.includeCount > 1 ? 's' : ''} « Inclure »` : 'tout SAUF les exclusions'}
-                  {' — durée totale '}
-                  <span className="font-mono text-gray-400">{fmtDuration(totals.totalMs)}</span>
-                </span>
-                {totals.annotateCount > 0 && (
-                  <span className="ml-auto flex items-center gap-1 text-blue-300">
-                    <StickyNote size={10} />
-                    {totals.annotateCount} annotation{totals.annotateCount > 1 ? 's' : ''} (n'affecte pas les calculs)
-                  </span>
-                )}
+              <div className="px-2 py-1 text-[10px] text-gray-500 border-t border-gray-900">
+                {calcSummary.count > 0
+                  ? <>Calculé sur les catégories : <span className="text-gray-300">{calcSummary.names.join(', ')}</span> ({calcSummary.count} période{calcSummary.count > 1 ? 's' : ''} · <span className="font-mono text-gray-400">{fmtDuration(calcSummary.totalMs)}</span>)</>
+                  : 'Calculé sur l\'ensemble du fichier'}
               </div>
             </div>
           )}
 
           {periods.length === 0 && (
             <p className="text-[11px] text-gray-500 italic leading-tight">
-              Glissez sur le graphique (sans Shift) pour créer une période, ou utilisez <X size={10} className="inline-block mx-0.5 opacity-0" /><button onClick={() => setAdding(true)} className="underline hover:text-gray-300">+ Ajouter une période</button>.
+              Glissez sur le graphique (sans Shift) pour créer une période et l'assigner à une catégorie.
             </p>
           )}
         </div>

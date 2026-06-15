@@ -48,10 +48,11 @@ import type {
   LwSourceSummary,
   Scene3DData,
   Period,
+  Category,
   AudioFileEntry,
   AudioCaleStatus,
 } from './types'
-import { DEFAULT_METEO } from './types'
+import { DEFAULT_METEO, makeDefaultCategories, normalizeProjectPeriods, DEFAULT_CATEGORY_IDS } from './types'
 import ChecklistModal, { DEFAULT_CHECKLIST } from './components/ChecklistModal'
 import HistoryTab from './components/HistoryTab'
 import RegulationTab from './components/RegulationTab'
@@ -781,6 +782,38 @@ function Sidebar({
   const audioInputRef = useRef<HTMLInputElement>(null)
   const [dragOver, setDragOver] = useState(false)
 
+  // --- Largeur redimensionnable (180–480, défaut 200, persistée) ---
+  const SIDEBAR_MIN_W = 180
+  const SIDEBAR_MAX_W = 480
+  const [sidebarWidth, setSidebarWidth] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem('acoustiq.sidebar.width') ?? '', 10)
+      if (Number.isFinite(v)) return Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, v))
+    } catch { /* ignore */ }
+    return 200
+  })
+  useEffect(() => {
+    try { localStorage.setItem('acoustiq.sidebar.width', String(sidebarWidth)) } catch { /* ignore */ }
+  }, [sidebarWidth])
+  const widthDragRef = useRef<{ startX: number; startW: number } | null>(null)
+  const handleWidthResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    widthDragRef.current = { startX: e.clientX, startW: sidebarWidth }
+    const onMove = (ev: MouseEvent) => {
+      const d = widthDragRef.current
+      if (!d) return
+      const w = d.startW + (ev.clientX - d.startX)
+      setSidebarWidth(Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, w)))
+    }
+    const onUp = () => {
+      widthDragRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [sidebarWidth])
+
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files ?? [])
     if (selected.length === 0) return
@@ -896,8 +929,8 @@ function Sidebar({
 
   return (
     <aside
-      style={{ width: 180 }}
-      className={`min-h-screen bg-gray-900 text-gray-100 flex flex-col border-r shrink-0 transition-colors ${
+      style={{ width: sidebarWidth }}
+      className={`relative min-h-screen bg-gray-900 text-gray-100 flex flex-col border-r shrink-0 ${
         dragOver ? 'border-emerald-500 bg-emerald-950/10' : 'border-gray-700'
       }`}
       onDragOver={handleDragOver}
@@ -905,6 +938,12 @@ function Sidebar({
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
     >
+      {/* Poignée de redimensionnement (bord droit) */}
+      <div
+        onMouseDown={handleWidthResize}
+        className="absolute top-0 right-0 h-full w-1.5 cursor-col-resize z-20 hover:bg-emerald-600/50 active:bg-emerald-500/60 transition-colors"
+        title="Glisser pour redimensionner la barre latérale"
+      />
       {/* En-tête */}
       <div className="px-4 py-5 border-b border-gray-700 shrink-0">
         <div className="flex items-center gap-2">
@@ -1258,6 +1297,10 @@ interface MainPanelProps {
   onPeriodAdd: (p: Period) => void
   onPeriodUpdate: (id: string, patch: Partial<Period>) => void
   onPeriodRemove: (id: string) => void
+  categories: Category[]
+  onCategoryAdd: (c: Category) => void
+  onCategoryUpdate: (id: string, patch: Partial<Category>) => void
+  onCategoryRemove: (id: string, reassignTo: string | null) => void
   audioEntries: AudioFileEntry[]
   audioPointMap: Record<string, string>
   audioSync: ReturnType<typeof useAudioSync>
@@ -1305,6 +1348,7 @@ function MainPanel({
   presentationMode, onPresentationToggle,
   hiddenPoints, onTogglePointVisibility,
   periods, onPeriodAdd, onPeriodUpdate, onPeriodRemove,
+  categories, onCategoryAdd, onCategoryUpdate, onCategoryRemove,
   audioEntries, audioPointMap, audioSync, audioCoverage,
   chartPickArmed, onChartPicked,
   chartRangePickArmed, onChartRangePicked, chartHighlightRange,
@@ -1594,6 +1638,8 @@ function MainPanel({
                   onPeriodAdd={onPeriodAdd}
                   onPeriodUpdate={onPeriodUpdate}
                   onPeriodRemove={onPeriodRemove}
+                  categories={categories}
+                  onCategoryAdd={onCategoryAdd}
                   audioCoverage={audioCoverage}
                   audioLabels={Object.fromEntries(audioEntries.map((e) => [e.id, e.name]))}
                   audioPlayheadMin={(() => {
@@ -1699,6 +1745,10 @@ function MainPanel({
                       onAdd={onPeriodAdd}
                       onUpdate={onPeriodUpdate}
                       onRemove={onPeriodRemove}
+                      categories={categories}
+                      onCategoryAdd={onCategoryAdd}
+                      onCategoryUpdate={onCategoryUpdate}
+                      onCategoryRemove={onCategoryRemove}
                       selectedDate={selectedDate}
                     />
                   </div>
@@ -1710,6 +1760,7 @@ function MainPanel({
                       meteo={meteo}
                       aggregationSeconds={aggregationSeconds}
                       periods={periods}
+                      categories={categories}
                     />
                   </div>
                 </>
@@ -1783,6 +1834,7 @@ function MainPanel({
               companyName={settings.companyName}
               meteo={meteo}
               periods={periods}
+              categories={categories}
             />
           ) : (
             <EmptyState
@@ -1858,6 +1910,7 @@ function MainPanel({
               period={conformitePeriod}
               onPeriodChange={onConformitePeriodChange}
               periods={periods}
+              categories={categories}
             />
           ) : (
             <EmptyState
@@ -2201,6 +2254,25 @@ export default function App() {
     setPeriods((prev) => prev.filter((p) => p.id !== id))
   }, [])
 
+  // Catégories de périodes (incluses/exclues/annotations). 4 par défaut.
+  const [categories, setCategories] = useState<Category[]>(() => makeDefaultCategories())
+  const handleCategoryAdd = useCallback((c: Category) => {
+    setCategories((prev) => [...prev, c])
+  }, [])
+  const handleCategoryUpdate = useCallback((id: string, patch: Partial<Category>) => {
+    setCategories((prev) => prev.map((c) => (c.id === id ? { ...c, ...patch } : c)))
+  }, [])
+  /** Supprime une catégorie. `reassignTo` = id cible (réaffecter les périodes)
+   *  ou null (supprimer aussi les périodes liées). */
+  const handleCategoryRemove = useCallback((id: string, reassignTo: string | null) => {
+    setCategories((prev) => prev.filter((c) => c.id !== id))
+    setPeriods((prev) =>
+      reassignTo
+        ? prev.map((p) => (p.categoryId === id ? { ...p, categoryId: reassignTo } : p))
+        : prev.filter((p) => p.categoryId !== id),
+    )
+  }, [])
+
   // Visibilité des courbes par point (toggle via légende/sidebar)
   const [hiddenPoints, setHiddenPoints] = useState<Set<string>>(new Set())
   const togglePointVisibility = useCallback((pt: string) => {
@@ -2371,7 +2443,7 @@ export default function App() {
           name: 'Météo non recevable',
           startMs: w.startMs,
           endMs: w.endMs,
-          status: 'exclude',
+          categoryId: DEFAULT_CATEGORY_IDS.exclure,
         } as Period,
       ])
       n++
@@ -2641,13 +2713,13 @@ export default function App() {
   const serializeCurrentState = useCallback(() => {
     return JSON.stringify({
       files: files.map((f) => ({ id: f.id, name: f.name, model: f.model, serial: f.serial, date: f.date, startTime: f.startTime, stopTime: f.stopTime, rowCount: f.rowCount })),
-      pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist,
+      pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods,
     })
-  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist])
+  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods])
 
   // ---- Handlers projet ----
   const handleSaveProject = useCallback(() => {
-    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D)
+    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D, categories, periods)
     // Sauvegarder dans les projets récents
     const state = serializeCurrentState()
     const entry: RecentProject = { id: projectId, name: projectName, savedAt: new Date().toISOString(), state }
@@ -2657,7 +2729,7 @@ export default function App() {
       saveRecent(updated)
       return updated
     })
-  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectId, projectName, checklist, scene3D, serializeCurrentState])
+  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectId, projectName, checklist, scene3D, categories, periods, serializeCurrentState])
 
   const handleLoadProject = useCallback((json: string) => {
     try {
@@ -2676,6 +2748,12 @@ export default function App() {
       if (project.meteo) setMeteo(project.meteo)
       if (project.checklist) setChecklist(project.checklist)
       if (project.scene3D) setScene3D(project.scene3D)
+      // Catégories + périodes (migration douce de l'ancien format status)
+      {
+        const norm = normalizeProjectPeriods(project.categories, project.periods)
+        setCategories(norm.categories)
+        setPeriods(norm.periods)
+      }
       if (missingFiles.length > 0) {
         setErrors((prev) => [...prev, `${t('project.missingFiles')} : ${missingFiles.join(', ')}`])
       }
@@ -2704,7 +2782,7 @@ export default function App() {
     setMapImage(null); setMapMarkers({})
     setOverlayDate(null); setCandidates([])
     setAnnotations([]); setPendingAnnotationText(null)
-    setPeriods([])
+    setPeriods([]); setCategories(makeDefaultCategories())
     setMeteo(DEFAULT_METEO)
     setChecklist(DEFAULT_CHECKLIST)
     setProjectId(crypto.randomUUID()); setProjectName(t('project.untitled'))
@@ -2736,7 +2814,11 @@ export default function App() {
       setFiles([]); setPointMap({}); setZoomRange(null); setAudioFile(null); setConformiteSummary(null)
       setOverlayDate(null); setCandidates([])
       setAnnotations([]); setPendingAnnotationText(null)
-      setPeriods([])
+      {
+        const norm = normalizeProjectPeriods(parsed.categories, parsed.periods)
+        setCategories(norm.categories)
+        setPeriods(norm.periods)
+      }
       setMeteo(parsed.meteo ?? DEFAULT_METEO)
       setChecklist(parsed.checklist ?? DEFAULT_CHECKLIST)
       if (parsed.files?.length > 0) {
@@ -3067,6 +3149,10 @@ export default function App() {
         onPeriodAdd={handlePeriodAdd}
         onPeriodUpdate={handlePeriodUpdate}
         onPeriodRemove={handlePeriodRemove}
+        categories={categories}
+        onCategoryAdd={handleCategoryAdd}
+        onCategoryUpdate={handleCategoryUpdate}
+        onCategoryRemove={handleCategoryRemove}
         audioEntries={audioEntries}
         audioPointMap={audioPointMap}
         audioSync={audioSync}

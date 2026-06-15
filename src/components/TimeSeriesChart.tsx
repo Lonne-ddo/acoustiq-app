@@ -26,10 +26,10 @@ import {
 import html2canvas from 'html2canvas'
 import { drawQrBadge } from '../utils/qrBadge'
 import { FEATURES } from '../config/features'
-import { Download, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3, Play, ChevronDown } from 'lucide-react'
+import { Download, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3, Play, ChevronDown, MessageSquare } from 'lucide-react'
 import ContextMenu from './ContextMenu'
 import { ReferenceDot } from 'recharts'
-import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData, Period, PeriodStatus } from '../types'
+import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData, Period, Category } from '../types'
 import { PERIOD_PALETTE } from '../types'
 import type { AudioCoverageRange } from '../hooks/useAudioSync'
 import { findCoveringRange } from '../hooks/useAudioSync'
@@ -281,11 +281,14 @@ interface Props {
   hiddenPoints?: Set<string>
   /** Toggle visibilité d'un point (légende cliquable) */
   onTogglePointVisibility?: (pt: string) => void
-  /** Périodes nommées (affichées comme bandes vertes/rouges) */
+  /** Périodes nommées (bandes colorées selon leur catégorie) */
   periods?: Period[]
   onPeriodAdd?: (p: Period) => void
   onPeriodUpdate?: (id: string, patch: Partial<Period>) => void
   onPeriodRemove?: (id: string) => void
+  /** Catégories de périodes (couleur + inclusion) */
+  categories?: Category[]
+  onCategoryAdd?: (c: Category) => void
   /** Plages de couverture audio pour la barre sous l'axe X et le curseur de lecture */
   audioCoverage?: AudioCoverageRange[]
   /** Noms des fichiers audio (pour le tooltip de la timeline) */
@@ -358,6 +361,8 @@ export default function TimeSeriesChart({
   onPeriodAdd,
   onPeriodUpdate,
   onPeriodRemove,
+  categories,
+  onCategoryAdd,
   audioCoverage,
   audioLabels,
   audioPlayheadMin,
@@ -410,11 +415,14 @@ export default function TimeSeriesChart({
         tStart: number
         tEnd: number
         name: string
-        status: PeriodStatus
-        color: string
-        comment: string
+        categoryId: string
+        notes: string
         x: number
         y: number
+        /** UI : mini-formulaire « nouvelle catégorie » ouvert ? */
+        newCat: boolean
+        newCatName: string
+        newCatColor: string
       }
     | null
   >(null)
@@ -423,6 +431,14 @@ export default function TimeSeriesChart({
     | { period: Period; x: number; y: number }
     | null
   >(null)
+
+  // Catégories : lookup + catégorie par défaut pour une nouvelle période.
+  const catList = useMemo(() => categories ?? [], [categories])
+  const catById = useMemo(() => new Map(catList.map((c) => [c.id, c])), [catList])
+  const defaultCategoryId = useMemo(() => {
+    const inc = catList.find((c) => c.included && !c.isAnnotation)
+    return inc?.id ?? catList[0]?.id ?? 'cat-ambiant'
+  }, [catList])
 
   const [localHiddenLines, setLocalHiddenLines] = useState<Set<string>>(new Set())
 
@@ -1183,15 +1199,15 @@ export default function TimeSeriesChart({
       return
     }
 
-    // Survol d'une période annotée → affichage du commentaire
+    // Survol d'une période avec note → affichage du commentaire
     const tMin = xPxToMinutes(xLocal)
     const p = periodAtChartMin(tMin)
-    if (p && p.status === 'annotate') {
+    if (p && (catById.get(p.categoryId)?.isAnnotation || p.notes)) {
       setPeriodHover({ period: p, x: xLocal, y: yLocal })
     } else if (periodHover) {
       setPeriodHover(null)
     }
-  }, [xPxToMinutes, periodAtChartMin, periodHover])
+  }, [xPxToMinutes, periodAtChartMin, periodHover, catById])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     // Finaliser une sélection ON/OFF
@@ -1282,14 +1298,16 @@ export default function TimeSeriesChart({
       setPeriodPopup({
         tStart: tA, tEnd: tB,
         name: `Période ${(periods?.length ?? 0) + 1}`,
-        status: 'include',
-        color: PERIOD_PALETTE[((periods?.length ?? 0)) % PERIOD_PALETTE.length],
-        comment: '',
+        categoryId: defaultCategoryId,
+        notes: '',
         x: midX, y: popupY,
+        newCat: false,
+        newCatName: '',
+        newCatColor: PERIOD_PALETTE[((categories?.length ?? 0)) % PERIOD_PALETTE.length],
       })
       return
     }
-  }, [selectionPx, periodPx, xPxToMinutes, filesByPoint, compPx, compPhase, laeqOverRange, periods, chartRangePickArmed, onChartRangePicked])
+  }, [selectionPx, periodPx, xPxToMinutes, filesByPoint, compPx, compPhase, laeqOverRange, periods, chartRangePickArmed, onChartRangePicked, defaultCategoryId, categories])
 
   const handleMouseLeave = useCallback(() => {
     // Ne pas annuler une sélection en cours : l'utilisateur peut sortir de la zone
@@ -2016,23 +2034,18 @@ export default function TimeSeriesChart({
                 })}
 
               {/* Périodes nommées :
-                   - include  → vert
-                   - exclude  → rouge
-                   - annotate → couleur choisie (p.color) */}
+                   couleur = couleur de la catégorie (opacity 0.20).
+                   Exclue : trait pointillé + ✕ · Annotation : ✎ */}
               {periods && periods.map((p) => {
                 const bounds = periodBounds(p)
                 if (!bounds) return null
                 const [s, eMin] = bounds
-                const isInclude = p.status === 'include'
-                const isExclude = p.status === 'exclude'
-                const isAnnotate = p.status === 'annotate'
-                const baseColor = isInclude
-                  ? '#10b981'
-                  : isExclude
-                  ? '#ef4444'
-                  : (p.color ?? '#3b82f6')
-                const fillOp = isAnnotate ? 0.12 : 0.15
-                const labelPrefix = isExclude ? '✕ ' : isAnnotate ? '✎ ' : ''
+                const cat = catById.get(p.categoryId)
+                const isAnnotate = cat?.isAnnotation ?? false
+                const isExcluded = cat ? (!cat.included && !cat.isAnnotation) : false
+                const baseColor = cat?.color ?? '#3b82f6'
+                const fillOp = isAnnotate ? 0.12 : 0.20
+                const labelPrefix = isExcluded ? '✕ ' : isAnnotate ? '✎ ' : ''
                 return (
                   <ReferenceArea
                     key={`period-${p.id}`}
@@ -2379,22 +2392,25 @@ export default function TimeSeriesChart({
             style={{
               left: Math.min(periodHover.x + 12, (chartAreaRef.current?.clientWidth ?? 500) - 290),
               top: Math.max(8, periodHover.y - 16),
-              borderColor: periodHover.period.color ?? '#3b82f6',
+              borderColor: catById.get(periodHover.period.categoryId)?.color ?? '#3b82f6',
             }}
           >
             <div
               className="flex items-center gap-1 text-[11px] font-semibold mb-0.5"
-              style={{ color: periodHover.period.color ?? '#93c5fd' }}
+              style={{ color: catById.get(periodHover.period.categoryId)?.color ?? '#93c5fd' }}
             >
               <StickyNote size={11} />
               {periodHover.period.name}
+              <span className="text-[9px] font-normal text-gray-500">
+                · {catById.get(periodHover.period.categoryId)?.name ?? '—'}
+              </span>
             </div>
-            {periodHover.period.comment ? (
+            {periodHover.period.notes ? (
               <p className="text-[11px] text-gray-200 whitespace-pre-wrap leading-snug">
-                {periodHover.period.comment}
+                {periodHover.period.notes}
               </p>
             ) : (
-              <p className="text-[11px] text-gray-500 italic">Aucun commentaire</p>
+              <p className="text-[11px] text-gray-500 italic">Aucune note</p>
             )}
             <div className="mt-1 text-[9px] text-gray-500 font-mono">
               {minutesToHHMMSS((periodHover.period.startMs - chartAnchorMs) / 60_000)} → {minutesToHHMMSS((periodHover.period.endMs - chartAnchorMs) / 60_000)}
@@ -2489,9 +2505,8 @@ export default function TimeSeriesChart({
                     name: periodPopup.name.trim() || `Période ${(periods?.length ?? 0) + 1}`,
                     startMs: base + periodPopup.tStart * 60_000,
                     endMs: base + periodPopup.tEnd * 60_000,
-                    status: periodPopup.status,
-                    color: periodPopup.color,
-                    comment: periodPopup.status === 'annotate' ? periodPopup.comment : undefined,
+                    categoryId: periodPopup.categoryId,
+                    notes: periodPopup.notes.trim() || undefined,
                   })
                   setPeriodPopup(null)
                   setPeriodPx(null)
@@ -2504,79 +2519,88 @@ export default function TimeSeriesChart({
               <span className="ml-2 text-gray-600">· {formatDurationMin(periodPopup.tEnd - periodPopup.tStart)}</span>
             </div>
 
-            {/* Statut : Inclure / Exclure / Annoter */}
-            <div className="mt-2 grid grid-cols-3 gap-1">
-              <button
-                onClick={() => setPeriodPopup((p) => p && { ...p, status: 'include' })}
-                className={`text-[10px] rounded px-1 py-1 border transition-colors ${
-                  periodPopup.status === 'include'
-                    ? 'bg-emerald-700 border-emerald-500 text-white'
-                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
-                }`}
-              >
-                Inclure
-              </button>
-              <button
-                onClick={() => setPeriodPopup((p) => p && { ...p, status: 'exclude' })}
-                className={`text-[10px] rounded px-1 py-1 border transition-colors ${
-                  periodPopup.status === 'exclude'
-                    ? 'bg-rose-700 border-rose-500 text-white'
-                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
-                }`}
-              >
-                Exclure
-              </button>
-              <button
-                onClick={() => setPeriodPopup((p) => p && { ...p, status: 'annotate' })}
-                className={`text-[10px] rounded px-1 py-1 border transition-colors ${
-                  periodPopup.status === 'annotate'
-                    ? 'bg-blue-700 border-blue-500 text-white'
-                    : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
-                }`}
-              >
-                Annoter
-              </button>
-            </div>
-
-            {/* Palette de couleurs — utilisée pour les annotations */}
+            {/* Catégorie : dropdown des catégories + « Nouvelle catégorie » */}
             <div className="mt-2">
-              <p className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
-                Couleur {periodPopup.status !== 'annotate' && (
-                  <span className="normal-case text-gray-600">(non utilisée pour inclure/exclure)</span>
-                )}
-              </p>
-              <div className="flex gap-1.5">
-                {PERIOD_PALETTE.map((c) => (
-                  <button
-                    key={c}
-                    onClick={() => setPeriodPopup((p) => p && { ...p, color: c })}
-                    className={`w-5 h-5 rounded-full border-2 transition-transform ${
-                      periodPopup.color === c
-                        ? 'border-white scale-110'
-                        : 'border-gray-700 hover:border-gray-500'
-                    }`}
-                    style={{ backgroundColor: c }}
-                    aria-label={`Couleur ${c}`}
-                  />
-                ))}
+              <p className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Assigner à</p>
+              <div className="flex items-center gap-1.5">
+                <span
+                  className="w-3 h-3 rounded-full shrink-0 border border-black/30"
+                  style={{ backgroundColor: catById.get(periodPopup.categoryId)?.color ?? '#3b82f6' }}
+                />
+                <select
+                  value={periodPopup.categoryId}
+                  onChange={(e) => setPeriodPopup((p) => p && { ...p, categoryId: e.target.value })}
+                  className="flex-1 text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                >
+                  {catList.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}{!c.included && !c.isAnnotation ? ' (exclue)' : ''}{c.isAnnotation ? ' (annotation)' : ''}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  onClick={() => setPeriodPopup((p) => p && { ...p, newCat: !p.newCat })}
+                  className="text-[10px] text-emerald-400 hover:text-emerald-300 bg-gray-800 hover:bg-gray-700 border border-gray-700 rounded px-1.5 py-1 flex items-center gap-0.5"
+                  title="Créer une catégorie"
+                >
+                  <Plus size={10} /> Nouvelle
+                </button>
               </div>
             </div>
 
-            {/* Commentaire — uniquement pour les annotations */}
-            {periodPopup.status === 'annotate' && (
-              <div className="mt-2">
-                <p className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">
-                  Commentaire (optionnel)
-                </p>
-                <textarea
-                  value={periodPopup.comment}
-                  onChange={(e) => setPeriodPopup((p) => p && { ...p, comment: e.target.value })}
-                  rows={2}
-                  placeholder="Note libre qui apparaîtra au survol…"
-                  className="w-full text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
+            {/* Mini-formulaire « nouvelle catégorie » */}
+            {periodPopup.newCat && (
+              <div className="mt-2 p-2 rounded border border-gray-700 bg-gray-800/60 space-y-1.5">
+                <input
+                  value={periodPopup.newCatName}
+                  onChange={(e) => setPeriodPopup((p) => p && { ...p, newCatName: e.target.value })}
+                  placeholder="Nom de la catégorie"
+                  className="w-full text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
                 />
+                <div className="flex gap-1.5">
+                  {PERIOD_PALETTE.map((c) => (
+                    <button
+                      key={c}
+                      onClick={() => setPeriodPopup((p) => p && { ...p, newCatColor: c })}
+                      className={`w-4 h-4 rounded-full border-2 transition-transform ${
+                        periodPopup.newCatColor === c ? 'border-white scale-110' : 'border-gray-700 hover:border-gray-500'
+                      }`}
+                      style={{ backgroundColor: c }}
+                      aria-label={`Couleur ${c}`}
+                    />
+                  ))}
+                </div>
+                <button
+                  onClick={() => {
+                    if (!onCategoryAdd) return
+                    const id = crypto.randomUUID()
+                    onCategoryAdd({
+                      id,
+                      name: periodPopup.newCatName.trim() || `Catégorie ${(categories?.length ?? 0) + 1}`,
+                      color: periodPopup.newCatColor,
+                      included: true,
+                      isAnnotation: false,
+                    })
+                    setPeriodPopup((p) => p && { ...p, categoryId: id, newCat: false, newCatName: '' })
+                  }}
+                  className="w-full text-[10px] bg-emerald-700 hover:bg-emerald-600 text-white rounded px-2 py-1"
+                >
+                  Créer et assigner
+                </button>
               </div>
             )}
+
+            {/* Notes libres (optionnel) */}
+            <div className="mt-2">
+              <p className="text-[10px] uppercase tracking-wide text-gray-500 mb-1">Notes (optionnel)</p>
+              <textarea
+                value={periodPopup.notes}
+                onChange={(e) => setPeriodPopup((p) => p && { ...p, notes: e.target.value })}
+                rows={2}
+                placeholder="Note libre qui apparaîtra au survol…"
+                className="w-full text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-blue-500 resize-none"
+              />
+            </div>
 
             <div className="flex gap-1.5 mt-2.5">
               <button
@@ -2595,9 +2619,8 @@ export default function TimeSeriesChart({
                     name: periodPopup.name.trim() || `Période ${(periods?.length ?? 0) + 1}`,
                     startMs: base + periodPopup.tStart * 60_000,
                     endMs: base + periodPopup.tEnd * 60_000,
-                    status: periodPopup.status,
-                    color: periodPopup.color,
-                    comment: periodPopup.status === 'annotate' ? periodPopup.comment.trim() || undefined : undefined,
+                    categoryId: periodPopup.categoryId,
+                    notes: periodPopup.notes.trim() || undefined,
                   })
                   setPeriodPopup(null)
                   setPeriodPx(null)
@@ -2690,16 +2713,27 @@ export default function TimeSeriesChart({
                     },
                   },
                   {
-                    label: hoveredPeriod.status === 'include' ? 'Exclure du calcul' : 'Inclure au calcul',
-                    icon: <Flag size={12} />,
-                    action: () => onPeriodUpdate(hoveredPeriod.id, {
-                      status: hoveredPeriod.status === 'include' ? 'exclude' : 'include',
-                    }),
+                    label: 'Ajouter / modifier une note',
+                    icon: <MessageSquare size={12} />,
+                    action: () => {
+                      const note = window.prompt('Note :', hoveredPeriod.notes ?? '')
+                      if (note === null) return
+                      onPeriodUpdate(hoveredPeriod.id, { notes: note.trim() || undefined })
+                    },
                   },
+                  ...catList.map((c) => ({
+                    label: `Catégorie : ${c.name}`,
+                    icon: (
+                      <span className="w-2.5 h-2.5 rounded-full inline-block" style={{ backgroundColor: c.color }} />
+                    ),
+                    disabled: c.id === hoveredPeriod.categoryId,
+                    action: () => onPeriodUpdate(hoveredPeriod.id, { categoryId: c.id }),
+                  })),
                   {
                     label: 'Supprimer cette période',
                     icon: <Trash2 size={12} />,
                     danger: true,
+                    separator: true,
                     action: () => onPeriodRemove(hoveredPeriod.id),
                   },
                 ]
@@ -2724,13 +2758,12 @@ export default function TimeSeriesChart({
                     if (!durStr) return
                     const dur = parseFloat(durStr)
                     if (!Number.isFinite(dur) || dur <= 0) return
-                    const statusStr = window.confirm('OK = Inclure, Annuler = Exclure')
                     onPeriodAdd({
                       id: crypto.randomUUID(),
                       name: `Période ${(periods?.length ?? 0) + 1}`,
                       startMs: baseMs + tMin * 60_000,
                       endMs: baseMs + (tMin + dur) * 60_000,
-                      status: statusStr ? 'include' : 'exclude',
+                      categoryId: defaultCategoryId,
                     })
                   },
                 },

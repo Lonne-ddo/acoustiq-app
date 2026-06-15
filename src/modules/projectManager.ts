@@ -66,6 +66,8 @@ export function saveProject(
   projectName?: string,
   checklist?: import('../types').ChecklistState,
   scene3D?: Scene3DData,
+  categories?: import('../types').Category[],
+  periods?: import('../types').Period[],
 ): void {
   const project: ProjectData = {
     version: PROJECT_VERSION,
@@ -90,6 +92,8 @@ export function saveProject(
     projectName,
     checklist,
     scene3D,
+    categories,
+    periods,
   }
 
   const json = JSON.stringify(project, null, 2)

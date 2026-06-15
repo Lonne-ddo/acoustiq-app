@@ -1656,6 +1656,7 @@ function MainPanel({
                       onDateChange={onDateChange}
                       events={events}
                       zoomRange={zoomRange}
+                      onZoomChange={onZoomChange}
                       aggregationSeconds={aggregationSeconds}
                       compact
                       height={spectrogramHeight}

@@ -984,8 +984,10 @@ export default function TimeSeriesChart({
 
   // --- Gestionnaires zoom/pan ---
 
-  // Zoom centré sur la position du curseur (Ctrl + molette uniquement)
-  const handleWheel = useCallback((e: React.WheelEvent) => {
+  // Zoom centré sur la position du curseur (Ctrl + molette uniquement).
+  // Attaché en natif {passive:false} (voir effet plus bas) : les onWheel JSX
+  // de React sont passifs et ignorent preventDefault → Chrome zoomerait la page.
+  const handleWheel = useCallback((e: WheelEvent) => {
     if (!e.ctrlKey) return  // molette seule = scroll normal de la page
     e.preventDefault()
     const rect = chartAreaRef.current?.getBoundingClientRect()
@@ -1022,6 +1024,15 @@ export default function TimeSeriesChart({
       endMin: Math.min(fullRange.endMin, newEnd),
     })
   }, [effectiveRange, fullRange, onZoomChange])
+
+  // Listener wheel natif {passive:false} pour pouvoir preventDefault() sur
+  // Ctrl+molette (sinon Chrome zoome toute la page).
+  useEffect(() => {
+    const el = chartAreaRef.current
+    if (!el) return
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheel)
+  }, [handleWheel])
 
   // Mode d'interaction courant du graphique — calculé à chaque render
   // depuis les props/états d'armement. Un seul mode peut être actif,
@@ -1688,7 +1699,6 @@ export default function TimeSeriesChart({
             ? 'cursor-col-resize'
             : 'cursor-default'
         }`}
-        onWheel={handleWheel}
         onMouseDown={handleMouseDown}
         onMouseMove={handleMouseMove}
         onMouseUp={handleMouseUp}
@@ -3052,6 +3062,30 @@ function Minimap({
     const m = hitMode(e.clientX - rect.left)
     el.style.cursor = m === 'pan' ? 'move' : m === 'jump' ? 'pointer' : 'col-resize'
   }, [hitMode])
+
+  // Ctrl+molette → zoom centré sur le curseur (listener natif {passive:false}
+  // pour pouvoir preventDefault et empêcher le zoom de page de Chrome).
+  const handleWheel = useCallback((e: WheelEvent) => {
+    if (!e.ctrlKey) return
+    e.preventDefault()
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const cursorMin = xToMinute(e.clientX - rect.left)
+    const span = win.endMin - win.startMin
+    const factor = e.deltaY > 0 ? 1.3 : 0.7
+    const newSpan = Math.max(MIN_ZOOM_SPAN, Math.min(fullSpan, span * factor))
+    if (newSpan >= fullSpan) { onZoomChange(null); return }
+    const frac = Math.max(0, Math.min(1, (cursorMin - win.startMin) / Math.max(1e-6, span)))
+    const ns = cursorMin - frac * newSpan
+    emit(clampWindow(ns, ns + newSpan))
+  }, [xToMinute, win.startMin, win.endMin, fullSpan, emit, clampWindow, onZoomChange])
+
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    el.addEventListener('wheel', handleWheel, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheel)
+  }, [handleWheel])
 
   if (chartData.length === 0) return null
 

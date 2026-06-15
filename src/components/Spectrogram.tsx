@@ -1,9 +1,11 @@
 /**
- * Spectrogramme 1/3 octave — vue fréquence × temps sur canvas
- * Palette viridis : bleu foncé (bas dB) → vert → jaune (haut dB)
- * Un canvas par point de mesure, curseur synchronisé entre eux
+ * Spectrogramme 1/3 octave — vue fréquence × temps sur canvas.
+ * Axe Y fréquences (log), axe X temps synchronisé avec le graphique LAeq,
+ * colorbar dB. Palette par défaut « jet » (standard métier acoustique) avec
+ * sélecteur Jet / Viridis / Turbo / Gris. Ctrl+molette = zoom synchronisé.
+ * Un canvas par point de mesure, curseur synchronisé entre eux.
  */
-import { useRef, useEffect, useMemo, useState } from 'react'
+import { useRef, useEffect, useMemo, useState, useCallback } from 'react'
 import type { MeasurementFile, SourceEvent, DataPoint, ZoomRange } from '../types'
 
 function hhmmToMin(t: string): number {
@@ -13,8 +15,9 @@ function hhmmToMin(t: string): number {
 import { A_WEIGHT } from '../utils/acoustics'
 
 const DEFAULT_CANVAS_HEIGHT = 160  // hauteur affichée en px par spectrogramme (mode plein)
-const Y_AXIS_W = 48                // largeur réservée aux étiquettes de fréquence
-const LEGEND_W = 36                // largeur réservée à la légende de couleur
+const Y_AXIS_W = 64                // largeur réservée à l'axe Y (titre + étiquettes)
+const Y_TITLE_W = 14               // sous-largeur réservée au titre vertical « Fréquence (Hz) »
+const LEGEND_W = 52                // largeur réservée à la colorbar (échelle + titre)
 
 // ---- Fréquences ------------------------------------------------------------
 // 36 bandes tiers d'octave standard (6.3 Hz → 20 kHz)
@@ -24,29 +27,30 @@ const FREQ_BANDS_ALL = [
   4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000,
 ]
 
-// Fréquences affichées comme étiquettes sur l'axe Y
-const Y_LABEL_SET = new Set([100, 250, 500, 1000, 2000, 4000, 8000, 16000])
+// Fréquences (octaves) affichées comme étiquettes principales sur l'axe Y
+const Y_LABEL_SET = new Set([31.5, 63, 125, 250, 500, 1000, 2000, 4000, 8000, 16000])
 
-// ---- Palette viridis -------------------------------------------------------
-const V_STOPS: Array<[number, [number, number, number]]> = [
-  [0.000, [68,   1,  84]],
-  [0.125, [71,  44, 122]],
-  [0.250, [59,  82, 139]],
-  [0.375, [44, 113, 142]],
-  [0.500, [33, 145, 140]],
-  [0.625, [39, 173, 129]],
-  [0.750, [92, 200,  99]],
-  [0.875, [170, 220, 50]],
-  [1.000, [253, 231,  37]],
+// ---- Palettes de couleurs --------------------------------------------------
+// Jet (défaut, standard métier acoustique) · Viridis · Turbo · Greyscale.
+type SpectroPalette = 'jet' | 'viridis' | 'turbo' | 'greyscale'
+
+const PALETTE_OPTIONS: Array<{ id: SpectroPalette; label: string }> = [
+  { id: 'jet', label: 'Jet' },
+  { id: 'viridis', label: 'Viridis' },
+  { id: 'turbo', label: 'Turbo' },
+  { id: 'greyscale', label: 'Gris' },
 ]
 
-function viridis(t: number): [number, number, number] {
+type RGB = [number, number, number]
+type Stops = Array<[number, RGB]>
+
+function sampleStops(stops: Stops, t: number): RGB {
   const v = Math.max(0, Math.min(1, t))
-  for (let i = 0; i < V_STOPS.length - 1; i++) {
-    const [t0, c0] = V_STOPS[i]
-    const [t1, c1] = V_STOPS[i + 1]
+  for (let i = 0; i < stops.length - 1; i++) {
+    const [t0, c0] = stops[i]
+    const [t1, c1] = stops[i + 1]
     if (v <= t1) {
-      const u = (v - t0) / (t1 - t0)
+      const u = (v - t0) / (t1 - t0 || 1)
       return [
         Math.round(c0[0] + u * (c1[0] - c0[0])),
         Math.round(c0[1] + u * (c1[1] - c0[1])),
@@ -54,7 +58,39 @@ function viridis(t: number): [number, number, number] {
       ]
     }
   }
-  return [253, 231, 37]
+  return stops[stops.length - 1][1]
+}
+
+const V_STOPS: Stops = [
+  [0.000, [68, 1, 84]], [0.125, [71, 44, 122]], [0.250, [59, 82, 139]],
+  [0.375, [44, 113, 142]], [0.500, [33, 145, 140]], [0.625, [39, 173, 129]],
+  [0.750, [92, 200, 99]], [0.875, [170, 220, 50]], [1.000, [253, 231, 37]],
+]
+const TURBO_STOPS: Stops = [
+  [0.000, [48, 18, 59]], [0.125, [70, 107, 227]], [0.250, [40, 176, 237]],
+  [0.375, [42, 228, 165]], [0.500, [123, 250, 69]], [0.625, [208, 233, 47]],
+  [0.750, [251, 170, 32]], [0.875, [233, 82, 14]], [1.000, [122, 4, 3]],
+]
+
+const clamp01 = (x: number) => Math.min(Math.max(x, 0), 1)
+
+// Jet / rainbow — formule classique (cf. consignes), valeurs 0–255.
+function jet(t: number): RGB {
+  const v = clamp01(t)
+  const r = clamp01(1.5 - Math.abs(4 * v - 3))
+  const g = clamp01(1.5 - Math.abs(4 * v - 2))
+  const b = clamp01(1.5 - Math.abs(4 * v - 1))
+  return [Math.round(r * 255), Math.round(g * 255), Math.round(b * 255)]
+}
+
+function colormap(t: number, palette: SpectroPalette): RGB {
+  switch (palette) {
+    case 'viridis': return sampleStops(V_STOPS, t)
+    case 'turbo': return sampleStops(TURBO_STOPS, t)
+    case 'greyscale': { const g = Math.round(clamp01(t) * 255); return [g, g, g] }
+    case 'jet':
+    default: return jet(t)
+  }
 }
 
 // ---- Couleurs par point (partagées avec TimeSeriesChart) -------------------
@@ -72,8 +108,38 @@ function minutesToHHMM(t: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
 
+function minutesToHHMMSS(t: number): string {
+  const totalSec = Math.round(t * 60)
+  const h = Math.floor(totalSec / 3600) % 24
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = totalSec % 60
+  return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+}
+
 function freqLabel(hz: number): string {
   return hz >= 1000 ? `${hz / 1000}k` : String(hz)
+}
+
+/** Graduations temporelles partagées (axe X + lignes de grille). */
+function computeTimeTicks(tMin: number, tMax: number): number[] {
+  const range = tMax - tMin || 1
+  let interval: number
+  if (range <= 5) interval = 1
+  else if (range <= 15) interval = 5
+  else if (range <= 60) interval = 10
+  else if (range <= 180) interval = 30
+  else if (range <= 720) interval = 60
+  else interval = 120
+  const ticks: number[] = []
+  for (let t = Math.ceil(tMin / interval) * interval; t <= tMax; t += interval) {
+    ticks.push(t)
+  }
+  return ticks
+}
+
+/** HH:MM:SS si la plage visible est serrée (< 10 min), sinon HH:MM. */
+function formatTimeTick(t: number, rangeMin: number): string {
+  return rangeMin < 10 ? minutesToHHMMSS(t) : minutesToHHMM(t)
 }
 
 /**
@@ -133,11 +199,14 @@ function aggregateSpectra(
 }
 
 // ---- ColorScaleLegend ------------------------------------------------------
+// Colorbar verticale pleine hauteur : dégradé de la palette active, graduations
+// tous les 10 dB, titre vertical « Niveau (dB) ».
 function ColorScaleLegend({
   minDb,
   maxDb,
   height,
-}: { minDb: number; maxDb: number; height: number }) {
+  palette,
+}: { minDb: number; maxDb: number; height: number; palette: SpectroPalette }) {
   const ref = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -150,61 +219,76 @@ function ColorScaleLegend({
     const tctx = tmp.getContext('2d')!
     const img = tctx.createImageData(1, H)
     for (let y = 0; y < H; y++) {
-      const [r, g, b] = viridis(1 - y / Math.max(H - 1, 1))
+      const [r, g, b] = colormap(1 - y / Math.max(H - 1, 1), palette)
       img.data[y * 4] = r; img.data[y * 4 + 1] = g
       img.data[y * 4 + 2] = b; img.data[y * 4 + 3] = 255
     }
     tctx.putImageData(img, 0, 0)
     ctx.drawImage(tmp, 0, 0, canvas.width, H)
-  }, [minDb, maxDb, height])
+  }, [minDb, maxDb, height, palette])
 
-  const mid = Math.round((minDb + maxDb) / 2)
+  // Graduations tous les 10 dB (bornes incluses)
+  const dbTicks: number[] = []
+  const lo = Math.ceil(minDb / 10) * 10
+  for (let v = lo; v <= maxDb; v += 10) dbTicks.push(v)
+  if (dbTicks[0] !== minDb) dbTicks.unshift(minDb)
+  if (dbTicks[dbTicks.length - 1] !== maxDb) dbTicks.push(maxDb)
+  const dbRange = maxDb - minDb || 1
 
   return (
-    <div
-      className="flex flex-col shrink-0"
-      style={{ width: LEGEND_W, paddingTop: 20 /* aligne avec le canvas */ }}
-    >
-      <div className="flex gap-1" style={{ height }}>
-        <div className="flex flex-col justify-between py-0.5 text-right">
-          {[maxDb, mid, minDb].map((v) => (
-            <span key={v} className="text-gray-500 select-none" style={{ fontSize: 9 }}>
-              {v}
-            </span>
-          ))}
-        </div>
+    <div className="flex shrink-0" style={{ width: LEGEND_W, paddingTop: 20 /* aligne avec le canvas */ }}>
+      {/* Barre + graduations */}
+      <div className="flex gap-1">
         <canvas
           ref={ref}
           width={10}
           height={height}
-          className="rounded-sm"
+          className="rounded-sm shrink-0"
           style={{ width: 10, height }}
         />
+        <div className="relative" style={{ height, width: 22 }}>
+          {dbTicks.map((v) => (
+            <span
+              key={v}
+              className="absolute left-0 text-gray-500 select-none"
+              style={{
+                top: `${(1 - (v - minDb) / dbRange) * 100}%`,
+                transform: 'translateY(-50%)',
+                fontSize: 9,
+                lineHeight: 1,
+              }}
+            >
+              {v}
+            </span>
+          ))}
+        </div>
       </div>
-      <span
-        className="text-gray-500 text-center mt-1 select-none"
-        style={{ fontSize: 9 }}
-      >
-        dB
-      </span>
+      {/* Titre vertical « Niveau (dB) » — masqué si trop court */}
+      <div className="relative shrink-0" style={{ width: 12, height }}>
+        {height >= 90 && (
+          <span
+            className="absolute text-gray-500 select-none whitespace-nowrap"
+            style={{
+              top: '50%', left: '50%',
+              transform: 'translate(-50%, -50%) rotate(90deg)',
+              transformOrigin: 'center',
+              fontSize: 9,
+            }}
+          >
+            Niveau (dB)
+          </span>
+        )}
+      </div>
     </div>
   )
 }
 
 // ---- XAxis -----------------------------------------------------------------
+// Axe X temps (20px) — synchronisé avec le graphique LAeq. Format HH:MM, ou
+// HH:MM:SS si la plage visible est serrée (< 10 min).
 function XAxis({ tMin, tMax }: { tMin: number; tMax: number }) {
   const range = tMax - tMin || 1
-  // Intervalle adaptatif selon la plage visible
-  let interval: number
-  if (range <= 15) interval = 5
-  else if (range <= 60) interval = 10
-  else if (range <= 180) interval = 30
-  else if (range <= 720) interval = 60
-  else interval = 120
-  const ticks: number[] = []
-  for (let t = Math.ceil(tMin / interval) * interval; t <= tMax; t += interval) {
-    ticks.push(t)
-  }
+  const ticks = computeTimeTicks(tMin, tMax)
   return (
     <div
       className="relative h-5 mt-0.5"
@@ -213,7 +297,7 @@ function XAxis({ tMin, tMax }: { tMin: number; tMax: number }) {
       {ticks.map((t) => (
         <span
           key={t}
-          className="absolute text-gray-600 select-none"
+          className="absolute text-gray-500 select-none"
           style={{
             left: `${((t - tMin) / range) * 100}%`,
             transform: 'translateX(-50%)',
@@ -221,7 +305,7 @@ function XAxis({ tMin, tMax }: { tMin: number; tMax: number }) {
             top: 2,
           }}
         >
-          {minutesToHHMM(t)}
+          {formatTimeTick(t, range)}
         </span>
       ))}
     </div>
@@ -258,6 +342,8 @@ interface SingleSpectrogramProps {
   compact?: boolean
   /** Position du curseur de lecture audio en minutes (axe X chart) */
   playheadMin?: number | null
+  /** Palette de couleurs active */
+  palette: SpectroPalette
 }
 
 function SingleSpectrogram({
@@ -265,7 +351,7 @@ function SingleSpectrogram({
   tMin, tMax, nBands, freqBands,
   minDb, maxDb, hoverTime, events, onHoverTime,
   canvasHeight, aggSec, compact,
-  playheadMin,
+  playheadMin, palette,
 }: SingleSpectrogramProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
@@ -316,7 +402,7 @@ function SingleSpectrogram({
         const row = nBands - 1 - bi
         const dbRange = maxDb - minDb || 1 // Éviter division par zéro
         const norm = (sp[bi] - minDb) / dbRange
-        const [r, g, b] = viridis(norm)
+        const [r, g, b] = colormap(norm, palette)
         const idx = (row * sorted.length + ti) * 4
         img.data[idx] = r; img.data[idx + 1] = g
         img.data[idx + 2] = b; img.data[idx + 3] = 255
@@ -332,9 +418,10 @@ function SingleSpectrogram({
       const x1 = Math.round(((bucket + aggMin - tMin) / tRange) * canvasW)
       ctx.drawImage(tmp, ti, 0, 1, nBands, x0, 0, Math.max(1, x1 - x0), canvasHeight)
     })
-  }, [spectraByBucket, nBands, minDb, maxDb, canvasW, tMin, tMax, aggSec, canvasHeight])
+  }, [spectraByBucket, nBands, minDb, maxDb, canvasW, tMin, tMax, aggSec, canvasHeight, palette])
 
   const tRange = tMax - tMin || 1
+  const timeTicks = computeTimeTicks(tMin, tMax)
   const cursorPct = hoverTime !== null ? ((hoverTime - tMin) / tRange) * 100 : null
   const playheadPct = playheadMin !== null && playheadMin !== undefined
     ? ((playheadMin - tMin) / tRange) * 100
@@ -358,19 +445,43 @@ function SingleSpectrogram({
       </div>
 
       <div className="flex items-stretch">
-        {/* Axe Y : étiquettes de fréquences */}
+        {/* Axe Y : titre vertical « Fréquence (Hz) » + graduations.
+            Position par index de bande = échelle log (les bandes 1/3 d'octave
+            sont espacées logarithmiquement). */}
         <div className="relative shrink-0" style={{ width: Y_AXIS_W, height: canvasHeight }}>
+          {/* Titre vertical — masqué si le canvas est trop court (mode compact
+              multi-points) pour éviter le débordement. */}
+          {canvasHeight >= 90 && (
+            <div
+              className="absolute inset-y-0 left-0 flex items-center justify-center"
+              style={{ width: Y_TITLE_W }}
+            >
+              <span
+                className="text-gray-500 select-none whitespace-nowrap"
+                style={{ fontSize: 9, transform: 'rotate(-90deg)' }}
+              >
+                Fréquence (Hz)
+              </span>
+            </div>
+          )}
+          {/* Graduations : majeures (octaves, avec label) + mineures (trait) */}
           {freqBands.map((f, bi) => {
-            if (!Y_LABEL_SET.has(f)) return null
             const yPct = (1 - bi / Math.max(nBands - 1, 1)) * 100
-            return (
+            const major = Y_LABEL_SET.has(f)
+            return major ? (
               <span
                 key={f}
-                className="absolute right-1 text-gray-500 select-none"
+                className="absolute right-1 text-gray-400 select-none"
                 style={{ top: `${yPct}%`, transform: 'translateY(-50%)', fontSize: 9, lineHeight: 1 }}
               >
                 {freqLabel(f)}
               </span>
+            ) : (
+              <span
+                key={f}
+                className="absolute right-0 bg-gray-700"
+                style={{ top: `${yPct}%`, width: 3, height: 1, transform: 'translateY(-50%)' }}
+              />
             )
           })}
         </div>
@@ -388,6 +499,20 @@ function SingleSpectrogram({
             className="block w-full"
             style={{ height: canvasHeight, backgroundColor: '#030712' }}
           />
+
+          {/* Lignes de grille verticales (mêmes graduations que l'axe X /
+              le graphique LAeq) — très discrètes pour la cohérence visuelle */}
+          {timeTicks.map((t) => {
+            const pct = ((t - tMin) / tRange) * 100
+            if (pct < 0 || pct > 100) return null
+            return (
+              <div
+                key={`grid-${t}`}
+                className="pointer-events-none absolute inset-y-0"
+                style={{ left: `${pct}%`, width: 0, borderLeft: '1px solid rgba(255,255,255,0.06)' }}
+              />
+            )
+          })}
 
           {/* Curseur temps (survol) */}
           {cursorPct !== null && (
@@ -473,6 +598,8 @@ interface Props {
   /** Position du curseur de lecture audio (minutes axe X chart) — affichée
    *  comme une ligne verticale blanche fine sur chaque canvas. */
   playheadMin?: number | null
+  /** Modifie la plage de zoom partagée (Ctrl+molette sur le spectrogramme). */
+  onZoomChange?: (range: ZoomRange | null) => void
 }
 
 /**
@@ -497,11 +624,22 @@ export default function Spectrogram({
   height,
   multiDay,
   playheadMin,
+  onZoomChange,
 }: Props) {
   const [minDb, setMinDb] = useState(30)
   const [maxDb, setMaxDb] = useState(90)
   const [mode, setMode] = useState<SpectroMode>('moyen')
   const [hoverTime, setHoverTime] = useState<number | null>(null)
+  const [palette, setPalette] = useState<SpectroPalette>(() => {
+    try {
+      const v = localStorage.getItem('acoustiq_spectro_palette') as SpectroPalette | null
+      if (v && PALETTE_OPTIONS.some((o) => o.id === v)) return v
+    } catch { /* ignore */ }
+    return 'jet'
+  })
+  useEffect(() => {
+    try { localStorage.setItem('acoustiq_spectro_palette', palette) } catch { /* ignore */ }
+  }, [palette])
 
   // En mode multi-jours, les dates sont triées pour permettre un axe X
   // absolu (dayIndex × 1440 + t) cohérent avec le chart.
@@ -589,7 +727,7 @@ export default function Spectrogram({
   }, [filesByPoint, effectiveAggSec, mode, aWeightVector])
 
   // Plage temporelle globale et nombre de bandes
-  const { tMin, tMax, nBands } = useMemo(() => {
+  const { tMin, tMax, nBands, fullStart, fullEnd } = useMemo(() => {
     let mn = Infinity, mx = -Infinity, nb = 0
     for (const [, buckets] of spectraByPoint) {
       for (const [t, sp] of buckets) {
@@ -604,8 +742,46 @@ export default function Spectrogram({
       tMin: zoomRange ? Math.max(baseMn, zoomRange.startMin) : baseMn,
       tMax: zoomRange ? Math.min(baseMx, zoomRange.endMin) : baseMx,
       nBands: nb,
+      fullStart: baseMn,
+      fullEnd: baseMx,
     }
   }, [spectraByPoint, zoomRange, isMulti, sortedDates.length])
+
+  // ── Ctrl+molette → zoom (synchronisé avec le chart) ──────────────────────
+  // Listener natif {passive:false} pour pouvoir preventDefault et empêcher le
+  // zoom de page de Chrome. On preventDefault dès que Ctrl est pressé, même si
+  // le zoom n'est pas pilotable (onZoomChange absent), pour ne jamais laisser
+  // Chrome intercepter au-dessus du spectrogramme.
+  const wheelWrapRef = useRef<HTMLDivElement>(null)
+  const handleWheelZoom = useCallback((e: WheelEvent) => {
+    if (!e.ctrlKey) return
+    e.preventDefault()
+    if (!onZoomChange) return
+    const rect = wheelWrapRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const plotW = Math.max(1, rect.width - Y_AXIS_W)
+    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left - Y_AXIS_W) / plotW))
+    const curStart = zoomRange ? Math.max(fullStart, zoomRange.startMin) : fullStart
+    const curEnd = zoomRange ? Math.min(fullEnd, zoomRange.endMin) : fullEnd
+    const span = curEnd - curStart
+    const cursorMin = curStart + frac * span
+    const globalSpan = fullEnd - fullStart || 1
+    const factor = e.deltaY > 0 ? 1.3 : 0.7
+    const newSpan = Math.max(2, Math.min(globalSpan, span * factor))
+    if (newSpan >= globalSpan) { onZoomChange(null); return }
+    let ns = cursorMin - frac * newSpan
+    let ne = ns + newSpan
+    if (ns < fullStart) { ns = fullStart; ne = ns + newSpan }
+    if (ne > fullEnd) { ne = fullEnd; ns = ne - newSpan }
+    onZoomChange({ startMin: Math.max(fullStart, ns), endMin: Math.min(fullEnd, ne) })
+  }, [onZoomChange, zoomRange, fullStart, fullEnd])
+
+  useEffect(() => {
+    const el = wheelWrapRef.current
+    if (!el) return
+    el.addEventListener('wheel', handleWheelZoom, { passive: false })
+    return () => el.removeEventListener('wheel', handleWheelZoom)
+  }, [handleWheelZoom])
 
   // Zones de discontinuité (> 60 min sans données) — reportées depuis le chart
   // en mode multi-jours. Dérivées à partir de l'union des buckets.
@@ -725,6 +901,21 @@ export default function Spectrogram({
           aria-label="Max dB"
         />
       </div>
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] text-gray-500">Palette</span>
+        <select
+          value={palette}
+          onChange={(e) => setPalette(e.target.value as SpectroPalette)}
+          className="text-[10px] bg-gray-800 text-gray-100 border border-gray-600 rounded
+                     px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+          aria-label="Palette de couleurs"
+          title="Palette de couleurs du spectrogramme"
+        >
+          {PALETTE_OPTIONS.map((o) => (
+            <option key={o.id} value={o.id}>{o.label}</option>
+          ))}
+        </select>
+      </div>
     </div>
   )
 
@@ -753,7 +944,7 @@ export default function Spectrogram({
         </div>
         <div className="flex-1 overflow-y-auto px-4 py-2">
           <div className="flex gap-0">
-            <div className="relative flex-1 min-w-0">
+            <div ref={wheelWrapRef} className="relative flex-1 min-w-0">
               {pointNames.map((pt, i) => (
                 <SingleSpectrogram
                   key={pt}
@@ -773,6 +964,7 @@ export default function Spectrogram({
                   aggSec={effectiveAggSec}
                   compact
                   playheadMin={playheadMin}
+                  palette={palette}
                 />
               ))}
               <XAxis tMin={tMin} tMax={tMax} />
@@ -815,7 +1007,7 @@ export default function Spectrogram({
                 </div>
               )}
             </div>
-            <ColorScaleLegend minDb={minDb} maxDb={maxDb} height={perCanvasHeight} />
+            <ColorScaleLegend minDb={minDb} maxDb={maxDb} height={perCanvasHeight} palette={palette} />
           </div>
         </div>
       </div>
@@ -850,7 +1042,7 @@ export default function Spectrogram({
       <div className="flex-1 overflow-y-auto px-4 py-4">
         <div className="flex gap-0">
           {/* Colonne principale : spectrogrammes + axe X */}
-          <div className="relative flex-1 min-w-0">
+          <div ref={wheelWrapRef} className="relative flex-1 min-w-0">
             {pointNames.map((pt, i) => (
               <SingleSpectrogram
                 key={pt}
@@ -869,13 +1061,14 @@ export default function Spectrogram({
                 canvasHeight={DEFAULT_CANVAS_HEIGHT}
                 aggSec={effectiveAggSec}
                 playheadMin={playheadMin}
+                palette={palette}
               />
             ))}
             <XAxis tMin={tMin} tMax={tMax} />
           </div>
 
           {/* Légende de couleur */}
-          <ColorScaleLegend minDb={minDb} maxDb={maxDb} height={DEFAULT_CANVAS_HEIGHT} />
+          <ColorScaleLegend minDb={minDb} maxDb={maxDb} height={DEFAULT_CANVAS_HEIGHT} palette={palette} />
         </div>
       </div>
     </div>

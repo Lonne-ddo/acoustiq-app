@@ -56,19 +56,22 @@ export const PERIOD_PALETTE: string[] = [
   '#6b7280', // gris
 ]
 
+/** Mode de contribution d'une catégorie au calcul des indices. */
+export type CategoryMode = 'include' | 'exclude' | 'annotation'
+
 /**
- * Catégorie de périodes — nommable, colorable, avec un toggle « inclus dans
- * les calculs ». Les indices acoustiques sont calculés sur l'union des
- * périodes appartenant à des catégories `included === true && isAnnotation === false`.
+ * Catégorie de périodes — nommable, colorable. `mode` définit sa contribution
+ * au calcul (inclure / exclure / annotation). `visible` (la case à cocher du
+ * panneau) contrôle à la fois l'affichage des bandes sur le graphique et
+ * l'activation dans les calculs : une catégorie masquée est neutralisée
+ * (ni affichée, ni prise en compte) sans que ses périodes soient supprimées.
  */
 export interface Category {
   id: string
   name: string
   color: string
-  /** La catégorie est-elle incluse dans le calcul des indices ? */
-  included: boolean
-  /** true = purement visuelle (documentaire) — n'affecte jamais les calculs. */
-  isAnnotation: boolean
+  mode: CategoryMode
+  visible: boolean
 }
 
 /** Identifiants stables des 4 catégories par défaut (clé de migration). */
@@ -82,10 +85,10 @@ export const DEFAULT_CATEGORY_IDS = {
 /** Crée les 4 catégories par défaut d'un nouveau projet. */
 export function makeDefaultCategories(): Category[] {
   return [
-    { id: DEFAULT_CATEGORY_IDS.ambiant, name: 'Ambiant', color: '#22c55e', included: true, isAnnotation: false },
-    { id: DEFAULT_CATEGORY_IDS.residuel, name: 'Résiduel', color: '#3b82f6', included: true, isAnnotation: false },
-    { id: DEFAULT_CATEGORY_IDS.exclure, name: 'À exclure', color: '#ef4444', included: false, isAnnotation: false },
-    { id: DEFAULT_CATEGORY_IDS.annotation, name: 'Annotation', color: '#eab308', included: true, isAnnotation: true },
+    { id: DEFAULT_CATEGORY_IDS.ambiant, name: 'Ambiant', color: '#22c55e', mode: 'include', visible: true },
+    { id: DEFAULT_CATEGORY_IDS.residuel, name: 'Résiduel', color: '#3b82f6', mode: 'include', visible: true },
+    { id: DEFAULT_CATEGORY_IDS.exclure, name: 'À exclure', color: '#ef4444', mode: 'exclude', visible: true },
+    { id: DEFAULT_CATEGORY_IDS.annotation, name: 'Annotation', color: '#eab308', mode: 'annotation', visible: true },
   ]
 }
 
@@ -142,13 +145,24 @@ export function normalizeProjectPeriods(
     ? rawPeriods.map((p) => migratePeriodRaw(p as Record<string, unknown>)).filter((p): p is Period => p !== null)
     : []
   let categories: Category[] = Array.isArray(rawCategories) && rawCategories.length
-    ? (rawCategories as Array<Record<string, unknown>>).map((c) => ({
-        id: String(c.id),
-        name: typeof c.name === 'string' ? c.name : 'Catégorie',
-        color: typeof c.color === 'string' ? c.color : PERIOD_PALETTE[0],
-        included: c.included !== false,
-        isAnnotation: !!c.isAnnotation,
-      }))
+    ? (rawCategories as Array<Record<string, unknown>>).map((c) => {
+        // Migration : ancien format {included, isAnnotation} → {mode, visible}.
+        let mode: CategoryMode
+        if (c.mode === 'include' || c.mode === 'exclude' || c.mode === 'annotation') {
+          mode = c.mode
+        } else if (c.isAnnotation) {
+          mode = 'annotation'
+        } else {
+          mode = c.included === false ? 'exclude' : 'include'
+        }
+        return {
+          id: String(c.id),
+          name: typeof c.name === 'string' ? c.name : 'Catégorie',
+          color: typeof c.color === 'string' ? c.color : PERIOD_PALETTE[0],
+          mode,
+          visible: c.visible !== false,
+        }
+      })
     : []
   if (categories.length === 0) categories = makeDefaultCategories()
   const have = new Set(categories.map((c) => c.id))

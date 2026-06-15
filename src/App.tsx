@@ -1743,6 +1743,8 @@ function MainPanel({
                       availableDates={availableDates}
                       onDateChange={onDateChange}
                       events={events}
+                      periods={periods}
+                      categories={categories}
                       zoomRange={zoomRange}
                       onZoomChange={onZoomChange}
                       aggregationSeconds={aggregationSeconds}

@@ -241,10 +241,12 @@ function anyRangeContains(ranges: RangeMs[], tsMs: number): boolean {
  * Filtre un tableau de DataPoints selon une liste de périodes.
  *
  * Règle de sélection (système de catégories) :
- *   - Les données conservées = union des périodes dont la catégorie est
- *     `included === true && isAnnotation === false`.
- *   - Si aucune période active (pas de période, ou aucune dans une catégorie
- *     incluse) → garde tout (comportement par défaut).
+ *   - Seules les catégories `visible === true` participent (les masquées sont
+ *     neutralisées).
+ *   - Mode « include » → définit l'ensemble de base (union).
+ *   - Mode « exclude » → retire les points tombant dans ses périodes (soustractif).
+ *   - Mode « annotation » → n'affecte jamais le calcul.
+ *   - Aucune période active (ni include ni exclude) → garde tout.
  *
  * `isoDate` est la date du fichier (YYYY-MM-DD). `tMinutes` est dp.t.
  * Le filtre ne dépend pas de dp.t modulo 1440 : les périodes multi-jours
@@ -257,18 +259,21 @@ export function filterDataByPeriods<T extends { t: number }>(
   categories: Category[] | undefined | null,
 ): T[] {
   if (!periods || periods.length === 0 || !categories || categories.length === 0) return data
-  const includedCatIds = new Set(
-    categories.filter((c) => c.included && !c.isAnnotation).map((c) => c.id),
-  )
-  const ranges: RangeMs[] = periods
-    .filter((p) => includedCatIds.has(p.categoryId))
-    .map((p) => ({ startMs: p.startMs, endMs: p.endMs }))
-  if (ranges.length === 0) return data
+  const incIds = new Set(categories.filter((c) => c.visible && c.mode === 'include').map((c) => c.id))
+  const excIds = new Set(categories.filter((c) => c.visible && c.mode === 'exclude').map((c) => c.id))
+  const includes: RangeMs[] = periods.filter((p) => incIds.has(p.categoryId)).map((p) => ({ startMs: p.startMs, endMs: p.endMs }))
+  const excludes: RangeMs[] = periods.filter((p) => excIds.has(p.categoryId)).map((p) => ({ startMs: p.startMs, endMs: p.endMs }))
+  if (includes.length === 0 && excludes.length === 0) return data
 
   const baseMs = dpTimestampMs(isoDate, 0)
   if (!Number.isFinite(baseMs)) return data
 
-  return data.filter((dp) => anyRangeContains(ranges, baseMs + dp.t * 60_000))
+  return data.filter((dp) => {
+    const ts = baseMs + dp.t * 60_000
+    if (includes.length > 0 && !anyRangeContains(includes, ts)) return false
+    if (anyRangeContains(excludes, ts)) return false
+    return true
+  })
 }
 
 /**

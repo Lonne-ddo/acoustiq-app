@@ -6,7 +6,7 @@
  * Un canvas par point de mesure, curseur synchronisé entre eux.
  */
 import { useRef, useEffect, useMemo, useState, useCallback } from 'react'
-import type { MeasurementFile, SourceEvent, DataPoint, ZoomRange } from '../types'
+import type { MeasurementFile, SourceEvent, DataPoint, ZoomRange, Period, Category } from '../types'
 
 function hhmmToMin(t: string): number {
   const [h = '0', m = '0'] = t.split(':')
@@ -100,6 +100,15 @@ const POINT_COLORS: Record<string, string> = {
 }
 const FALLBACK = ['#ec4899', '#84cc16', '#f97316', '#a78bfa']
 const ptColor = (pt: string, i: number) => POINT_COLORS[pt] ?? FALLBACK[i % FALLBACK.length]
+
+/** Couleur hex → rgba avec alpha (pour les bandes de période translucides). */
+function hexA(hex: string, a: number): string {
+  const m = hex.replace('#', '')
+  const r = parseInt(m.slice(0, 2), 16) || 0
+  const g = parseInt(m.slice(2, 4), 16) || 0
+  const b = parseInt(m.slice(4, 6), 16) || 0
+  return `rgba(${r},${g},${b},${a})`
+}
 
 // ---- Utilitaires -----------------------------------------------------------
 function minutesToHHMM(t: number): string {
@@ -321,6 +330,15 @@ interface ResolvedEvent {
   minutes: number
 }
 
+/** Bande de période pré-résolue sur l'axe X absolu (en minutes). */
+interface ResolvedBand {
+  id: string
+  label: string
+  color: string
+  startMin: number
+  endMin: number
+}
+
 // ---- SingleSpectrogram -----------------------------------------------------
 interface SingleSpectrogramProps {
   pointName: string
@@ -334,6 +352,7 @@ interface SingleSpectrogramProps {
   maxDb: number
   hoverTime: number | null
   events: ResolvedEvent[]
+  bands: ResolvedBand[]
   onHoverTime: (t: number | null) => void
   /** Hauteur du canvas en px (variable selon mode embedded/full) */
   canvasHeight: number
@@ -349,7 +368,7 @@ interface SingleSpectrogramProps {
 function SingleSpectrogram({
   pointName, pointColor, spectraByBucket,
   tMin, tMax, nBands, freqBands,
-  minDb, maxDb, hoverTime, events, onHoverTime,
+  minDb, maxDb, hoverTime, events, bands, onHoverTime,
   canvasHeight, aggSec, compact,
   playheadMin, palette,
 }: SingleSpectrogramProps) {
@@ -533,6 +552,36 @@ function SingleSpectrogram({
             </div>
           )}
 
+          {/* Bandes de période (catégories visibles) — reportées du graphique */}
+          {bands.map((b) => {
+            const l = ((b.startMin - tMin) / tRange) * 100
+            const w = ((b.endMin - b.startMin) / tRange) * 100
+            if (l + w < 0 || l > 100) return null
+            const left = Math.max(0, l)
+            const width = Math.min(100 - left, w - (left - l))
+            if (width <= 0) return null
+            return (
+              <div
+                key={`band-${b.id}`}
+                className="pointer-events-none absolute inset-y-0"
+                style={{
+                  left: `${left}%`,
+                  width: `${width}%`,
+                  backgroundColor: hexA(b.color, 0.20),
+                  borderLeft: `1px solid ${hexA(b.color, 0.5)}`,
+                  borderRight: `1px solid ${hexA(b.color, 0.5)}`,
+                }}
+              >
+                <span
+                  className="absolute top-0 left-1/2 -translate-x-1/2 whitespace-nowrap select-none"
+                  style={{ fontSize: 8, color: b.color }}
+                >
+                  {b.label}
+                </span>
+              </div>
+            )
+          })}
+
           {/* Curseur de lecture audio — synchronisé avec le chart LAeq */}
           {playheadPct !== null && playheadPct >= 0 && playheadPct <= 100 && (
             <div
@@ -600,6 +649,9 @@ interface Props {
   playheadMin?: number | null
   /** Modifie la plage de zoom partagée (Ctrl+molette sur le spectrogramme). */
   onZoomChange?: (range: ZoomRange | null) => void
+  /** Périodes nommées — reportées comme bandes colorées (catégories visibles). */
+  periods?: Period[]
+  categories?: Category[]
 }
 
 /**
@@ -618,6 +670,7 @@ function adaptiveAggSec(spanMin: number, baseAggSec: number): number {
 
 export default function Spectrogram({
   files, pointMap, selectedDate, availableDates, onDateChange, events,
+  periods, categories,
   zoomRange,
   aggregationSeconds = 300,
   compact = false,
@@ -836,6 +889,33 @@ export default function Spectrogram({
       }))
   }, [events, selectedDate, isMulti, sortedDates])
 
+  // Bandes de période reportées sur le spectrogramme — seulement les catégories
+  // visibles. Résolues sur l'axe X absolu (epoch → minutes, multi-jours géré).
+  const activePeriods = useMemo<ResolvedBand[]>(() => {
+    if (!periods || !categories) return []
+    const catById = new Map(categories.map((c) => [c.id, c]))
+    const out: ResolvedBand[] = []
+    for (const p of periods) {
+      const cat = catById.get(p.categoryId)
+      if (!cat || !cat.visible) continue
+      const d = new Date(p.startMs)
+      const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      const midnight = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime()
+      const tStart = (p.startMs - midnight) / 60_000
+      const tEnd = (p.endMs - midnight) / 60_000
+      let offset = 0
+      if (isMulti) {
+        const idx = sortedDates.indexOf(iso)
+        if (idx < 0) continue
+        offset = idx * 1440
+      } else if (iso !== selectedDate) {
+        continue
+      }
+      out.push({ id: p.id, label: p.name, color: cat.color, startMin: offset + tStart, endMin: offset + tEnd })
+    }
+    return out
+  }, [periods, categories, isMulti, sortedDates, selectedDate])
+
   // Hauteur par canvas : compactée si embedded (− header + axe X), sinon valeur par défaut
   const perCanvasHeight = compact
     ? Math.max(40, Math.floor(((height ?? 200) - 60) / Math.max(1, pointNames.length)))
@@ -959,6 +1039,7 @@ export default function Spectrogram({
                   maxDb={maxDb}
                   hoverTime={hoverTime}
                   events={activeEvents}
+                  bands={activePeriods}
                   onHoverTime={setHoverTime}
                   canvasHeight={perCanvasHeight}
                   aggSec={effectiveAggSec}
@@ -1057,6 +1138,7 @@ export default function Spectrogram({
                 maxDb={maxDb}
                 hoverTime={hoverTime}
                 events={activeEvents}
+                bands={activePeriods}
                 onHoverTime={setHoverTime}
                 canvasHeight={DEFAULT_CANVAS_HEIGHT}
                 aggSec={effectiveAggSec}

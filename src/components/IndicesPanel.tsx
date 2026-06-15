@@ -307,10 +307,10 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
   // Garde la ref synchrone à la dernière version du handler.
   exportRef.current = handleExportExcel
 
-  // Résumé « calculé sur » : catégories incluses (non-annotation) ayant des périodes.
+  // Résumé « calculé sur » : catégories visibles en mode « include » avec périodes.
   const calcLabel = (() => {
     const cats = categories ?? []
-    const active = cats.filter((c) => c.included && !c.isAnnotation)
+    const active = cats.filter((c) => c.visible && c.mode === 'include')
     const activeIds = new Set(active.map((c) => c.id))
     const used = (periods ?? []).filter((p) => activeIds.has(p.categoryId))
     if (used.length === 0) return 'Calculé sur l\'ensemble du fichier'

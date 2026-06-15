@@ -436,9 +436,23 @@ export default function TimeSeriesChart({
   const catList = useMemo(() => categories ?? [], [categories])
   const catById = useMemo(() => new Map(catList.map((c) => [c.id, c])), [catList])
   const defaultCategoryId = useMemo(() => {
-    const inc = catList.find((c) => c.included && !c.isAnnotation)
+    const inc = catList.find((c) => c.visible && c.mode === 'include')
     return inc?.id ?? catList[0]?.id ?? 'cat-ambiant'
   }, [catList])
+
+  // Pulse de localisation : clic sur une ligne de catégorie dans le panneau →
+  // ses bandes sont mises en évidence ~1 s (via CustomEvent).
+  const [pulseCat, setPulseCat] = useState<string | null>(null)
+  useEffect(() => {
+    const onPulse = (e: Event) => {
+      const id = (e as CustomEvent).detail as string
+      setPulseCat(id)
+      const t = setTimeout(() => setPulseCat((cur) => (cur === id ? null : cur)), 1100)
+      return () => clearTimeout(t)
+    }
+    document.addEventListener('acoustiq:pulse-category', onPulse)
+    return () => document.removeEventListener('acoustiq:pulse-category', onPulse)
+  }, [])
 
   // Émission throttlée (requestAnimationFrame) de l'instant survolé vers le
   // panneau « Spectre instantané » via un CustomEvent — coalesce à une émission
@@ -1217,7 +1231,7 @@ export default function TimeSeriesChart({
     // Survol d'une période avec note → affichage du commentaire
     const tMin = xPxToMinutes(xLocal)
     const p = periodAtChartMin(tMin)
-    if (p && (catById.get(p.categoryId)?.isAnnotation || p.notes)) {
+    if (p && (catById.get(p.categoryId)?.mode === 'annotation' || p.notes)) {
       setPeriodHover({ period: p, x: xLocal, y: yLocal })
     } else if (periodHover) {
       setPeriodHover(null)
@@ -2055,14 +2069,17 @@ export default function TimeSeriesChart({
                    couleur = couleur de la catégorie (opacity 0.20).
                    Exclue : trait pointillé + ✕ · Annotation : ✎ */}
               {periods && periods.map((p) => {
+                const cat = catById.get(p.categoryId)
+                // Catégorie masquée → bande non affichée.
+                if (cat && !cat.visible) return null
                 const bounds = periodBounds(p)
                 if (!bounds) return null
                 const [s, eMin] = bounds
-                const cat = catById.get(p.categoryId)
-                const isAnnotate = cat?.isAnnotation ?? false
-                const isExcluded = cat ? (!cat.included && !cat.isAnnotation) : false
+                const isAnnotate = cat?.mode === 'annotation'
+                const isExcluded = cat?.mode === 'exclude'
                 const baseColor = cat?.color ?? '#3b82f6'
-                const fillOp = isAnnotate ? 0.12 : 0.20
+                const pulsing = pulseCat !== null && p.categoryId === pulseCat
+                const fillOp = pulsing ? 0.42 : isAnnotate ? 0.12 : 0.20
                 const labelPrefix = isExcluded ? '✕ ' : isAnnotate ? '✎ ' : ''
                 return (
                   <ReferenceArea
@@ -2073,7 +2090,8 @@ export default function TimeSeriesChart({
                     fill={baseColor}
                     fillOpacity={fillOp}
                     stroke={baseColor}
-                    strokeOpacity={0.55}
+                    strokeOpacity={pulsing ? 0.95 : 0.5}
+                    strokeWidth={pulsing ? 2 : 1}
                     strokeDasharray={isAnnotate ? '4 3' : '3 3'}
                     ifOverflow="hidden"
                     label={{
@@ -2552,7 +2570,7 @@ export default function TimeSeriesChart({
                 >
                   {catList.map((c) => (
                     <option key={c.id} value={c.id}>
-                      {c.name}{!c.included && !c.isAnnotation ? ' (exclue)' : ''}{c.isAnnotation ? ' (annotation)' : ''}
+                      {c.name}{c.mode === 'exclude' ? ' (exclue)' : ''}{c.mode === 'annotation' ? ' (annotation)' : ''}
                     </option>
                   ))}
                 </select>
@@ -2596,8 +2614,8 @@ export default function TimeSeriesChart({
                       id,
                       name: periodPopup.newCatName.trim() || `Catégorie ${(categories?.length ?? 0) + 1}`,
                       color: periodPopup.newCatColor,
-                      included: true,
-                      isAnnotation: false,
+                      mode: 'include',
+                      visible: true,
                     })
                     setPeriodPopup((p) => p && { ...p, categoryId: id, newCat: false, newCatName: '' })
                   }}

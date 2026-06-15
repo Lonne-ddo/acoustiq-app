@@ -25,7 +25,7 @@ const ptColor = (pt: string, i: number) => POINT_COLORS[pt] ?? FALLBACK[i % FALL
 // Fréquences principales étiquetées sur l'axe X.
 const X_LABEL_SET = new Set([6.3, 20, 63, 200, 630, 2000, 6300, 20000])
 
-const PAD_L = 42, PAD_R = 12, PAD_T = 10, PAD_B = 24
+const PAD_L = 56, PAD_R = 14, PAD_T = 10, PAD_B = 28
 
 interface PointSeries {
   pt: string
@@ -207,7 +207,7 @@ export default function InstantSpectrum({
   const canvasRef = useRef<HTMLCanvasElement>(null)
   const containerRef = useRef<HTMLDivElement>(null)
   const [canvasW, setCanvasW] = useState(0)
-  const canvasH = Math.max(60, height - 84) // - barre de contrôle - titre - légende
+  const canvasH = Math.max(70, height - 62) // - en-tête - barre de contrôle
 
   useEffect(() => {
     const el = containerRef.current
@@ -232,27 +232,39 @@ export default function InstantSpectrum({
     const yOf = (v: number) => PAD_T + (1 - (v - minDb) / dbRange) * plotH
     const groupW = plotW / N
 
-    // Grille + axe Y (tous les 10 dB)
+    // Grille + axe Y (tous les 10 dB), labels 11px
     ctx.strokeStyle = 'rgba(255,255,255,0.06)'
-    ctx.fillStyle = '#6b7280'
-    ctx.font = '9px system-ui, sans-serif'
+    ctx.fillStyle = '#9ca3af'
+    ctx.font = '11px system-ui, sans-serif'
     ctx.textAlign = 'right'
     ctx.textBaseline = 'middle'
     const loTick = Math.ceil(minDb / 10) * 10
     for (let v = loTick; v <= maxDb; v += 10) {
       const y = yOf(v)
+      ctx.strokeStyle = 'rgba(255,255,255,0.06)'
       ctx.beginPath(); ctx.moveTo(PAD_L, y); ctx.lineTo(W - PAD_R, y); ctx.stroke()
-      ctx.fillText(String(v), PAD_L - 4, y)
+      ctx.fillStyle = '#9ca3af'
+      ctx.fillText(String(v), PAD_L - 6, y)
     }
 
-    // Axe X (labels principaux)
+    // Titre vertical « Niveau (dB) » à gauche (rotation -90°)
+    ctx.save()
+    ctx.translate(11, PAD_T + plotH / 2)
+    ctx.rotate(-Math.PI / 2)
+    ctx.textAlign = 'center'
+    ctx.textBaseline = 'middle'
+    ctx.fillStyle = '#6b7280'
+    ctx.fillText('Niveau (dB)', 0, 0)
+    ctx.restore()
+
+    // Axe X (labels principaux), 11px
     ctx.textAlign = 'center'
     ctx.textBaseline = 'top'
     freqs.forEach((f, i) => {
       if (!X_LABEL_SET.has(f)) return
       const x = PAD_L + (i + 0.5) * groupW
       ctx.fillStyle = '#9ca3af'
-      ctx.fillText(freqAxisLabel(f), x, H - PAD_B + 4)
+      ctx.fillText(freqAxisLabel(f), x, H - PAD_B + 6)
     })
 
     const drawSeries = (list: PointSeries[], opts: { alpha: number; grey?: boolean }) => {
@@ -427,6 +439,27 @@ export default function InstantSpectrum({
               <Snowflake size={11} /> {frozen ? 'Dégeler' : 'Figer'}
             </button>
 
+            {/* Légende multi-points compacte (clic = masquer/afficher) */}
+            {pointNames.length > 0 && (
+              <div className="flex items-center gap-2 flex-wrap pl-1 border-l border-gray-700/60">
+                {pointNames.map((pt, i) => {
+                  const isHidden = hidden.has(pt)
+                  return (
+                    <button
+                      key={pt}
+                      onClick={() => setLocalHidden((prev) => { const n = new Set(prev); if (n.has(pt)) n.delete(pt); else n.add(pt); return n })}
+                      className={`flex items-center gap-1 ${isHidden ? 'opacity-40' : ''}`}
+                      title={isHidden ? 'Afficher' : 'Masquer'}
+                    >
+                      <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: ptColor(pt, i) }} />
+                      <span className="text-gray-300">{pt}</span>
+                    </button>
+                  )
+                })}
+                {frozen && <span className="flex items-center gap-1 text-gray-500"><span className="w-2.5 h-2.5 rounded-sm bg-gray-400/50" /> figé</span>}
+              </div>
+            )}
+
             <div className="relative ml-auto">
               <button onClick={() => setExportOpen((v) => !v)} className="flex items-center gap-1 px-1.5 py-0.5 rounded bg-gray-800 text-gray-300 hover:bg-gray-700 border border-gray-600">
                 <Download size={11} /> Exporter
@@ -451,31 +484,6 @@ export default function InstantSpectrum({
               <canvas ref={canvasRef} className="block w-full" style={{ height: canvasH, backgroundColor: '#030712', borderRadius: 4 }} />
             )}
           </div>
-
-          {/* Légende multi-points */}
-          {pointNames.length > 0 && (
-            <div className="flex items-center gap-3 flex-wrap px-4 py-1 border-t border-gray-800/60 shrink-0">
-              {pointNames.map((pt, i) => {
-                const isHidden = hidden.has(pt)
-                return (
-                  <button
-                    key={pt}
-                    onClick={() => setLocalHidden((prev) => { const n = new Set(prev); if (n.has(pt)) n.delete(pt); else n.add(pt); return n })}
-                    className={`flex items-center gap-1 text-[10px] ${isHidden ? 'opacity-40' : ''}`}
-                    title={isHidden ? 'Afficher' : 'Masquer'}
-                  >
-                    <span className="w-2.5 h-2.5 rounded-sm" style={{ backgroundColor: ptColor(pt, i) }} />
-                    <span className="text-gray-300">{pt}</span>
-                  </button>
-                )
-              })}
-              {frozen && (
-                <span className="flex items-center gap-1 text-[10px] text-gray-500">
-                  <span className="w-2.5 h-2.5 rounded-sm bg-gray-400/50" /> figé
-                </span>
-              )}
-            </div>
-          )}
         </>
       )}
     </div>

@@ -14,10 +14,11 @@ function hhmmToMin(t: string): number {
 }
 import { A_WEIGHT } from '../utils/acoustics'
 
-const DEFAULT_CANVAS_HEIGHT = 160  // hauteur affichée en px par spectrogramme (mode plein)
-const Y_AXIS_W = 64                // largeur réservée à l'axe Y (titre + étiquettes)
+const DEFAULT_CANVAS_HEIGHT = 200  // hauteur affichée en px par spectrogramme (mode plein)
+const Y_AXIS_W = 70                // largeur réservée à l'axe Y (titre + étiquettes 11px)
 const Y_TITLE_W = 14               // sous-largeur réservée au titre vertical « Fréquence (Hz) »
-const LEGEND_W = 52                // largeur réservée à la colorbar (échelle + titre)
+const Y_LABEL_FS = 11              // taille de police des étiquettes de fréquence
+const LEGEND_W = 56                // largeur réservée à la colorbar (barre + graduations + dB)
 
 // ---- Fréquences ------------------------------------------------------------
 // 36 bandes tiers d'octave standard (6.3 Hz → 20 kHz)
@@ -245,48 +246,32 @@ function ColorScaleLegend({
   const dbRange = maxDb - minDb || 1
 
   return (
-    <div className="flex shrink-0" style={{ width: LEGEND_W, paddingTop: 20 /* aligne avec le canvas */ }}>
-      {/* Barre + graduations */}
-      <div className="flex gap-1">
+    <div className="flex flex-col shrink-0" style={{ width: LEGEND_W }}>
+      {/* Libellé « dB » en haut (occupe l'espace de l'étiquette du point) */}
+      <div className="flex items-end justify-start" style={{ height: 20, paddingLeft: 1 }}>
+        <span className="text-gray-400 select-none" style={{ fontSize: 11, lineHeight: 1 }}>dB</span>
+      </div>
+      {/* Barre de couleur + graduations 10 dB */}
+      <div className="flex gap-1" style={{ height }}>
         <canvas
           ref={ref}
-          width={10}
+          width={16}
           height={height}
           className="rounded-sm shrink-0"
-          style={{ width: 10, height }}
+          style={{ width: 16, height }}
         />
-        <div className="relative" style={{ height, width: 22 }}>
+        <div className="relative flex-1" style={{ height }}>
           {dbTicks.map((v) => (
-            <span
+            <div
               key={v}
-              className="absolute left-0 text-gray-500 select-none"
-              style={{
-                top: `${(1 - (v - minDb) / dbRange) * 100}%`,
-                transform: 'translateY(-50%)',
-                fontSize: 9,
-                lineHeight: 1,
-              }}
+              className="absolute left-0 flex items-center gap-0.5"
+              style={{ top: `${(1 - (v - minDb) / dbRange) * 100}%`, transform: 'translateY(-50%)' }}
             >
-              {v}
-            </span>
+              <span className="bg-gray-500" style={{ width: 3, height: 1 }} />
+              <span className="text-gray-300 select-none tabular-nums" style={{ fontSize: 11, lineHeight: 1 }}>{v}</span>
+            </div>
           ))}
         </div>
-      </div>
-      {/* Titre vertical « Niveau (dB) » — masqué si trop court */}
-      <div className="relative shrink-0" style={{ width: 12, height }}>
-        {height >= 90 && (
-          <span
-            className="absolute text-gray-500 select-none whitespace-nowrap"
-            style={{
-              top: '50%', left: '50%',
-              transform: 'translate(-50%, -50%) rotate(90deg)',
-              transformOrigin: 'center',
-              fontSize: 9,
-            }}
-          >
-            Niveau (dB)
-          </span>
-        )}
       </div>
     </div>
   )
@@ -490,16 +475,16 @@ function SingleSpectrogram({
             return major ? (
               <span
                 key={f}
-                className="absolute right-1 text-gray-400 select-none"
-                style={{ top: `${yPct}%`, transform: 'translateY(-50%)', fontSize: 9, lineHeight: 1 }}
+                className="absolute right-1.5 text-gray-300 select-none tabular-nums"
+                style={{ top: `${yPct}%`, transform: 'translateY(-50%)', fontSize: Y_LABEL_FS, lineHeight: 1 }}
               >
                 {freqLabel(f)}
               </span>
             ) : (
               <span
                 key={f}
-                className="absolute right-0 bg-gray-700"
-                style={{ top: `${yPct}%`, width: 3, height: 1, transform: 'translateY(-50%)' }}
+                className="absolute right-0 bg-gray-600"
+                style={{ top: `${yPct}%`, width: 4, height: 1, transform: 'translateY(-50%)' }}
               />
             )
           })}

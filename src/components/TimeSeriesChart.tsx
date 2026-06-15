@@ -1518,25 +1518,6 @@ export default function TimeSeriesChart({
           <span className="text-xs text-gray-500">{selectedDate}</span>
         )}
 
-        {/* Info instrument : modèle + n° de série (principal) — utile pour
-            retrouver un fichier en un coup d'œil. */}
-        {(() => {
-          const primary = files.find((f) => f.date === selectedDate) ?? files[0]
-          if (!primary) return null
-          const label = primary.model && primary.serial
-            ? `${primary.model} ${primary.serial}`
-            : primary.serial || primary.model || '—'
-          return (
-            <span
-              className="text-xs text-gray-300 font-medium px-2 py-0.5 rounded bg-gray-800/60 border border-gray-700"
-              title={`Modèle : ${primary.model || '—'} · N° de série : ${primary.serial || '—'}`}
-            >
-              {label}
-              <span className="ml-1 text-gray-500 font-normal">(série)</span>
-            </span>
-          )
-        })()}
-
         {/* Sélecteur d'agrégation */}
         <div className="flex items-center gap-1.5">
           <label className="text-xs text-gray-500">Agrégation</label>
@@ -1562,9 +1543,8 @@ export default function TimeSeriesChart({
           )}
         </div>
 
-        {/* Durée totale + plage visible (se met à jour avec le zoom). */}
+        {/* Plage visible (se met à jour avec le zoom) + badge zoom. */}
         {(() => {
-          const fullSpanMin = fullRange.endMin - fullRange.startMin
           const visSpanMin = effectiveRange.endMin - effectiveRange.startMin
           const fmt = (m: number) => {
             const h = Math.floor(m / 60)
@@ -1573,19 +1553,13 @@ export default function TimeSeriesChart({
           }
           return (
             <span className="text-xs text-gray-400">
-              <span className="text-gray-500">Durée :</span>{' '}
-              <span className="font-mono text-gray-300" title={`Plage complète : ${minutesToHHMM(fullRange.startMin)} → ${minutesToHHMM(fullRange.endMin)}`}>
-                {fmt(fullSpanMin)}
-              </span>
-              {' · '}
-              <span className="text-gray-500">Plage :</span>{' '}
+              <span className="text-gray-500">Plage visible :</span>{' '}
               <span className={`font-mono ${isZoomed ? 'text-emerald-300' : 'text-gray-300'}`}>
                 {minutesToHHMM(effectiveRange.startMin)} → {minutesToHHMM(effectiveRange.endMin)}
               </span>
-              {isZoomed && (
-                <span className="ml-1 text-[10px] text-gray-500">
-                  ({fmt(visSpanMin)})
-                </span>
+              <span className="ml-1 text-[10px] text-gray-500">({fmt(visSpanMin)})</span>
+              {isZoomed && zoomLevel > 1.1 && (
+                <span className="ml-2 text-[10px] text-emerald-400">×{zoomLevel < 10 ? zoomLevel.toFixed(1) : Math.round(zoomLevel)} zoom</span>
               )}
               {activeEvents.length > 0 && (
                 <span className="ml-2 text-gray-500">· {activeEvents.length} évén.</span>
@@ -1632,27 +1606,29 @@ export default function TimeSeriesChart({
               Météo
             </button>
           )}
-          {compPhase === 'idle' ? (
-            <button
-              onClick={() => setCompPhase('pickON')}
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
-                         bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
-                         border border-gray-600 transition-colors"
-              title="Compare deux plages temporelles (Source ON vs OFF)"
-            >
-              <GitCompare size={12} />
-              Comparer ON/OFF
-            </button>
-          ) : (
-            <button
-              onClick={resetComparison}
-              className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
-                         bg-rose-900/40 text-rose-300 hover:bg-rose-900/60
-                         border border-rose-800/60 transition-colors"
-            >
-              <X size={12} />
-              Annuler comparaison
-            </button>
+          {(compPhase !== 'idle' || new Set(lineSpecs.map((s) => s.pt)).size > 1) && (
+            compPhase === 'idle' ? (
+              <button
+                onClick={() => setCompPhase('pickON')}
+                className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
+                           bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-gray-100
+                           border border-gray-600 transition-colors"
+                title="Compare deux plages temporelles (Source ON vs OFF)"
+              >
+                <GitCompare size={12} />
+                Comparer ON/OFF
+              </button>
+            ) : (
+              <button
+                onClick={resetComparison}
+                className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
+                           bg-rose-900/40 text-rose-300 hover:bg-rose-900/60
+                           border border-rose-800/60 transition-colors"
+              >
+                <X size={12} />
+                Annuler comparaison
+              </button>
+            )
           )}
 
           {/* Dropdown Exporter — regroupe PNG + Excel + Rapport */}

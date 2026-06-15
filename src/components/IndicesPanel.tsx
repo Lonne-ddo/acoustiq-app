@@ -307,14 +307,32 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
   // Garde la ref synchrone à la dernière version du handler.
   exportRef.current = handleExportExcel
 
-  // Résumé « calculé sur » : catégories visibles en mode « include » avec périodes.
+  // Durée totale mesurée sur la journée sélectionnée (tous points confondus).
+  const fileSpanMin = useMemo(() => {
+    let mn = Infinity, mx = -Infinity
+    for (const f of files) {
+      if (!pointMap[f.id] || f.date !== selectedDate) continue
+      for (const dp of f.data) { if (dp.t < mn) mn = dp.t; if (dp.t > mx) mx = dp.t }
+    }
+    return Number.isFinite(mn) && mx >= mn ? mx - mn : 0
+  }, [files, pointMap, selectedDate])
+
+  const fmtHm = (minutes: number) => {
+    const h = Math.floor(minutes / 60), m = Math.round(minutes % 60)
+    return h > 0 ? `${h}h${m > 0 ? String(m).padStart(2, '0') : ''}` : `${m}min`
+  }
+
+  // Bandeau « calcul sur » : catégories visibles en mode « include » avec périodes.
   const calcLabel = (() => {
+    const totalStr = fileSpanMin > 0 ? ` (${fmtHm(fileSpanMin)})` : ''
     const cats = categories ?? []
     const active = cats.filter((c) => c.visible && c.mode === 'include')
     const activeIds = new Set(active.map((c) => c.id))
     const used = (periods ?? []).filter((p) => activeIds.has(p.categoryId))
-    if (used.length === 0) return 'Calculé sur l\'ensemble du fichier'
-    return `Calculé sur les catégories : ${active.filter((c) => used.some((p) => p.categoryId === c.id)).map((c) => c.name).join(', ')} (${used.length} période${used.length > 1 ? 's' : ''})`
+    if (used.length === 0) return `Calcul sur l'ensemble du fichier${totalStr}`
+    const names = active.filter((c) => used.some((p) => p.categoryId === c.id))
+    const usedMin = used.reduce((s, p) => s + Math.max(0, (p.endMs - p.startMs) / 60_000), 0)
+    return `Calcul sur ${names.length} catégorie${names.length > 1 ? 's' : ''} active${names.length > 1 ? 's' : ''} (${names.map((c) => c.name).join(', ')}) — ${used.length} période${used.length > 1 ? 's' : ''} / ${fmtHm(usedMin)}${fileSpanMin > 0 ? ` sur ${fmtHm(fileSpanMin)} total` : ''}`
   })()
 
   if (pointNames.length === 0) return null

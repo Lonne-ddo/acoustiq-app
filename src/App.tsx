@@ -96,6 +96,7 @@ import EventsPanel from './components/EventsPanel'
 import ConcordanceTable from './components/ConcordanceTable'
 import Spectrogram from './components/Spectrogram'
 import InstantSpectrum from './components/InstantSpectrum'
+import CategoriesManager from './components/CategoriesManager'
 import LwCalculator from './components/LwCalculator'
 const Vue3DTab = lazy(() => import('./components/Vue3DTab'))
 const IsolementPage = lazy(() => import('./pages/IsolementPage'))
@@ -709,6 +710,12 @@ interface SidebarProps {
   showMeteoRecevabilite: boolean
   onToggleMeteoRecevabilite: (v: boolean) => void
   onExcludeNonRecevable: () => void
+  // Catégories de périodes (gérées dans la sidebar)
+  categories: Category[]
+  periods: Period[]
+  onCategoryAdd: (c: Category) => void
+  onCategoryUpdate: (id: string, patch: Partial<Category>) => void
+  onCategoryRemove: (id: string, reassignTo: string | null) => void
 }
 
 export interface GroupSuggestion {
@@ -728,13 +735,28 @@ export interface GroupSuggestion {
 function SidebarSection({
   title,
   defaultOpen = false,
+  persistKey,
   children,
 }: {
   title: string
   defaultOpen?: boolean
+  /** Clé localStorage pour mémoriser l'état déployé/replié. */
+  persistKey?: string
   children: React.ReactNode
 }) {
-  const [open, setOpen] = useState(defaultOpen)
+  const [open, setOpen] = useState(() => {
+    if (!persistKey) return defaultOpen
+    try {
+      const v = localStorage.getItem(`acoustiq.sidebar.sec.${persistKey}`)
+      if (v === '1') return true
+      if (v === '0') return false
+    } catch { /* ignore */ }
+    return defaultOpen
+  })
+  useEffect(() => {
+    if (!persistKey) return
+    try { localStorage.setItem(`acoustiq.sidebar.sec.${persistKey}`, open ? '1' : '0') } catch { /* ignore */ }
+  }, [open, persistKey])
   return (
     <div className="border-b border-gray-800/70">
       <button
@@ -777,6 +799,7 @@ function Sidebar({
   hiddenPoints, onTogglePointVisibility,
   detectParams, onDetectParamsChange,
   hasMeteoResults, showMeteoRecevabilite, onToggleMeteoRecevabilite, onExcludeNonRecevable,
+  categories, periods, onCategoryAdd, onCategoryUpdate, onCategoryRemove,
 }: SidebarProps) {
   const inputRef = useRef<HTMLInputElement>(null)
   const projectInputRef = useRef<HTMLInputElement>(null)
@@ -791,7 +814,7 @@ function Sidebar({
       const v = parseInt(localStorage.getItem('acoustiq.sidebar.width') ?? '', 10)
       if (Number.isFinite(v)) return Math.max(SIDEBAR_MIN_W, Math.min(SIDEBAR_MAX_W, v))
     } catch { /* ignore */ }
-    return 200
+    return 220
   })
   useEffect(() => {
     try { localStorage.setItem('acoustiq.sidebar.width', String(sidebarWidth)) } catch { /* ignore */ }
@@ -1021,7 +1044,7 @@ function Sidebar({
         )}
 
         {/* ─── 📂 FICHIERS ─────────────────────────────────────────────── */}
-        <SidebarSection title="📂 Fichiers" defaultOpen>
+        <SidebarSection title="📂 Fichiers" defaultOpen persistKey="files">
           <input ref={inputRef} type="file" accept=".xlsx,.mp3,.wav,.m4a,.ogg" multiple className="hidden" onChange={handleFileChange} />
           <button
             onClick={() => inputRef.current?.click()}
@@ -1132,7 +1155,7 @@ function Sidebar({
         </SidebarSection>
 
         {/* ─── 📍 ÉVÉNEMENTS ───────────────────────────────────────────── */}
-        <SidebarSection title="📍 Événements" defaultOpen>
+        <SidebarSection title="📍 Événements" persistKey="events">
           <div className="-mx-3">
             <EventsPanel
               events={events}
@@ -1161,8 +1184,19 @@ function Sidebar({
           </div>
         </SidebarSection>
 
+        {/* ─── 🏷️ CATÉGORIES ──────────────────────────────────────────── */}
+        <SidebarSection title="🏷️ Catégories" defaultOpen persistKey="categories">
+          <CategoriesManager
+            categories={categories}
+            periods={periods}
+            onCategoryAdd={onCategoryAdd}
+            onCategoryUpdate={onCategoryUpdate}
+            onCategoryRemove={onCategoryRemove}
+          />
+        </SidebarSection>
+
         {/* ─── ⚙️ OPTIONS ──────────────────────────────────────────────── */}
-        <SidebarSection title="⚙️ Options">
+        <SidebarSection title="⚙️ Options" persistKey="options">
           <div className="-mx-3 space-y-0">
             <MeteoSection meteo={meteo} onChange={onMeteoChange} />
             {hasMeteoResults && (
@@ -1300,8 +1334,6 @@ interface MainPanelProps {
   onPeriodRemove: (id: string) => void
   categories: Category[]
   onCategoryAdd: (c: Category) => void
-  onCategoryUpdate: (id: string, patch: Partial<Category>) => void
-  onCategoryRemove: (id: string, reassignTo: string | null) => void
   audioEntries: AudioFileEntry[]
   audioPointMap: Record<string, string>
   audioSync: ReturnType<typeof useAudioSync>
@@ -1349,7 +1381,7 @@ function MainPanel({
   presentationMode, onPresentationToggle,
   hiddenPoints, onTogglePointVisibility,
   periods, onPeriodAdd, onPeriodUpdate, onPeriodRemove,
-  categories, onCategoryAdd, onCategoryUpdate, onCategoryRemove,
+  categories, onCategoryAdd,
   audioEntries, audioPointMap, audioSync, audioCoverage,
   chartPickArmed, onChartPicked,
   chartRangePickArmed, onChartRangePicked, chartHighlightRange,
@@ -1372,7 +1404,7 @@ function MainPanel({
   // Mémorisée d'une session à l'autre via localStorage.
   const SPECTRO_MIN = 150
   const SPECTRO_MAX = 600
-  const SPECTRO_DEFAULT = 250
+  const SPECTRO_DEFAULT = 220
   const [spectrogramHeight, setSpectrogramHeight] = useState<number>(() => {
     try {
       const v = localStorage.getItem('acoustiq_spectro_height')
@@ -1418,7 +1450,7 @@ function MainPanel({
       const v = parseInt(localStorage.getItem('acoustiq_spectrum_height') ?? '', 10)
       if (Number.isFinite(v)) return Math.max(SPECTRUM_MIN, Math.min(SPECTRUM_MAX, v))
     } catch { /* ignore */ }
-    return 220
+    return 200
   })
   useEffect(() => {
     try { localStorage.setItem('acoustiq_spectrum_height', String(spectrumHeight)) } catch { /* ignore */ }
@@ -1818,9 +1850,6 @@ function MainPanel({
                       onUpdate={onPeriodUpdate}
                       onRemove={onPeriodRemove}
                       categories={categories}
-                      onCategoryAdd={onCategoryAdd}
-                      onCategoryUpdate={onCategoryUpdate}
-                      onCategoryRemove={onCategoryRemove}
                       selectedDate={selectedDate}
                     />
                   </div>
@@ -3163,6 +3192,11 @@ export default function App() {
         showMeteoRecevabilite={showMeteoRecevabilite}
         onToggleMeteoRecevabilite={setShowMeteoRecevabilite}
         onExcludeNonRecevable={handleExcludeNonRecevable}
+        categories={categories}
+        periods={periods}
+        onCategoryAdd={handleCategoryAdd}
+        onCategoryUpdate={handleCategoryUpdate}
+        onCategoryRemove={handleCategoryRemove}
       />
       )}
       <MainPanel
@@ -3223,8 +3257,6 @@ export default function App() {
         onPeriodRemove={handlePeriodRemove}
         categories={categories}
         onCategoryAdd={handleCategoryAdd}
-        onCategoryUpdate={handleCategoryUpdate}
-        onCategoryRemove={handleCategoryRemove}
         audioEntries={audioEntries}
         audioPointMap={audioPointMap}
         audioSync={audioSync}

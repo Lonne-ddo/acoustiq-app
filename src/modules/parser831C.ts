@@ -4,6 +4,7 @@
 import * as XLSX from 'xlsx'
 import type { MeasurementFile, DataPoint } from '../types'
 import { findSummarySheet, findHistorySheet } from './parser821SE'
+import { detectFreqColumns, extractSpectrumRow } from '../utils/spectraColumns'
 
 /**
  * Bandes 1/3 d'octave émises par le 831C dans les colonnes 41-67 (27 bandes
@@ -135,6 +136,12 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
     defval: null,
   }) as unknown[][]
 
+  // Détection prioritaire des colonnes de spectre nommées par fréquence
+  // (exports G4 récents : en-têtes « 6.3 », « 1000 », « 16000 »…). À défaut,
+  // on retombe sur le bloc positionnel historique 41–67 (LZeq).
+  const headerRow0 = (rows[0] as unknown[] | undefined) ?? []
+  const freqCols = detectFreqColumns(headerRow0)
+
   const data: DataPoint[] = []
 
   for (let i = 1; i < rows.length; i++) {
@@ -171,12 +178,17 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
     const laftNum = typeof laftVal === 'number' ? laftVal : parseFloat(String(laftVal))
     const laftEq = isNaN(laftNum) ? undefined : laftNum
 
-    // Colonnes index 41–67 : spectres 1/3 octave LZeq (6.3 Hz – 20 kHz)
-    const spectra: number[] = []
-    for (let c = 41; c <= 67 && c < row.length; c++) {
-      const v = row[c]
-      const num = typeof v === 'number' ? v : parseFloat(String(v))
-      if (!isNaN(num)) spectra.push(num)
+    // Spectres 1/3 octave : colonnes nommées par fréquence si détectées,
+    // sinon bloc positionnel historique 41–67 (LZeq, 6.3 Hz – 20 kHz).
+    let spectra: number[] = []
+    if (freqCols) {
+      spectra = extractSpectrumRow(row, freqCols) ?? []
+    } else {
+      for (let c = 41; c <= 67 && c < row.length; c++) {
+        const v = row[c]
+        const num = typeof v === 'number' ? v : parseFloat(String(v))
+        if (!isNaN(num)) spectra.push(num)
+      }
     }
 
     data.push({
@@ -192,10 +204,12 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
     throw new Error(`Aucune donnée LAeq valide trouvée dans "${fileName}"`)
   }
 
-  // Bandes 1/3 d'octave 831C : cols 41-67 = 27 bandes 50 Hz → 20 kHz (LZeq)
+  // Fréquences des bandes : issues des en-têtes si détection par fréquence,
+  // sinon bloc positionnel historique 41-67 (27 bandes 50 Hz → 20 kHz, LZeq).
   const nBands = data.find((d) => d.spectra)?.spectra?.length ?? 0
-  const spectraFreqs =
-    nBands === SE831C_FREQ_BANDS.length
+  const spectraFreqs = freqCols
+    ? freqCols.freqs
+    : nBands === SE831C_FREQ_BANDS.length
       ? SE831C_FREQ_BANDS
       : SE831C_FREQ_BANDS.slice(0, nBands)
 

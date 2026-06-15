@@ -675,8 +675,8 @@ export default function Spectrogram({
   }
   if (nBands === 0) {
     return (
-      <div className="flex items-center justify-center h-full text-gray-600 text-xs px-4 text-center">
-        Aucune donnée spectrale 1/3 octave dans les fichiers chargés.
+      <div className="flex items-center justify-center h-full text-gray-500 text-xs px-4 text-center">
+        Aucune donnée spectrale dans le fichier importé
       </div>
     )
   }

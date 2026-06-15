@@ -6,6 +6,7 @@
  */
 import * as XLSX from 'xlsx'
 import type { MeasurementFile } from '../types'
+import { detectFreqColumns, extractSpectrumRow } from '../utils/spectraColumns'
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -288,6 +289,10 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
     }
   }
 
+  // Détection prioritaire des colonnes de spectre nommées par fréquence
+  // (exports G4 récents). À défaut, on conserve le bloc positionnel / LZeq.
+  const freqCols = headerRow ? detectFreqColumns(headerRow) : null
+
   // --- Parse data rows ---
   const data: MeasurementFile['data'] = []
   const total = rows.length
@@ -323,9 +328,12 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
       if (Number.isFinite(n)) lceqNum = n
     }
 
-    // Spectres
-    const spectra: number[] = []
-    if (spectraStart >= 0) {
+    // Spectres : colonnes nommées par fréquence si détectées, sinon bloc
+    // positionnel / LZeq (fallback historique).
+    let spectra: number[] = []
+    if (freqCols) {
+      spectra = extractSpectrumRow(row, freqCols) ?? []
+    } else if (spectraStart >= 0) {
       for (let c = spectraStart; c <= spectraEnd && c < row.length; c++) {
         const v = row[c]
         const num = typeof v === 'number' ? v : parseFloat(String(v))
@@ -355,8 +363,9 @@ function parseInWorker(buffer: ArrayBuffer, fileName: string): MeasurementFile {
 
   const nBands = data.find((d) => d.spectra)?.spectra?.length ?? 0
   const sourceFreqs = is821 ? SE821_FREQS : SE831C_FREQS
-  const spectraFreqs =
-    nBands === sourceFreqs.length ? sourceFreqs : sourceFreqs.slice(0, nBands)
+  const spectraFreqs = freqCols
+    ? freqCols.freqs
+    : nBands === sourceFreqs.length ? sourceFreqs : sourceFreqs.slice(0, nBands)
 
   const date = metaStartDate || firstDate || ''
 

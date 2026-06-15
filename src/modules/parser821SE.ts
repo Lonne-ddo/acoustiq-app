@@ -12,6 +12,7 @@
  */
 import * as XLSX from 'xlsx'
 import type { MeasurementFile, DataPoint } from '../types'
+import { detectFreqColumns, extractSpectrumRow } from '../utils/spectraColumns'
 
 /**
  * Bandes 1/3 d'octave émises par le 821SE (26 bandes, Z-pondéré).
@@ -356,6 +357,11 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
     : []
   const cols = detectColumns(headers)
 
+  // Détection prioritaire des colonnes de spectre nommées par fréquence
+  // (exports G4 récents : en-têtes « 31.5 », « 1000 », « 10000 »…). À défaut,
+  // on retombe sur le bloc « LZeq… » contigu, puis sur les positions fixes.
+  const freqCols = detectFreqColumns(headers)
+
   // Fallback si les en-têtes ne matchent pas : utiliser les positions par défaut 821SE
   const timeCol = cols.timeCol >= 0 ? cols.timeCol : 1
   const laeqCol = cols.laeqCol >= 0 ? cols.laeqCol : 2
@@ -406,9 +412,12 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
       return Number.isFinite(n) ? n : undefined
     })() : undefined
 
-    // Spectres 1/3 octave LZeq optionnels
-    const spectra: number[] = []
-    if (spectraStart >= 0) {
+    // Spectres 1/3 octave : colonnes nommées par fréquence si détectées,
+    // sinon bloc « LZeq… » / positions fixes (fallback historique).
+    let spectra: number[] = []
+    if (freqCols) {
+      spectra = extractSpectrumRow(row, freqCols) ?? []
+    } else if (spectraStart >= 0) {
       for (let c = spectraStart; c <= spectraEnd && c < row.length; c++) {
         const v = row[c]
         const num = typeof v === 'number' ? v : parseFloat(String(v))
@@ -431,10 +440,12 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
     )
   }
 
-  // Bandes spectrales
+  // Bandes spectrales : fréquences issues des en-têtes si détection par
+  // fréquence, sinon bandes 821SE historiques (31.5 Hz – 10 kHz).
   const nBands = data.find((d) => d.spectra)?.spectra?.length ?? 0
-  const spectraFreqs =
-    nBands === SE821_FREQ_BANDS.length
+  const spectraFreqs = freqCols
+    ? freqCols.freqs
+    : nBands === SE821_FREQ_BANDS.length
       ? SE821_FREQ_BANDS
       : SE821_FREQ_BANDS.slice(0, nBands)
 

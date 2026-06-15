@@ -1323,24 +1323,23 @@ function MainPanel({
   // automatiquement au 1er import. Activé via le bouton ❓ « Aide » du header.
   const [forceShowWorkflow, setForceShowWorkflow] = useState(false)
 
-  // --- Hauteur du spectrogramme en pixels (défaut 120, min 80, max 400) ---
-  // Mémorisée pendant la session via sessionStorage pour survivre aux
-  // changements d'onglet sans polluer localStorage.
-  const SPECTRO_MIN = 80
-  const SPECTRO_MAX = 400
-  const SPECTRO_DEFAULT = 150
+  // --- Hauteur du spectrogramme en pixels (défaut 250, min 150, max 600) ---
+  // Mémorisée d'une session à l'autre via localStorage.
+  const SPECTRO_MIN = 150
+  const SPECTRO_MAX = 600
+  const SPECTRO_DEFAULT = 250
   const [spectrogramHeight, setSpectrogramHeight] = useState<number>(() => {
     try {
-      const v = sessionStorage.getItem('acoustiq_spectro_height')
+      const v = localStorage.getItem('acoustiq_spectro_height')
       if (v) {
         const n = parseInt(v, 10)
         if (Number.isFinite(n)) return Math.max(SPECTRO_MIN, Math.min(SPECTRO_MAX, n))
       }
-    } catch { /* sessionStorage indisponible */ }
+    } catch { /* localStorage indisponible */ }
     return SPECTRO_DEFAULT
   })
   useEffect(() => {
-    try { sessionStorage.setItem('acoustiq_spectro_height', String(spectrogramHeight)) } catch { /* ignore */ }
+    try { localStorage.setItem('acoustiq_spectro_height', String(spectrogramHeight)) } catch { /* ignore */ }
   }, [spectrogramHeight])
 
   const resizeRef = useRef<{ startY: number; startH: number } | null>(null)

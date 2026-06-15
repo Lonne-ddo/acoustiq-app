@@ -26,7 +26,7 @@ import {
 import html2canvas from 'html2canvas'
 import { drawQrBadge } from '../utils/qrBadge'
 import { FEATURES } from '../config/features'
-import { Download, ZoomIn, ZoomOut, Maximize2, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3, Play, ChevronDown } from 'lucide-react'
+import { Download, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3, Play, ChevronDown } from 'lucide-react'
 import ContextMenu from './ContextMenu'
 import { ReferenceDot } from 'recharts'
 import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData, Period, PeriodStatus } from '../types'
@@ -1342,10 +1342,6 @@ export default function TimeSeriesChart({
     })
   }, [effectiveRange, fullRange, onZoomChange])
 
-  const handleReset = useCallback(() => {
-    onZoomChange(null)
-  }, [onZoomChange])
-
   // Écouter les événements de zoom clavier depuis App
   useEffect(() => {
     const onZoomInE = () => handleZoomIn()
@@ -1537,36 +1533,9 @@ export default function TimeSeriesChart({
           )
         })()}
 
-        {/* Zone « Navigation » : zoom + plein écran (groupée à droite) */}
+        {/* Zone « Navigation » : plein écran (zoom piloté par la minimap /
+            Ctrl+molette). Les boutons zoom +/−/réinit. ont été retirés. */}
         <div className="ml-auto flex items-center gap-1 border-r border-gray-800 pr-2 mr-1">
-          <button
-            onClick={handleZoomIn}
-            className="p-1 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800
-                       border border-transparent hover:border-gray-600 transition-colors"
-            title="Zoom +"
-          >
-            <ZoomIn size={14} />
-          </button>
-          <button
-            onClick={handleZoomOut}
-            className="p-1 rounded text-gray-400 hover:text-gray-100 hover:bg-gray-800
-                       border border-transparent hover:border-gray-600 transition-colors"
-            title="Zoom −"
-          >
-            <ZoomOut size={14} />
-          </button>
-          <button
-            onClick={handleReset}
-            disabled={!isZoomed}
-            className={`p-1 rounded border transition-colors ${
-              isZoomed
-                ? 'text-emerald-400 hover:text-emerald-300 hover:bg-gray-800 border-transparent hover:border-gray-600'
-                : 'text-gray-700 border-transparent cursor-default'
-            }`}
-            title="Réinitialiser le zoom"
-          >
-            <Maximize2 size={14} />
-          </button>
           {onPresentationToggle && (
             <button
               onClick={onPresentationToggle}
@@ -2807,6 +2776,21 @@ export default function TimeSeriesChart({
         )}
       </div>
 
+      {/* Minimap de navigation — vue d'ensemble + brush, synchronisée avec le
+          zoom du chart et du spectrogramme (même zoomRange) */}
+      <Minimap
+        chartData={chartData}
+        lineSpecs={lineSpecs}
+        hiddenLines={hiddenLines}
+        fullRange={fullRange}
+        zoomRange={zoomRange}
+        onZoomChange={onZoomChange}
+        yMin={settingsYMin}
+        yMax={settingsYMax}
+        isMultiDay={isMultiDay}
+        daysCount={sortedDates.length}
+      />
+
       {/* Carte résultat ON/OFF */}
       {compPhase === 'done' && compOn && compOff && (
         <ComparisonResultCard
@@ -2815,6 +2799,279 @@ export default function TimeSeriesChart({
           onClose={resetComparison}
         />
       )}
+    </div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Minimap — vue d'ensemble + navigation (brush) sous la courbe principale
+//
+// Affiche la courbe LAeq complète (toutes les lignes visibles superposées, en
+// gris) sur toute la plage du fichier. Une fenêtre bleue translucide matérialise
+// la plage zoomée ; les zones hors fenêtre sont grisées. Interactions :
+//   • glisser le centre        → pan
+//   • glisser une bordure      → zoom (étend/rétrécit ce côté)
+//   • clic hors fenêtre        → saut (recentre, même largeur)
+//   • double-clic              → reset (tout afficher)
+// Écrit la même `zoomRange` que le chart et le spectrogramme → sync totale.
+// Rendu en canvas natif (un seul re-render par changement de zoom).
+// ────────────────────────────────────────────────────────────────────────────
+
+const MINIMAP_H = 50
+const MINI_PAD_L = 64   // aligné sur la marge gauche du plot / AudioSegmentsBar
+const MINI_PAD_R = 24
+const MINI_HANDLE_PX = 6 // tolérance de saisie des bordures de la fenêtre
+const MINI_PAD_Y = 4
+
+type MiniDragMode = 'pan' | 'resize-left' | 'resize-right'
+
+function Minimap({
+  chartData,
+  lineSpecs,
+  hiddenLines,
+  fullRange,
+  zoomRange,
+  onZoomChange,
+  yMin,
+  yMax,
+  isMultiDay,
+  daysCount,
+}: {
+  chartData: ChartEntry[]
+  lineSpecs: Array<{ key: string; color: string }>
+  hiddenLines: Set<string>
+  fullRange: ZoomRange
+  zoomRange: ZoomRange | null
+  onZoomChange: (r: ZoomRange | null) => void
+  yMin: number
+  yMax: number
+  isMultiDay: boolean
+  daysCount: number
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLCanvasElement>(null)
+  const [width, setWidth] = useState(0)
+  const dragRef = useRef<{ mode: MiniDragMode; startX: number; startWin: ZoomRange } | null>(null)
+
+  const fullSpan = Math.max(1e-6, fullRange.endMin - fullRange.startMin)
+  const usable = Math.max(1, width - MINI_PAD_L - MINI_PAD_R)
+  const win = zoomRange ?? fullRange
+
+  const minuteToX = useCallback(
+    (t: number) => MINI_PAD_L + ((t - fullRange.startMin) / fullSpan) * usable,
+    [fullRange.startMin, fullSpan, usable],
+  )
+  const xToMinute = useCallback(
+    (x: number) => fullRange.startMin + ((x - MINI_PAD_L) / usable) * fullSpan,
+    [fullRange.startMin, fullSpan, usable],
+  )
+
+  // Sous-échantillonnage pour garder le dessin léger (le canvas ne fait ~1 px
+  // par point au mieux ; inutile de tracer des dizaines de milliers de points).
+  const miniData = useMemo(() => {
+    const MAX = 1500
+    if (chartData.length <= MAX) return chartData
+    const stride = Math.ceil(chartData.length / MAX)
+    return chartData.filter((_, i) => i % stride === 0)
+  }, [chartData])
+
+  // Largeur responsive
+  useEffect(() => {
+    const el = containerRef.current
+    if (!el) return
+    const obs = new ResizeObserver(() => setWidth(Math.floor(el.clientWidth)))
+    obs.observe(el)
+    setWidth(Math.floor(el.clientWidth))
+    return () => obs.disconnect()
+  }, [])
+
+  // Dessin du canvas
+  useEffect(() => {
+    const canvas = canvasRef.current
+    if (!canvas || width === 0) return
+    const dpr = window.devicePixelRatio || 1
+    canvas.width = Math.max(1, width * dpr)
+    canvas.height = MINIMAP_H * dpr
+    const ctx = canvas.getContext('2d')
+    if (!ctx) return
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0)
+    ctx.clearRect(0, 0, width, MINIMAP_H)
+
+    // Fond de la zone traçable
+    ctx.fillStyle = '#0b1220'
+    ctx.fillRect(MINI_PAD_L, 0, usable, MINIMAP_H)
+
+    const yRange = Math.max(1e-6, yMax - yMin)
+    const valToY = (v: number) => {
+      const c = Math.max(yMin, Math.min(yMax, v))
+      return MINI_PAD_Y + (1 - (c - yMin) / yRange) * (MINIMAP_H - 2 * MINI_PAD_Y)
+    }
+
+    // Séparateurs minuit (multi-jours)
+    if (isMultiDay) {
+      ctx.strokeStyle = 'rgba(255,255,255,0.10)'
+      ctx.lineWidth = 1
+      for (let i = 1; i < daysCount; i++) {
+        const x = minuteToX(i * 1440)
+        ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, MINIMAP_H); ctx.stroke()
+      }
+    }
+
+    // Courbe complète (gris, opacity 0.5) — toutes les lignes visibles
+    ctx.globalAlpha = 0.5
+    ctx.strokeStyle = '#9ca3af'
+    ctx.lineWidth = 1
+    for (const spec of lineSpecs) {
+      if (hiddenLines.has(spec.key)) continue
+      ctx.beginPath()
+      let started = false
+      for (const row of miniData) {
+        const v = row[spec.key]
+        if (typeof v !== 'number') { started = false; continue }
+        const x = minuteToX(row.t)
+        const y = valToY(v)
+        if (!started) { ctx.moveTo(x, y); started = true }
+        else ctx.lineTo(x, y)
+      }
+      ctx.stroke()
+    }
+    ctx.globalAlpha = 1
+
+    // Position de la fenêtre (bornée à la zone traçable)
+    const lo = MINI_PAD_L, hi = MINI_PAD_L + usable
+    const wsX = Math.max(lo, Math.min(hi, minuteToX(win.startMin)))
+    const weX = Math.max(lo, Math.min(hi, minuteToX(win.endMin)))
+
+    // Zones hors fenêtre grisées (opacity ~0.4)
+    ctx.fillStyle = 'rgba(3,7,18,0.55)'
+    if (wsX > lo) ctx.fillRect(lo, 0, wsX - lo, MINIMAP_H)
+    if (weX < hi) ctx.fillRect(weX, 0, hi - weX, MINIMAP_H)
+
+    // Fenêtre bleue translucide + bordures
+    ctx.fillStyle = 'rgba(59,130,246,0.18)'
+    ctx.fillRect(wsX, 0, Math.max(1, weX - wsX), MINIMAP_H)
+    ctx.strokeStyle = '#3b82f6'
+    ctx.lineWidth = 2
+    ctx.beginPath(); ctx.moveTo(wsX, 0); ctx.lineTo(wsX, MINIMAP_H); ctx.stroke()
+    ctx.beginPath(); ctx.moveTo(weX, 0); ctx.lineTo(weX, MINIMAP_H); ctx.stroke()
+    // Petites poignées au centre de chaque bordure
+    ctx.strokeStyle = 'rgba(191,219,254,0.95)'
+    ctx.lineWidth = 1
+    const midY = MINIMAP_H / 2
+    for (const bx of [wsX, weX]) {
+      ctx.beginPath(); ctx.moveTo(bx, midY - 6); ctx.lineTo(bx, midY + 6); ctx.stroke()
+    }
+  }, [
+    width, usable, miniData, lineSpecs, hiddenLines,
+    win.startMin, win.endMin, yMin, yMax, isMultiDay, daysCount, minuteToX,
+  ])
+
+  // ── Interactions ───────────────────────────────────────────────────────────
+  // Borne une fenêtre [start,end] à la plage complète en conservant sa largeur
+  // lorsqu'elle bute sur un bord.
+  const clampWindow = useCallback((startMin: number, endMin: number): ZoomRange => {
+    const span = Math.min(fullSpan, Math.max(MIN_ZOOM_SPAN, endMin - startMin))
+    let s = startMin
+    let e = s + span
+    if (s < fullRange.startMin) { s = fullRange.startMin; e = s + span }
+    if (e > fullRange.endMin) { e = fullRange.endMin; s = e - span }
+    if (s < fullRange.startMin) s = fullRange.startMin
+    return { startMin: s, endMin: e }
+  }, [fullRange.startMin, fullRange.endMin, fullSpan])
+
+  // Émet la nouvelle plage — null si elle couvre tout (état « non zoomé »).
+  const emit = useCallback((r: ZoomRange) => {
+    if (r.startMin <= fullRange.startMin + 0.001 && r.endMin >= fullRange.endMin - 0.001) {
+      onZoomChange(null)
+    } else {
+      onZoomChange(r)
+    }
+  }, [fullRange.startMin, fullRange.endMin, onZoomChange])
+
+  const hitMode = useCallback((x: number): MiniDragMode | 'jump' => {
+    const wsX = minuteToX(win.startMin)
+    const weX = minuteToX(win.endMin)
+    if (Math.abs(x - wsX) <= MINI_HANDLE_PX) return 'resize-left'
+    if (Math.abs(x - weX) <= MINI_HANDLE_PX) return 'resize-right'
+    if (x > wsX && x < weX) return 'pan'
+    return 'jump'
+  }, [minuteToX, win.startMin, win.endMin])
+
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    const rect = containerRef.current?.getBoundingClientRect()
+    if (!rect) return
+    const x = e.clientX - rect.left
+    const mode = hitMode(x)
+    let startWin: ZoomRange = { startMin: win.startMin, endMin: win.endMin }
+
+    if (mode === 'jump') {
+      // Saut : recentre la fenêtre (même largeur) sur le point cliqué, puis
+      // permet de continuer à glisser (pan) pour affiner.
+      const span = win.endMin - win.startMin
+      const center = xToMinute(x)
+      startWin = clampWindow(center - span / 2, center + span / 2)
+      emit(startWin)
+      dragRef.current = { mode: 'pan', startX: x, startWin }
+    } else {
+      dragRef.current = { mode, startX: x, startWin }
+    }
+
+    const onMove = (ev: MouseEvent) => {
+      const d = dragRef.current
+      if (!d) return
+      const cx = ev.clientX - rect.left
+      const dMin = ((cx - d.startX) / usable) * fullSpan
+      if (d.mode === 'pan') {
+        emit(clampWindow(d.startWin.startMin + dMin, d.startWin.endMin + dMin))
+      } else if (d.mode === 'resize-left') {
+        const ns = Math.min(d.startWin.endMin - MIN_ZOOM_SPAN, d.startWin.startMin + dMin)
+        emit({ startMin: Math.max(fullRange.startMin, ns), endMin: d.startWin.endMin })
+      } else {
+        const ne = Math.max(d.startWin.startMin + MIN_ZOOM_SPAN, d.startWin.endMin + dMin)
+        emit({ startMin: d.startWin.startMin, endMin: Math.min(fullRange.endMin, ne) })
+      }
+    }
+    const onUp = () => {
+      dragRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [
+    hitMode, win.startMin, win.endMin, xToMinute, clampWindow, emit,
+    usable, fullSpan, fullRange.startMin, fullRange.endMin,
+  ])
+
+  // Curseur dynamique selon la zone survolée (imperatif, sans re-render).
+  const handleHover = useCallback((e: React.MouseEvent) => {
+    if (dragRef.current) return
+    const el = containerRef.current
+    const rect = el?.getBoundingClientRect()
+    if (!el || !rect) return
+    const m = hitMode(e.clientX - rect.left)
+    el.style.cursor = m === 'pan' ? 'move' : m === 'jump' ? 'pointer' : 'col-resize'
+  }, [hitMode])
+
+  if (chartData.length === 0) return null
+
+  return (
+    <div className="shrink-0 px-4 pb-1 select-none" style={{ height: MINIMAP_H + 6 }}>
+      <div
+        ref={containerRef}
+        className="relative w-full"
+        style={{ height: MINIMAP_H }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleHover}
+        onDoubleClick={() => onZoomChange(null)}
+        title="Glisser la fenêtre = naviguer · bordures = zoomer · clic = sauter · double-clic = tout afficher"
+      >
+        <canvas
+          ref={canvasRef}
+          className="block w-full rounded"
+          style={{ width: '100%', height: MINIMAP_H, backgroundColor: '#030712' }}
+        />
+      </div>
     </div>
   )
 }

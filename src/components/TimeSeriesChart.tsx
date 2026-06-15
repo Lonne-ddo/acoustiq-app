@@ -26,7 +26,7 @@ import {
 import html2canvas from 'html2canvas'
 import { drawQrBadge } from '../utils/qrBadge'
 import { FEATURES } from '../config/features'
-import { Download, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3, Play, ChevronDown, MessageSquare } from 'lucide-react'
+import { Download, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3, Play, ChevronDown, MessageSquare, HelpCircle } from 'lucide-react'
 import ContextMenu from './ContextMenu'
 import { ReferenceDot } from 'recharts'
 import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData, Period, Category } from '../types'
@@ -1567,6 +1567,19 @@ export default function TimeSeriesChart({
             </span>
           )
         })()}
+
+        {/* Astuces (?) — tooltip au survol */}
+        <div className="relative group">
+          <HelpCircle size={13} className="text-gray-600 hover:text-gray-300 transition-colors cursor-help" />
+          <div className="pointer-events-none absolute left-0 top-full mt-1 z-40 hidden group-hover:block
+                          w-60 bg-gray-900 border border-gray-700 rounded-md shadow-xl p-2 text-[11px] text-gray-300 space-y-1">
+            <p className="text-[10px] uppercase tracking-wider text-gray-500 font-semibold">Astuces</p>
+            <p><kbd className="px-1 bg-gray-800 border border-gray-700 rounded">Shift</kbd> + glisser : mesurer LAeq/L90 sur une plage</p>
+            <p><kbd className="px-1 bg-gray-800 border border-gray-700 rounded">Clic</kbd> + glisser : créer une période</p>
+            <p><kbd className="px-1 bg-gray-800 border border-gray-700 rounded">Ctrl</kbd> + molette : zoomer</p>
+            <p>Double-clic : réinitialiser le zoom</p>
+          </div>
+        </div>
 
         {/* Zone « Navigation » : plein écran (zoom piloté par la minimap /
             Ctrl+molette). Les boutons zoom +/−/réinit. ont été retirés. */}

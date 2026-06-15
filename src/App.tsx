@@ -655,12 +655,6 @@ interface SidebarProps {
   loadProgress: number
   rejectedFiles: RejectedFile[]
   candidates: CandidateEvent[]
-  annotations: ChartAnnotation[]
-  pendingAnnotationText: string | null
-  onAnnotationAdd: (a: ChartAnnotation) => void
-  onAnnotationRemove: (id: string) => void
-  onAnnotationUpdate: (id: string, text: string) => void
-  onPendingAnnotationChange: (text: string | null) => void
   onOpenComparison: () => void
   templates: ProjectTemplate[]
   userTemplateCount: number
@@ -676,7 +670,6 @@ interface SidebarProps {
   onPointLabelChange: (point: string, label: string) => void
   onCreatePoint: (name: string) => void
   onFileRemove: (fileId: string) => void
-  onEventAdd: (ev: SourceEvent) => void
   onEventRemove: (id: string) => void
   onDetectCandidates: () => void
   onConfirmCandidate: (id: string) => void
@@ -782,15 +775,13 @@ function Sidebar({
   files, pointMap, pointLabels, allPoints, events, availableDates, errors,
   audioFile, chartTimeMin, loading, loadProgress, rejectedFiles,
   candidates,
-  annotations, pendingAnnotationText,
-  onAnnotationAdd, onAnnotationRemove, onAnnotationUpdate, onPendingAnnotationChange,
   onOpenComparison,
   templates, userTemplateCount,
   onSaveTemplate, onApplyTemplate, onDeleteTemplate,
   meteo, onMeteoChange,
   onOpenChecklist,
   onPointChange, onPointLabelChange, onCreatePoint, onFileRemove,
-  onEventAdd, onEventRemove, onClearError,
+  onEventRemove, onClearError,
   onDetectCandidates, onConfirmCandidate, onDismissCandidate,
   onSaveProject, onLoadProject, onParseFiles,
   onAudioLoaded, onAudioRemove, onAudioSeek,
@@ -1160,18 +1151,11 @@ function Sidebar({
             <EventsPanel
               events={events}
               availableDates={availableDates}
-              onAdd={onEventAdd}
               onRemove={onEventRemove}
               candidates={candidates}
               onDetect={onDetectCandidates}
               onConfirmCandidate={onConfirmCandidate}
               onDismissCandidate={onDismissCandidate}
-              annotations={annotations}
-              onAnnotationAdd={onAnnotationAdd}
-              onAnnotationRemove={onAnnotationRemove}
-              onAnnotationUpdate={onAnnotationUpdate}
-              pendingAnnotationText={pendingAnnotationText}
-              onPendingAnnotationChange={onPendingAnnotationChange}
               detectParams={detectParams}
               onDetectParamsChange={onDetectParamsChange}
               audioCoverage={audioCoverage}
@@ -1804,7 +1788,7 @@ function MainPanel({
               {!presentationMode && (
                 <>
                   <div
-                    className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
+                    className="h-1.5 mt-4 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
                     onMouseDown={handleSpectrumResize}
                     title="Glisser pour redimensionner"
                   >
@@ -1843,7 +1827,7 @@ function MainPanel({
               )}
               {!presentationMode && (
                 <>
-                  <div className="shrink-0">
+                  <div className="shrink-0 mt-6">
                     <PeriodsPanel
                       periods={periods}
                       onAdd={onPeriodAdd}
@@ -1853,7 +1837,7 @@ function MainPanel({
                       selectedDate={selectedDate}
                     />
                   </div>
-                  <div className="shrink-0">
+                  <div className="shrink-0 mt-4">
                     <IndicesPanel
                       files={visibleChartFiles}
                       pointMap={pointMap}
@@ -2756,15 +2740,9 @@ export default function App() {
     setCandidates((prev) => prev.filter((x) => x.id !== id))
   }
 
-  // ---- Annotations textuelles ----
+  // ---- Annotations textuelles (placement via clic sur le graphique) ----
   function handleAnnotationAdd(a: ChartAnnotation) {
     setAnnotations((prev) => [...prev, a])
-  }
-  function handleAnnotationRemove(id: string) {
-    setAnnotations((prev) => prev.filter((a) => a.id !== id))
-  }
-  function handleAnnotationUpdate(id: string, text: string) {
-    setAnnotations((prev) => prev.map((a) => (a.id === id ? { ...a, text } : a)))
   }
 
   // ---- Templates ----
@@ -3135,12 +3113,6 @@ export default function App() {
         loadProgress={loadProgress}
         rejectedFiles={rejectedFiles}
         candidates={candidates}
-        annotations={annotations}
-        pendingAnnotationText={pendingAnnotationText}
-        onAnnotationAdd={handleAnnotationAdd}
-        onAnnotationRemove={handleAnnotationRemove}
-        onAnnotationUpdate={handleAnnotationUpdate}
-        onPendingAnnotationChange={setPendingAnnotationText}
         onOpenComparison={() => setShowComparison(true)}
         templates={allTemplates}
         userTemplateCount={userTemplates.length}
@@ -3161,7 +3133,6 @@ export default function App() {
         })}
         onCreatePoint={handleCreatePoint}
         onFileRemove={handleFileRemove}
-        onEventAdd={handleEventAdd}
         onEventRemove={handleEventRemove}
         onClearError={handleClearError}
         onDetectCandidates={handleDetectCandidates}

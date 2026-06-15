@@ -95,6 +95,7 @@ import PeriodsPanel from './components/PeriodsPanel'
 import EventsPanel from './components/EventsPanel'
 import ConcordanceTable from './components/ConcordanceTable'
 import Spectrogram from './components/Spectrogram'
+import InstantSpectrum from './components/InstantSpectrum'
 import LwCalculator from './components/LwCalculator'
 const Vue3DTab = lazy(() => import('./components/Vue3DTab'))
 const IsolementPage = lazy(() => import('./pages/IsolementPage'))
@@ -1408,6 +1409,47 @@ function MainPanel({
     document.addEventListener('mouseup', onUp)
   }, [spectrogramHeight])
 
+  // --- Spectre instantané : hauteur du panneau (le survol est géré par
+  //     InstantSpectrum via un CustomEvent, pour ne pas re-rendre le graphique). ---
+  const SPECTRUM_MIN = 180
+  const SPECTRUM_MAX = 500
+  const [spectrumHeight, setSpectrumHeight] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem('acoustiq_spectrum_height') ?? '', 10)
+      if (Number.isFinite(v)) return Math.max(SPECTRUM_MIN, Math.min(SPECTRUM_MAX, v))
+    } catch { /* ignore */ }
+    return 220
+  })
+  useEffect(() => {
+    try { localStorage.setItem('acoustiq_spectrum_height', String(spectrumHeight)) } catch { /* ignore */ }
+  }, [spectrumHeight])
+  const spectrumResizeRef = useRef<{ startY: number; startH: number } | null>(null)
+  const handleSpectrumResize = useCallback((e: React.MouseEvent) => {
+    e.preventDefault()
+    spectrumResizeRef.current = { startY: e.clientY, startH: spectrumHeight }
+    const onMove = (ev: MouseEvent) => {
+      const d = spectrumResizeRef.current
+      if (!d) return
+      setSpectrumHeight(Math.max(SPECTRUM_MIN, Math.min(SPECTRUM_MAX, d.startH - (ev.clientY - d.startY))))
+    }
+    const onUp = () => {
+      spectrumResizeRef.current = null
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }, [spectrumHeight])
+
+  // Position de lecture audio (minutes axe X absolu) — prioritaire sur le survol.
+  const audioPlayheadAbsMin = useMemo(() => {
+    const a = audioEntries.find((e) => e.id === audioSync.activeEntryId)
+    if (!a || audioSync.currentMin === null) return null
+    const isMulti = availableDates.length > 1 && !overlayDate
+    const offset = isMulti ? Math.max(0, availableDates.indexOf(a.date)) * 1440 : 0
+    return offset + audioSync.currentMin
+  }, [audioEntries, audioSync.activeEntryId, audioSync.currentMin, availableDates, overlayDate])
+
   // En mode présentation, on force l'onglet Visualisation
   const effectiveTab: Tab = presentationMode ? 'chart' : activeTab
 
@@ -1722,6 +1764,34 @@ function MainPanel({
               </div>
 
               </div>
+
+              {/* Spectre instantané — poignée de resize + panneau (entre
+                  spectrogramme et périodes) */}
+              {!presentationMode && (
+                <>
+                  <div
+                    className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
+                    onMouseDown={handleSpectrumResize}
+                    title="Glisser pour redimensionner"
+                  >
+                    <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
+                  </div>
+                  <div className="shrink-0">
+                    <InstantSpectrum
+                      files={visibleChartFiles}
+                      pointMap={pointMap}
+                      selectedDate={selectedDate}
+                      availableDates={availableDates}
+                      multiDay={availableDates.length > 1 && !overlayDate}
+                      audioPlayheadMin={audioPlayheadAbsMin}
+                      audioPlaying={audioSync.playing}
+                      periods={periods}
+                      height={spectrumHeight}
+                      hiddenPoints={[...hiddenPoints]}
+                    />
+                  </div>
+                </>
+              )}
               {/* Lecteur audio flottant (streaming) — visible s'il existe des
                   fichiers audio associés à au moins un point de mesure visible. */}
               {!presentationMode && audioEntries.length > 0 && (

@@ -440,6 +440,21 @@ export default function TimeSeriesChart({
     return inc?.id ?? catList[0]?.id ?? 'cat-ambiant'
   }, [catList])
 
+  // Émission throttlée (requestAnimationFrame) de l'instant survolé vers le
+  // panneau « Spectre instantané » via un CustomEvent — coalesce à une émission
+  // par frame et évite de re-rendre le graphique à chaque mouvement de souris.
+  const hoverRafRef = useRef<number | null>(null)
+  const pendingHoverRef = useRef<number | null>(null)
+  const emitHoverInstant = useCallback((min: number | null) => {
+    pendingHoverRef.current = min
+    if (hoverRafRef.current != null) return
+    hoverRafRef.current = requestAnimationFrame(() => {
+      hoverRafRef.current = null
+      document.dispatchEvent(new CustomEvent('acoustiq:spectrum-hover', { detail: pendingHoverRef.current }))
+    })
+  }, [])
+  useEffect(() => () => { if (hoverRafRef.current != null) cancelAnimationFrame(hoverRafRef.current) }, [])
+
   const [localHiddenLines, setLocalHiddenLines] = useState<Set<string>>(new Set())
 
   // ── Sélection Shift+drag ──────────────────────────────────────────────────
@@ -1207,7 +1222,9 @@ export default function TimeSeriesChart({
     } else if (periodHover) {
       setPeriodHover(null)
     }
-  }, [xPxToMinutes, periodAtChartMin, periodHover, catById])
+    // Spectre instantané : suit le curseur.
+    emitHoverInstant(tMin)
+  }, [xPxToMinutes, periodAtChartMin, periodHover, catById, emitHoverInstant])
 
   const handleMouseUp = useCallback((e: React.MouseEvent) => {
     // Finaliser une sélection ON/OFF
@@ -1312,7 +1329,8 @@ export default function TimeSeriesChart({
   const handleMouseLeave = useCallback(() => {
     // Ne pas annuler une sélection en cours : l'utilisateur peut sortir de la zone
     setPeriodHover(null)
-  }, [])
+    emitHoverInstant(null)
+  }, [emitHoverInstant])
 
   // Double-clic = lecture audio si couvert, sinon reset zoom
   const handleDoubleClick = useCallback((e: React.MouseEvent) => {

@@ -40,6 +40,19 @@ body {
   to { opacity: 1; transform: translateX(0); }
 }
 
+/* Toast transitoire du lecteur audio : apparition rapide puis fondu sortant
+   (~600 ms au total). Le translateX(-50%) est préservé pour rester centré. */
+@keyframes audioToastFade {
+  0% { opacity: 0; transform: translateX(-50%) translateY(6px) scale(0.96); }
+  18% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+  70% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+  100% { opacity: 0; transform: translateX(-50%) translateY(-2px) scale(0.98); }
+}
+
+.audio-toast-fade {
+  animation: audioToastFade 600ms ease-out forwards;
+}
+
 /* Styles d'impression pour l'export PDF */
 @media print {
   body {

@@ -6,11 +6,16 @@
  * Affichage : panneau sous le graphique LAeq, collapsible, visible
  * uniquement quand une entrée audio est associée au point actif.
  */
-import { Play, Pause, Square, Volume2, Gauge, ChevronDown, ChevronUp, Clock, AlertTriangle, MapPin, Sliders } from 'lucide-react'
+import { Play, Pause, Square, Volume2, VolumeX, Gauge, ChevronDown, ChevronUp, Clock, AlertTriangle, MapPin, Sliders, HelpCircle, Loader2, RotateCcw } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AudioFileEntry } from '../../types'
 import type { UseAudioSyncResult } from '../../hooks/useAudioSync'
+import { useKeyboardShortcuts } from '../../hooks/useKeyboardShortcuts'
 import AudioWaveform from './AudioWaveform'
+import AudioFeedbackToast, { type AudioToast } from './AudioFeedbackToast'
+import AudioShortcutsHelp from './AudioShortcutsHelp'
+
+const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v))
 
 /** Hauteur par défaut du panneau (spec : 140 px) + bornes du redimensionnement. */
 const AUDIO_HEIGHT_DEFAULT = 140
@@ -96,6 +101,100 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
   const totalSec = active?.durationSec ?? 0
   const expanded = !collapsed && height >= EXPANDED_THRESHOLD
 
+  // ─────────────────────────────────────────────────────────────────────
+  // Toast de feedback des raccourcis (transitoire ~600 ms)
+  // ─────────────────────────────────────────────────────────────────────
+  const [toast, setToast] = useState<AudioToast | null>(null)
+  const toastIdRef = useRef(0)
+  const toastTimerRef = useRef<number | null>(null)
+  const showToast = useCallback((icon: string, label: string) => {
+    toastIdRef.current += 1
+    setToast({ id: toastIdRef.current, icon, label })
+    if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current)
+    toastTimerRef.current = window.setTimeout(() => setToast(null), 650)
+  }, [])
+  useEffect(() => () => { if (toastTimerRef.current) window.clearTimeout(toastTimerRef.current) }, [])
+
+  // Modale d'aide (icône ? ou touche ?)
+  const [helpOpen, setHelpOpen] = useState(false)
+
+  // Volume mémorisé avant un mute, pour restaurer au démute.
+  const prevVolumeRef = useRef(sync.volume || 1)
+
+  // ─── État de buffer / chargement (item 5D) ───
+  const [bufferedFrac, setBufferedFrac] = useState(0)
+  const [buffering, setBuffering] = useState(false)
+  useEffect(() => {
+    const el = sync.audioEl
+    if (!el) return
+    const refreshBuffer = () => {
+      try {
+        const dur = el.duration || totalSec
+        if (!Number.isFinite(dur) || dur <= 0) { setBufferedFrac(0); return }
+        const b = el.buffered
+        const ct = el.currentTime
+        let end = 0
+        for (let i = 0; i < b.length; i++) {
+          if (ct >= b.start(i) - 0.25 && ct <= b.end(i) + 0.25) { end = b.end(i); break }
+          end = Math.max(end, b.end(i))
+        }
+        setBufferedFrac(clamp(end / dur, 0, 1))
+      } catch { /* ignore */ }
+    }
+    const onWaiting = () => setBuffering(true)
+    const onResume = () => { setBuffering(false); refreshBuffer() }
+    el.addEventListener('progress', refreshBuffer)
+    el.addEventListener('timeupdate', refreshBuffer)
+    el.addEventListener('waiting', onWaiting)
+    el.addEventListener('stalled', onWaiting)
+    el.addEventListener('playing', onResume)
+    el.addEventListener('canplay', onResume)
+    el.addEventListener('loadeddata', refreshBuffer)
+    refreshBuffer()
+    return () => {
+      el.removeEventListener('progress', refreshBuffer)
+      el.removeEventListener('timeupdate', refreshBuffer)
+      el.removeEventListener('waiting', onWaiting)
+      el.removeEventListener('stalled', onWaiting)
+      el.removeEventListener('playing', onResume)
+      el.removeEventListener('canplay', onResume)
+      el.removeEventListener('loadeddata', refreshBuffer)
+    }
+  }, [sync.audioEl, sync.activeEntryId, totalSec])
+
+  // ─── Helpers de contrôle pilotés par les raccourcis ───
+  /** Saute à une position absolue (secondes depuis le début du fichier actif). */
+  const seekToSec = useCallback((sec: number) => {
+    if (!active) return
+    sync.seekMin(active.startMin + clamp(sec, 0, totalSec) / 60)
+  }, [active, totalSec, sync])
+
+  const adjustVolume = useCallback((delta: number) => {
+    const nv = clamp(sync.volume + delta, 0, 1)
+    sync.setVolume(nv)
+    if (nv > 0) prevVolumeRef.current = nv
+    showToast(nv === 0 ? '🔇' : nv < 0.5 ? '🔈' : '🔊', `${Math.round(nv * 100)}%`)
+  }, [sync, showToast])
+
+  const toggleMute = useCallback(() => {
+    if (sync.volume > 0) {
+      prevVolumeRef.current = sync.volume
+      sync.setVolume(0)
+      showToast('🔇', 'Muet')
+    } else {
+      const restore = prevVolumeRef.current || 1
+      sync.setVolume(restore)
+      showToast('🔊', `${Math.round(restore * 100)}%`)
+    }
+  }, [sync, showToast])
+
+  const cycleSpeed = useCallback((dir: 1 | -1) => {
+    const i = SPEEDS.indexOf(sync.speed)
+    const ns = SPEEDS[(i + dir + SPEEDS.length) % SPEEDS.length]
+    sync.setSpeed(ns)
+    showToast('⏩', `${ns}×`)
+  }, [sync, showToast])
+
   /** Tente de jouer une entrée, ouvre le warning si pas calée. */
   function playOrWarn(e: AudioFileEntry) {
     if (e.caleStatus === 'none') {
@@ -114,21 +213,114 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
     sync.togglePlayPause()
   }
 
-  function handleSeekClick(e: React.MouseEvent<HTMLDivElement>) {
+  /** Recule de 5 s et relance la lecture si en pause (raccourci R). */
+  const replay5 = useCallback(() => {
     if (!active) return
-    const rect = e.currentTarget.getBoundingClientRect()
-    const frac = Math.max(0, Math.min(1, (e.clientX - rect.left) / rect.width))
-    const seekMin = active.startMin + (active.durationSec / 60) * frac
-    sync.seekMin(seekMin)
+    seekToSec(currentSec - 5)
+    if (!sync.playing) sync.togglePlayPause()
+    showToast('⏪', 'Replay 5s')
+  }, [active, currentSec, sync, seekToSec, showToast])
+
+  // ─── Barre de progression cliquable / glissable + survol ───
+  const progressRef = useRef<HTMLDivElement | null>(null)
+  const draggingRef = useRef(false)
+  const [hoverFrac, setHoverFrac] = useState<number | null>(null)
+  const fracAt = (clientX: number): number => {
+    const el = progressRef.current
+    if (!el) return 0
+    const r = el.getBoundingClientRect()
+    return clamp((clientX - r.left) / r.width, 0, 1)
   }
+  const onBarMouseDown = (e: React.MouseEvent) => {
+    if (!active) return
+    e.preventDefault()
+    draggingRef.current = true
+    const apply = (clientX: number) => {
+      const f = fracAt(clientX)
+      setHoverFrac(f)
+      seekToSec(totalSec * f)
+    }
+    apply(e.clientX)
+    const move = (ev: MouseEvent) => apply(ev.clientX)
+    const up = () => {
+      draggingRef.current = false
+      document.removeEventListener('mousemove', move)
+      document.removeEventListener('mouseup', up)
+    }
+    document.addEventListener('mousemove', move)
+    document.addEventListener('mouseup', up)
+  }
+  const onBarMouseMove = (e: React.MouseEvent) => {
+    if (draggingRef.current) return
+    setHoverFrac(fracAt(e.clientX))
+  }
+  const onBarMouseLeave = () => { if (!draggingRef.current) setHoverFrac(null) }
+
+  // ─────────────────────────────────────────────────────────────────────
+  // Raccourcis clavier (item 1). Capture sur window : on consomme la touche
+  // (preventDefault + stopImmediatePropagation) quand on la traite, ce qui
+  // empêche le handler global d'App.tsx (pan/zoom du graphique) d'y réagir.
+  // Les raccourcis hors lecture/pause/aide ne sont actifs qu'avec un fichier
+  // actif → sinon les flèches continuent de piloter le graphique.
+  // ─────────────────────────────────────────────────────────────────────
+  useKeyboardShortcuts((ev) => {
+    const lower = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key
+
+    // Aide — toujours disponible (touche ? = Maj+/)
+    if (ev.key === '?') { setHelpOpen((v) => !v); return true }
+
+    // Lecture / Pause — toujours (démarre le 1er fichier si rien d'actif)
+    if (ev.key === ' ' || lower === 'k') {
+      showToast('⏯', sync.playing ? 'Pause' : 'Lecture')
+      handlePlayPause()
+      return true
+    }
+
+    // Les raccourcis ci-dessous nécessitent un fichier actif.
+    if (!active) return false
+
+    switch (ev.key) {
+      case 'ArrowLeft':
+        seekToSec(currentSec + (ev.shift ? -30 : ev.mod ? -60 : -5))
+        showToast('⏪', ev.shift ? '-30s' : ev.mod ? '-1min' : '-5s')
+        return true
+      case 'ArrowRight':
+        seekToSec(currentSec + (ev.shift ? 30 : ev.mod ? 60 : 5))
+        showToast('⏩', ev.shift ? '+30s' : ev.mod ? '+1min' : '+5s')
+        return true
+      case 'ArrowUp': adjustVolume(0.1); return true
+      case 'ArrowDown': adjustVolume(-0.1); return true
+      case 'Home': seekToSec(0); showToast('⏮', 'Début'); return true
+      case 'End': seekToSec(totalSec); showToast('⏭', 'Fin'); return true
+      case '>': cycleSpeed(1); return true
+      case '<': cycleSpeed(-1); return true
+    }
+    switch (lower) {
+      case 'j': seekToSec(currentSec - 10); showToast('⏪', '-10s'); return true
+      case 'l': seekToSec(currentSec + 10); showToast('⏩', '+10s'); return true
+      case 'm': toggleMute(); return true
+      case 'n': onOpenCalage(active.id); showToast('📍', 'Marqueur'); return true
+      case 'r': replay5(); return true
+    }
+    // Chiffres 0–9 → 0 % … 90 % de la durée
+    if (ev.key >= '0' && ev.key <= '9' && !ev.mod && !ev.shift && !ev.alt) {
+      const d = Number(ev.key)
+      seekToSec(totalSec * (d / 10))
+      showToast('⏱', `${d * 10}%`)
+      return true
+    }
+    return false
+  }, { enabled: entries.length > 0 })
 
   if (entries.length === 0) return null
 
   return (
     <div
-      className="border-t border-gray-800 bg-gray-950/70 flex flex-col"
+      className="relative border-t border-gray-800 bg-gray-950/70 flex flex-col"
       style={collapsed ? undefined : { height }}
     >
+      {/* Toast transitoire des raccourcis — flotte au centre-bas du graphique */}
+      <AudioFeedbackToast toast={toast} />
       {/* Poignée de redimensionnement (3 px, cursor ns-resize).
           Masquée quand le panneau est replié (la hauteur est alors dictée
           par le seul en-tête cliquable). */}
@@ -170,24 +362,42 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
 
       {!collapsed && (
         <div className="px-4 pb-3 space-y-2 flex-1 min-h-0 overflow-hidden flex flex-col">
-          {/* Barre de progression */}
-          <div
-            className="relative w-full h-2 rounded bg-gray-800 cursor-pointer overflow-hidden"
-            onClick={handleSeekClick}
-            title="Cliquer pour aller à un instant"
-          >
+          {/* Barre de progression — cliquable, glissable, avec aperçu au survol
+              et indicateur de buffer (zone décodée) sous la progression. */}
+          <div className="relative pt-1">
             <div
-              className="absolute top-0 bottom-0 bg-blue-500/70"
-              style={{ width: totalSec > 0 ? `${(currentSec / totalSec) * 100}%` : 0 }}
-            />
-            <div
-              className="pointer-events-none absolute top-0 bottom-0"
-              style={{
-                left: totalSec > 0 ? `${(currentSec / totalSec) * 100}%` : 0,
-                width: 2,
-                backgroundColor: '#3b82f6',
-              }}
-            />
+              ref={progressRef}
+              className="group relative w-full h-2.5 rounded bg-gray-800 cursor-pointer overflow-hidden"
+              onMouseDown={onBarMouseDown}
+              onMouseMove={onBarMouseMove}
+              onMouseLeave={onBarMouseLeave}
+              title="Cliquer ou glisser pour aller à un instant"
+            >
+              {/* Buffer décodé */}
+              <div
+                className="pointer-events-none absolute top-0 bottom-0 bg-gray-600/50"
+                style={{ width: `${bufferedFrac * 100}%` }}
+              />
+              {/* Progression lue */}
+              <div
+                className="pointer-events-none absolute top-0 bottom-0 bg-blue-500/70"
+                style={{ width: totalSec > 0 ? `${(currentSec / totalSec) * 100}%` : 0 }}
+              />
+              {/* Marqueur (thumb) */}
+              <div
+                className="pointer-events-none absolute top-1/2 -translate-x-1/2 -translate-y-1/2 rounded-full bg-blue-400 shadow opacity-0 group-hover:opacity-100 transition-opacity"
+                style={{ left: totalSec > 0 ? `${(currentSec / totalSec) * 100}%` : 0, width: 10, height: 10 }}
+              />
+            </div>
+            {/* Aperçu de l'heure au survol */}
+            {hoverFrac !== null && totalSec > 0 && (
+              <div
+                className="pointer-events-none absolute -top-5 z-10 -translate-x-1/2 rounded bg-black/80 px-1.5 py-0.5 text-[10px] font-mono text-white tabular-nums whitespace-nowrap"
+                style={{ left: `${hoverFrac * 100}%` }}
+              >
+                {fmtSec(totalSec * hoverFrac)}
+              </div>
+            )}
           </div>
 
           <div className="flex items-center gap-2 flex-wrap">
@@ -216,13 +426,30 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
             >
               <Square size={11} />
             </button>
+            <button
+              onClick={replay5}
+              disabled={!active}
+              className="flex items-center gap-1 p-1.5 rounded bg-gray-800 text-gray-400 hover:bg-gray-700 border border-gray-600 disabled:opacity-40"
+              title="Revenir 5 s en arrière et relire (R)"
+            >
+              <RotateCcw size={11} />
+              <span className="text-[10px]">5s</span>
+            </button>
 
-            <span className="text-[11px] text-gray-400 tabular-nums font-mono min-w-[96px]">
+            <span className="flex items-center gap-1 text-[11px] text-gray-400 tabular-nums font-mono min-w-[104px]">
               {fmtSec(currentSec)} / {fmtSec(totalSec)}
+              {buffering && <Loader2 size={11} className="animate-spin text-blue-400" />}
             </span>
 
             <div className="flex items-center gap-1">
-              <Volume2 size={11} className="text-gray-500" />
+              <button
+                onClick={toggleMute}
+                className="text-gray-500 hover:text-gray-300"
+                title={sync.volume === 0 ? 'Réactiver le son (M)' : 'Couper le son (M)'}
+                aria-label="Muet"
+              >
+                {sync.volume === 0 ? <VolumeX size={12} /> : <Volume2 size={11} />}
+              </button>
               <input
                 type="range"
                 min={0}
@@ -265,6 +492,16 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
             >
               <Clock size={12} />
               Caler
+            </button>
+
+            {/* Aide raccourcis clavier */}
+            <button
+              onClick={() => setHelpOpen(true)}
+              className="p-1.5 rounded bg-gray-800 text-gray-400 hover:text-gray-200 hover:bg-gray-700 border border-gray-600"
+              title="Raccourcis clavier (?)"
+              aria-label="Afficher les raccourcis clavier"
+            >
+              <HelpCircle size={13} />
             </button>
           </div>
 
@@ -397,6 +634,9 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
           </div>
         </div>
       )}
+
+      {/* Modale d'aide des raccourcis clavier (icône ? ou touche ?) */}
+      <AudioShortcutsHelp open={helpOpen} onClose={() => setHelpOpen(false)} />
     </div>
   )
 }

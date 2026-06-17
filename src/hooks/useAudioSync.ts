@@ -128,6 +128,28 @@ export function useAudioSync(entries: AudioFileEntry[]): UseAudioSyncResult {
     }
   }, [])
 
+  // Boucle requestAnimationFrame pendant la lecture : met à jour `currentMin`
+  // à la fréquence de rafraîchissement de l'écran (≈ 30–60 fps) plutôt qu'aux
+  // ~4 Hz de l'événement `timeupdate`, pour un curseur de lecture fluide sur
+  // le graphique/spectrogramme. Throttlé à ~30 fps pour limiter les rendus.
+  useEffect(() => {
+    if (!playing) return
+    let raf = 0
+    let last = -1
+    const tick = (t: number) => {
+      raf = requestAnimationFrame(tick)
+      if (t - last < 33) return // ~30 fps
+      last = t
+      const el = audioRef.current
+      if (!el) return
+      const baseMin = (el as HTMLAudioElement & { _startMin?: number })._startMin
+      if (typeof baseMin !== 'number') return
+      setCurrentMin(baseMin + el.currentTime / 60)
+    }
+    raf = requestAnimationFrame(tick)
+    return () => cancelAnimationFrame(raf)
+  }, [playing])
+
   const playAt = useCallback(
     (entryId: string, minutesSinceMidnight: number) => {
       const entry = entries.find((e) => e.id === entryId)

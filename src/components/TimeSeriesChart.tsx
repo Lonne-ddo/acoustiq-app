@@ -1340,16 +1340,26 @@ export default function TimeSeriesChart({
     }
   }, [handleZoomIn, handleZoomOut])
 
-  // Auto-scroll : si le curseur de lecture sort de la plage visible (zoomée),
-  // recentrer la plage autour du curseur en préservant le span.
+  // Auto-scroll « page-turn » : pendant la lecture, on laisse le curseur
+  // avancer jusqu'à ~85 % de la fenêtre zoomée, puis on fait défiler le
+  // graphique pour le replacer à ~20 % du bord gauche (fenêtre de regard vers
+  // l'avant). En cas de saut/recul hors champ, on recentre. Le span est
+  // toujours préservé. Cheap : early-return tant que le curseur est confortable.
   useEffect(() => {
     if (!isZoomed || audioPlayheadMin === null || audioPlayheadMin === undefined) return
-    if (audioPlayheadMin >= effectiveRange.startMin && audioPlayheadMin <= effectiveRange.endMin) return
     const span = effectiveRange.endMin - effectiveRange.startMin
-    let newStart = audioPlayheadMin - span / 2
+    if (span <= 0) return
+    const rel = (audioPlayheadMin - effectiveRange.startMin) / span
+    if (rel >= 0.05 && rel <= 0.85) return // confortablement visible → rien à faire
+    // Avance normale (curseur au-delà de 85 %, encore proche) → page-turn à 20 %.
+    // Sinon (recul, saut lointain) → recentrage.
+    let newStart =
+      rel > 0.85 && rel <= 1.6 ? audioPlayheadMin - span * 0.2 : audioPlayheadMin - span / 2
     let newEnd = newStart + span
     if (newStart < fullRange.startMin) { newStart = fullRange.startMin; newEnd = newStart + span }
     if (newEnd > fullRange.endMin) { newEnd = fullRange.endMin; newStart = newEnd - span }
+    // Évite les mises à jour redondantes (curseur déjà collé au bord de fullRange).
+    if (Math.abs(newStart - effectiveRange.startMin) < span * 0.01) return
     onZoomChange({ startMin: newStart, endMin: newEnd })
   }, [audioPlayheadMin, effectiveRange.startMin, effectiveRange.endMin, fullRange.startMin, fullRange.endMin, isZoomed, onZoomChange])
 
@@ -2784,6 +2794,7 @@ export default function TimeSeriesChart({
         yMax={settingsYMax}
         isMultiDay={isMultiDay}
         daysCount={sortedDates.length}
+        audioPlayheadMin={audioPlayheadMin}
       />
 
       {/* Carte résultat ON/OFF */}
@@ -2831,6 +2842,7 @@ function Minimap({
   yMax,
   isMultiDay,
   daysCount,
+  audioPlayheadMin,
 }: {
   chartData: ChartEntry[]
   lineSpecs: Array<{ key: string; color: string }>
@@ -2842,6 +2854,7 @@ function Minimap({
   yMax: number
   isMultiDay: boolean
   daysCount: number
+  audioPlayheadMin?: number | null
 }) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -3090,6 +3103,20 @@ function Minimap({
           className="block w-full rounded"
           style={{ width: '100%', height: MINIMAP_H, backgroundColor: '#030712' }}
         />
+        {/* Curseur de lecture audio — overlay DOM (pas de redraw canvas à 60 fps) */}
+        {audioPlayheadMin != null && width > 0 &&
+         audioPlayheadMin >= fullRange.startMin && audioPlayheadMin <= fullRange.endMin && (
+          <div
+            className="pointer-events-none absolute top-0"
+            style={{ left: minuteToX(audioPlayheadMin), height: MINIMAP_H }}
+          >
+            <div style={{ width: 1, height: '100%', backgroundColor: 'rgba(255,255,255,0.9)' }} />
+            <div
+              className="absolute -translate-x-1/2 rounded-full bg-white shadow"
+              style={{ top: -2, left: 0, width: 5, height: 5 }}
+            />
+          </div>
+        )}
       </div>
     </div>
   )

@@ -132,16 +132,29 @@ export function useAudioSync(entries: AudioFileEntry[]): UseAudioSyncResult {
   }, [])
 
   // Boucle requestAnimationFrame pendant la lecture : met à jour `currentMin`
-  // à la fréquence de rafraîchissement de l'écran (≈ 30–60 fps) plutôt qu'aux
-  // ~4 Hz de l'événement `timeupdate`, pour un curseur de lecture fluide sur
-  // le graphique/spectrogramme. Throttlé à ~30 fps pour limiter les rendus.
+  // à la fréquence de rafraîchissement de l'écran (jusqu'à 60 fps) plutôt
+  // qu'aux ~4 Hz de l'événement `timeupdate`, pour un curseur de lecture
+  // parfaitement lisse sur le graphique/spectrogramme/spectre.
+  //
+  // Adaptatif : on vise 60 fps (aucun throttle). Si le navigateur peine sur un
+  // gros fichier (plusieurs frames > 40 ms d'affilée), on redescend à ~30 fps
+  // pour ne pas aggraver la saccade ; on remonte dès que ça se fluidifie.
   useEffect(() => {
     if (!playing) return
     let raf = 0
     let last = -1
+    let minInterval = 0 // 0 = 60 fps (pas de throttle)
+    let slowStreak = 0
     const tick = (t: number) => {
       raf = requestAnimationFrame(tick)
-      if (t - last < 33) return // ~30 fps
+      const dt = last < 0 ? 16 : t - last
+      if (last >= 0 && dt < minInterval) return
+      // Détection automatique de saccade → throttle à 30 fps
+      if (dt > 40) {
+        if (++slowStreak >= 6) minInterval = 33
+      } else if (slowStreak > 0) {
+        if (--slowStreak === 0) minInterval = 0
+      }
       last = t
       const el = audioRef.current
       if (!el) return

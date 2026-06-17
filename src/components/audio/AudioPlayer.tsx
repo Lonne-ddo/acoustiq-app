@@ -6,7 +6,7 @@
  * Affichage : panneau sous le graphique LAeq, collapsible, visible
  * uniquement quand une entrée audio est associée au point actif.
  */
-import { Play, Pause, Square, Volume2, VolumeX, Gauge, ChevronDown, ChevronUp, Clock, AlertTriangle, MapPin, Sliders, HelpCircle, Loader2, RotateCcw } from 'lucide-react'
+import { Play, Pause, Square, Volume2, VolumeX, Gauge, ChevronDown, ChevronUp, Clock, AlertTriangle, MapPin, Sliders, HelpCircle, Loader2, RotateCcw, Music, Plus } from 'lucide-react'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { AudioFileEntry } from '../../types'
 import type { UseAudioSyncResult } from '../../hooks/useAudioSync'
@@ -36,6 +36,31 @@ function fmtSec(s: number): string {
   return `${String(m).padStart(2, '0')}:${String(sec).padStart(2, '0')}`
 }
 
+/** Durée totale lisible : « 11h 07m » / « 7m 12s » / « 0s ». */
+function fmtDurationLong(totalSec: number): string {
+  if (!Number.isFinite(totalSec) || totalSec <= 0) return '0s'
+  const h = Math.floor(totalSec / 3600)
+  const m = Math.floor((totalSec % 3600) / 60)
+  const s = Math.floor(totalSec % 60)
+  if (h > 0) return `${h}h ${String(m).padStart(2, '0')}m`
+  if (m > 0) return `${m}m ${String(s).padStart(2, '0')}s`
+  return `${s}s`
+}
+
+/** Taille lisible : « 1.5 GB » / « 612 MB ». */
+function fmtSize(bytes: number): string {
+  if (bytes >= 1024 ** 3) return `${(bytes / 1024 ** 3).toFixed(1)} GB`
+  if (bytes >= 1024 ** 2) return `${Math.round(bytes / 1024 ** 2)} MB`
+  return `${Math.round(bytes / 1024)} KB`
+}
+
+const AUDIO_RE = /\.(mp3|wav|m4a|ogg)$/i
+const BIG_FILE_BYTES = 500 * 1024 * 1024
+/** Vrai si l'événement de drag transporte des fichiers (et pas du texte/HTML). */
+function dragHasFiles(e: React.DragEvent): boolean {
+  return Array.from(e.dataTransfer?.types ?? []).includes('Files')
+}
+
 function statusDot(s: AudioFileEntry['caleStatus']): { color: string; label: string } {
   if (s === 'calibrated') return { color: 'bg-emerald-500', label: 'Calé' }
   if (s === 'date_only') return { color: 'bg-amber-400', label: 'Date estimée, non calé' }
@@ -51,9 +76,14 @@ interface Props {
   defaultCollapsed?: boolean
   /** Ouvre le panneau de calage pour un fichier donné */
   onOpenCalage: (entryId: string) => void
+  /** Importe de nouveaux fichiers audio (probe + ajout au state). Async. */
+  onAddFiles?: (files: File[]) => void | Promise<void>
+  /** Compteur incrémental : à chaque changement de valeur, la zone clignote
+   *  (utilisé par le drag-and-drop global de la page Visualisation). */
+  flashSignal?: number
 }
 
-export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed = false, onOpenCalage }: Props) {
+export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed = false, onOpenCalage, onAddFiles, flashSignal }: Props) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   // Modal de confirmation quand on essaie de lire un fichier non calé.
   const [warnUncaled, setWarnUncaled] = useState<AudioFileEntry | null>(null)
@@ -204,6 +234,84 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
     showToast('⏩', `${ns}×`)
   }, [sync, showToast])
 
+  // ─────────────────────────────────────────────────────────────────────
+  // Import de fichiers audio (zone de téléversement permanente)
+  // ─────────────────────────────────────────────────────────────────────
+  const fileInputRef = useRef<HTMLInputElement | null>(null)
+  const [importing, setImporting] = useState(false)
+  const [dragActive, setDragActive] = useState(false)
+  const [flash, setFlash] = useState(false)
+  // Avertissement « gros fichier » (> 500 Mo) — persistant tant qu'un tel
+  // fichier reste chargé ; informatif, ne bloque pas l'import.
+  const [bigFileNote, setBigFileNote] = useState<string | null>(null)
+  const flashTimerRef = useRef<number | null>(null)
+  const triggerFlash = useCallback(() => {
+    setFlash(true)
+    if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current)
+    flashTimerRef.current = window.setTimeout(() => setFlash(false), 700)
+  }, [])
+  useEffect(() => () => { if (flashTimerRef.current) window.clearTimeout(flashTimerRef.current) }, [])
+
+  /** Probe + ajoute les fichiers audio sélectionnés/déposés. */
+  const ingestFiles = useCallback(async (list: File[]) => {
+    const audios = list.filter((f) => AUDIO_RE.test(f.name))
+    if (audios.length === 0 || !onAddFiles) return
+    const big = audios.find((f) => f.size > BIG_FILE_BYTES)
+    if (big) {
+      setBigFileNote(
+        `Gros fichier audio (${fmtSize(big.size)}). Le téléversement reste rapide mais ` +
+        `certaines opérations (forme d'onde, Auto RMS) seront limitées.`,
+      )
+      showToast('⚠️', fmtSize(big.size))
+    }
+    setImporting(true)
+    try {
+      await onAddFiles(audios)
+    } finally {
+      setImporting(false)
+    }
+  }, [onAddFiles, showToast])
+
+  const onPickFiles = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const list = Array.from(e.target.files ?? [])
+    e.target.value = ''
+    if (list.length) void ingestFiles(list)
+  }
+  const openFilePicker = () => fileInputRef.current?.click()
+
+  // Drag-and-drop sur le panneau (état vide ou chargé).
+  const onPanelDragOver = (e: React.DragEvent) => {
+    if (!onAddFiles || !dragHasFiles(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    setDragActive(true)
+  }
+  const onPanelDragLeave = (e: React.DragEvent) => {
+    e.preventDefault()
+    setDragActive(false)
+  }
+  const onPanelDrop = (e: React.DragEvent) => {
+    if (!onAddFiles || !dragHasFiles(e)) return
+    e.preventDefault()
+    e.stopPropagation()
+    setDragActive(false)
+    const list = Array.from(e.dataTransfer.files)
+    if (list.some((f) => AUDIO_RE.test(f.name))) {
+      triggerFlash()
+      void ingestFiles(list)
+    }
+  }
+
+  // Flash déclenché de l'extérieur (drag-and-drop global de la page).
+  useEffect(() => {
+    if (flashSignal && flashSignal > 0) triggerFlash()
+  }, [flashSignal, triggerFlash])
+
+  // Nettoie l'avertissement gros fichier s'il n'y a plus de fichier volumineux.
+  useEffect(() => {
+    if (bigFileNote && !entries.some((e) => e.size > BIG_FILE_BYTES)) setBigFileNote(null)
+  }, [entries, bigFileNote])
+
   /** Tente de jouer une entrée, ouvre le warning si pas calée. */
   function playOrWarn(e: AudioFileEntry) {
     if (e.caleStatus === 'none') {
@@ -330,15 +438,39 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
     return false
   }, { enabled: entries.length > 0 })
 
-  if (entries.length === 0) return null
+  const isEmpty = entries.length === 0
 
   return (
     <div
-      className="relative border-t border-gray-800 bg-gray-950/70 flex flex-col"
+      className={`relative border-t bg-gray-950/70 flex flex-col transition-colors ${
+        flash
+          ? 'border-emerald-400 ring-2 ring-emerald-400/70'
+          : dragActive
+          ? 'border-blue-500 ring-2 ring-blue-500/50'
+          : 'border-gray-800'
+      }`}
       style={collapsed ? undefined : { height }}
+      onDragOver={onPanelDragOver}
+      onDragLeave={onPanelDragLeave}
+      onDrop={onPanelDrop}
     >
       {/* Toast transitoire des raccourcis — flotte au centre-bas du graphique */}
       <AudioFeedbackToast toast={toast} />
+      {/* Input fichier caché — partagé par la zone vide et « Ajouter » */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept=".mp3,.wav,.m4a,.ogg,audio/*"
+        multiple
+        className="hidden"
+        onChange={onPickFiles}
+      />
+      {/* Voile de confirmation au drop / drag */}
+      {dragActive && !collapsed && (
+        <div className="pointer-events-none absolute inset-0 z-30 flex items-center justify-center bg-blue-950/40">
+          <span className="text-sm font-semibold text-blue-200">Déposer pour ajouter l'audio</span>
+        </div>
+      )}
       {/* Poignée de redimensionnement (3 px, cursor ns-resize).
           Masquée quand le panneau est replié (la hauteur est alors dictée
           par le seul en-tête cliquable). */}
@@ -365,12 +497,26 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
         <Volume2 size={12} className="text-blue-400" />
         <span className="text-[11px] font-semibold text-gray-300 uppercase tracking-wider">Audio</span>
         <span className="text-[10px] text-gray-500 truncate">
-          {pointName ? `${pointName} · ` : ''}{entries.length} fichier{entries.length > 1 ? 's' : ''}
-          {active && (
-            <> · <span className={`inline-block w-1.5 h-1.5 rounded-full align-middle mx-1 ${statusDot(active.caleStatus).color}`} /><span className="font-mono text-gray-400">{active.name}</span></>
+          {isEmpty ? (
+            'glissez vos fichiers audio ici'
+          ) : (
+            <>
+              {pointName ? `${pointName} · ` : ''}
+              {entries.length} fichier{entries.length > 1 ? 's' : ''}
+              {' · '}{fmtDurationLong(entries.reduce((s, e) => s + e.durationSec, 0))}
+              {active && (
+                <> · <span className={`inline-block w-1.5 h-1.5 rounded-full align-middle mx-1 ${statusDot(active.caleStatus).color}`} /><span className="font-mono text-gray-400">{active.name}</span></>
+              )}
+            </>
           )}
         </span>
-        {sync.playing && (
+        {importing && (
+          <span className="ml-auto flex items-center gap-1 text-[10px] text-blue-300">
+            <Loader2 size={11} className="animate-spin" />
+            Préparation…
+          </span>
+        )}
+        {!importing && sync.playing && (
           <span className="ml-auto flex items-center gap-1 text-[10px] text-emerald-400">
             <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
             Lecture
@@ -378,7 +524,32 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
         )}
       </button>
 
-      {!collapsed && (
+      {/* ÉTAT VIDE — zone de téléversement permanente */}
+      {!collapsed && isEmpty && (
+        <div className="px-4 pb-4 flex-1 min-h-0 flex flex-col">
+          <button
+            type="button"
+            onClick={openFilePicker}
+            className={`flex-1 min-h-0 w-full rounded-lg border-2 border-dashed flex flex-col items-center justify-center gap-1 px-4 py-3 text-center transition-colors ${
+              dragActive || flash
+                ? 'border-emerald-400 bg-emerald-950/20'
+                : 'border-gray-700 hover:border-gray-500 hover:bg-gray-900/40'
+            }`}
+          >
+            <Music size={22} className="text-blue-400" />
+            <span className="text-[12px] font-medium text-gray-200">Glissez vos fichiers audio ici</span>
+            <span className="text-[11px] text-gray-400">ou cliquez pour parcourir</span>
+            <span className="text-[10px] text-gray-500">MP3, WAV, M4A, OGG · jusqu'à 10h+</span>
+            {importing && (
+              <span className="mt-1 flex items-center gap-1 text-[11px] text-blue-300">
+                <Loader2 size={12} className="animate-spin" /> Préparation…
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+
+      {!collapsed && !isEmpty && (
         <div className="px-4 pb-3 space-y-2 flex-1 min-h-0 overflow-hidden flex flex-col">
           {/* Barre de progression — cliquable, glissable, avec aperçu au survol
               et indicateur de buffer (zone décodée) sous la progression. */}
@@ -430,11 +601,11 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
             ) : (
               <button
                 onClick={handlePlayPause}
-                disabled={!active && entries.length === 0}
+                disabled={importing || (!active && entries.length === 0)}
                 className="p-1.5 rounded bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white"
-                title="Lecture"
+                title={importing ? 'Préparation du fichier…' : 'Lecture'}
               >
-                <Play size={13} />
+                {importing ? <Loader2 size={13} className="animate-spin" /> : <Play size={13} />}
               </button>
             )}
             <button
@@ -600,6 +771,27 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
                 )
               })}
             </div>
+          )}
+
+          {/* Avertissement gros fichier (> 500 Mo) — informatif */}
+          {bigFileNote && (
+            <div className="flex items-start gap-1.5 mt-1 text-[10px] text-amber-300 bg-amber-950/30 border border-amber-800/50 rounded px-2 py-1">
+              <AlertTriangle size={11} className="shrink-0 mt-0.5" />
+              <span className="leading-snug">{bigFileNote}</span>
+            </div>
+          )}
+
+          {/* + Ajouter d'autres fichiers audio */}
+          {onAddFiles && (
+            <button
+              onClick={openFilePicker}
+              disabled={importing}
+              className="flex items-center gap-1 self-start text-[11px] text-blue-300 hover:text-blue-200 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded px-2 py-1 mt-1 disabled:opacity-50"
+              title="Ajouter d'autres fichiers audio"
+            >
+              {importing ? <Loader2 size={11} className="animate-spin" /> : <Plus size={11} />}
+              Ajouter d'autres fichiers audio
+            </button>
           )}
         </div>
       )}

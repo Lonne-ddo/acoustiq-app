@@ -1322,6 +1322,8 @@ interface MainPanelProps {
   audioPointMap: Record<string, string>
   audioSync: ReturnType<typeof useAudioSync>
   audioCoverage: AudioCoverageRange[]
+  onAudioEntriesLoad: (files: File[]) => Promise<void>
+  onParseFiles: (files: File[]) => void
   chartPickArmed: boolean
   onChartPicked: (tMin: number) => void
   chartRangePickArmed: boolean
@@ -1367,6 +1369,7 @@ function MainPanel({
   periods, onPeriodAdd, onPeriodUpdate, onPeriodRemove,
   categories, onCategoryAdd,
   audioEntries, audioPointMap, audioSync, audioCoverage,
+  onAudioEntriesLoad, onParseFiles,
   chartPickArmed, onChartPicked,
   chartRangePickArmed, onChartRangePicked, chartHighlightRange,
   onOpenAudioCalage,
@@ -1380,6 +1383,33 @@ function MainPanel({
   const visibleChartFiles = chartFiles.filter((f) => !hiddenPoints.has(pointMap[f.id]))
   const hasChart = chartFiles.length > 0
   const [showRecent, setShowRecent] = useState(false)
+  // Drag-and-drop global de la page Visualisation : compteur qui fait clignoter
+  // la zone AUDIO + état de survol pour le voile visuel.
+  const [audioFlash, setAudioFlash] = useState(0)
+  const [pageDragOver, setPageDragOver] = useState(false)
+  const handlePageDragOver = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer?.types ?? []).includes('Files')) return
+    e.preventDefault()
+    setPageDragOver(true)
+  }, [])
+  const handlePageDragLeave = useCallback((e: React.DragEvent) => {
+    // Ignore les transitions internes (enfant → enfant)
+    if (e.currentTarget.contains(e.relatedTarget as Node)) return
+    setPageDragOver(false)
+  }, [])
+  const handlePageDrop = useCallback((e: React.DragEvent) => {
+    if (!Array.from(e.dataTransfer?.types ?? []).includes('Files')) return
+    e.preventDefault()
+    setPageDragOver(false)
+    const dropped = Array.from(e.dataTransfer.files)
+    const audios = dropped.filter((f) => /\.(mp3|wav|m4a|ogg)$/i.test(f.name))
+    const measures = dropped.filter((f) => /\.(xlsx|csv|ldbin)$/i.test(f.name))
+    if (audios.length > 0) {
+      void onAudioEntriesLoad(audios)
+      setAudioFlash((c) => c + 1) // fait clignoter la zone AUDIO pour confirmer
+    }
+    if (measures.length > 0) onParseFiles(measures)
+  }, [onAudioEntriesLoad, onParseFiles])
   // Affichage forcé du bandeau « Démarrage guidé » après qu'il a été masqué
   // automatiquement au 1er import. Activé via le bouton ❓ « Aide » du header.
   const [forceShowWorkflow, setForceShowWorkflow] = useState(false)
@@ -1651,7 +1681,21 @@ function MainPanel({
 
       {/* Contenu selon l'onglet */}
       {effectiveTab === 'chart' && (
-        <div className="flex-1 flex flex-col min-h-0 overflow-y-auto animate-[fadeIn_0.15s_ease-out]">
+        <div
+          className={`relative flex-1 flex flex-col min-h-0 overflow-y-auto animate-[fadeIn_0.15s_ease-out] ${
+            pageDragOver ? 'ring-2 ring-inset ring-emerald-500/60' : ''
+          }`}
+          onDragOver={handlePageDragOver}
+          onDragLeave={handlePageDragLeave}
+          onDrop={handlePageDrop}
+        >
+          {pageDragOver && (
+            <div className="pointer-events-none absolute inset-0 z-40 flex items-center justify-center bg-emerald-950/20">
+              <span className="rounded-lg bg-gray-900/90 px-4 py-2 text-sm font-semibold text-emerald-200 shadow-lg">
+                Déposer : audio → lecteur · mesures (.xlsx/.csv) → import
+              </span>
+            </div>
+          )}
           {hasChart ? (
             <>
               <div
@@ -1810,9 +1854,9 @@ function MainPanel({
                   </div>
                 </>
               )}
-              {/* Lecteur audio flottant (streaming) — visible s'il existe des
-                  fichiers audio associés à au moins un point de mesure visible. */}
-              {!presentationMode && audioEntries.length > 0 && (
+              {/* Lecteur audio flottant (streaming) — TOUJOURS visible : sert
+                  aussi de zone de téléversement permanente (état vide inclus). */}
+              {!presentationMode && (
                 <div className="shrink-0">
                   <StreamAudioPlayer
                     entries={audioEntries.filter((e) => {
@@ -1822,6 +1866,8 @@ function MainPanel({
                     sync={audioSync}
                     pointName={assignedPoints[0] ?? null}
                     onOpenCalage={onOpenAudioCalage}
+                    onAddFiles={onAudioEntriesLoad}
+                    flashSignal={audioFlash}
                   />
                 </div>
               )}
@@ -2160,6 +2206,16 @@ export default function App() {
   }, [])
   const handleAudioPointChange = useCallback((id: string, point: string) => {
     setAudioPointMap((prev) => ({ ...prev, [id]: point }))
+  }, [])
+  // Filet de sécurité mémoire : au démontage de l'app, on révoque tous les
+  // blob URLs encore vivants (gros fichiers MP3) pour libérer la RAM. Un ref
+  // suit l'état courant afin que le cleanup ne capture pas une liste périmée.
+  const audioEntriesRef = useRef(audioEntries)
+  useEffect(() => { audioEntriesRef.current = audioEntries }, [audioEntries])
+  useEffect(() => () => {
+    for (const e of audioEntriesRef.current) {
+      try { URL.revokeObjectURL(e.blobUrl) } catch { /* ignore */ }
+    }
   }, [])
   // ── Panneau de calage audio ──────────────────────────────────────────
   const [calageEntryId, setCalageEntryId] = useState<string | null>(null)
@@ -3232,6 +3288,8 @@ export default function App() {
         audioPointMap={audioPointMap}
         audioSync={audioSync}
         audioCoverage={audioCoverage}
+        onAudioEntriesLoad={handleAudioEntriesLoad}
+        onParseFiles={handleParseFiles}
         chartPickArmed={chartPickArmed}
         onChartPicked={handleChartPicked}
         chartRangePickArmed={chartRangePickArmed}

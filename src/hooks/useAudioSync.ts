@@ -35,6 +35,9 @@ export interface UseAudioSyncResult {
   /** Démarre la lecture d'une entrée à une position donnée (minutes depuis minuit).
    *  Si l'entrée est déjà active, on se contente de seek+play. */
   playAt: (entryId: string, minutesSinceMidnight: number) => void
+  /** Charge une entrée et positionne le curseur SANS démarrer la lecture.
+   *  Utilisé pour naviguer (flèches) dès qu'un fichier est chargé, sans jouer. */
+  prepareAt: (entryId: string, minutesSinceMidnight: number) => void
   togglePlayPause: () => void
   pause: () => void
   stop: () => void
@@ -187,6 +190,35 @@ export function useAudioSync(entries: AudioFileEntry[]): UseAudioSyncResult {
     [entries, ensureAudioEl],
   )
 
+  const prepareAt = useCallback(
+    (entryId: string, minutesSinceMidnight: number) => {
+      const entry = entries.find((e) => e.id === entryId)
+      if (!entry) return
+      const el = ensureAudioEl()
+      const offsetSec = Math.max(0, (minutesSinceMidnight - entry.startMin) * 60)
+
+      const wasThisEntry =
+        (el as HTMLAudioElement & { _entryId?: string })._entryId === entryId
+      if (!wasThisEntry) {
+        el.pause()
+        el.src = entry.blobUrl
+        ;(el as HTMLAudioElement & { _entryId?: string })._entryId = entryId
+        setActiveEntryId(entryId)
+      }
+      ;(el as HTMLAudioElement & { _startMin?: number })._startMin = entry.startMin
+
+      const doSeek = () => {
+        try {
+          el.currentTime = Math.min(offsetSec, entry.durationSec - 0.05)
+        } catch { /* ignore */ }
+        setCurrentMin(entry.startMin + el.currentTime / 60)
+      }
+      if (el.readyState >= 1 /* HAVE_METADATA */) doSeek()
+      else el.addEventListener('loadedmetadata', doSeek, { once: true })
+    },
+    [entries, ensureAudioEl],
+  )
+
   const togglePlayPause = useCallback(() => {
     const el = audioRef.current
     if (!el) return
@@ -236,6 +268,7 @@ export function useAudioSync(entries: AudioFileEntry[]): UseAudioSyncResult {
     volume,
     speed,
     playAt,
+    prepareAt,
     togglePlayPause,
     pause,
     stop,

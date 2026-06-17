@@ -162,12 +162,21 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
     }
   }, [sync.audioEl, sync.activeEntryId, totalSec])
 
+  // Cible de navigation : le fichier actif, ou à défaut le 1er chargé. Permet
+  // aux flèches de naviguer dès qu'un fichier est CHARGÉ (pas forcément joué).
+  const targetEntry = active ?? entries[0] ?? null
+  const targetTotalSec = targetEntry?.durationSec ?? 0
+
   // ─── Helpers de contrôle pilotés par les raccourcis ───
-  /** Saute à une position absolue (secondes depuis le début du fichier actif). */
+  /** Saute à une position absolue (secondes depuis le début du fichier cible).
+   *  Si aucun fichier n'est encore actif, on charge + positionne le curseur
+   *  sans démarrer la lecture (prepareAt). */
   const seekToSec = useCallback((sec: number) => {
-    if (!active) return
-    sync.seekMin(active.startMin + clamp(sec, 0, totalSec) / 60)
-  }, [active, totalSec, sync])
+    if (!targetEntry) return
+    const min = targetEntry.startMin + clamp(sec, 0, targetEntry.durationSec) / 60
+    if (active) sync.seekMin(min)
+    else sync.prepareAt(targetEntry.id, min)
+  }, [active, targetEntry, sync])
 
   const adjustVolume = useCallback((delta: number) => {
     const nv = clamp(sync.volume + delta, 0, 1)
@@ -215,11 +224,18 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
 
   /** Recule de 5 s et relance la lecture si en pause (raccourci R). */
   const replay5 = useCallback(() => {
-    if (!active) return
-    seekToSec(currentSec - 5)
-    if (!sync.playing) sync.togglePlayPause()
+    if (!targetEntry) return
+    const newSec = clamp(currentSec - 5, 0, targetEntry.durationSec)
+    const min = targetEntry.startMin + newSec / 60
+    if (active) {
+      sync.seekMin(min)
+      if (!sync.playing) sync.togglePlayPause()
+    } else {
+      // Pas encore engagé : on lance directement la lecture à la position.
+      sync.playAt(targetEntry.id, min)
+    }
     showToast('⏪', 'Replay 5s')
-  }, [active, currentSec, sync, seekToSec, showToast])
+  }, [active, targetEntry, currentSec, sync, showToast])
 
   // ─── Barre de progression cliquable / glissable + survol ───
   const progressRef = useRef<HTMLDivElement | null>(null)
@@ -260,8 +276,11 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
   // Raccourcis clavier (item 1). Capture sur window : on consomme la touche
   // (preventDefault + stopImmediatePropagation) quand on la traite, ce qui
   // empêche le handler global d'App.tsx (pan/zoom du graphique) d'y réagir.
-  // Les raccourcis hors lecture/pause/aide ne sont actifs qu'avec un fichier
-  // actif → sinon les flèches continuent de piloter le graphique.
+  //
+  // Arbitrage : dès qu'un fichier audio est CHARGÉ (hook activé via `enabled`),
+  // les flèches ←/→ contrôlent l'audio (±5 s). Maj + ←/→ NE sont PAS consommées
+  // → elles retombent sur le pan du graphique géré par App.tsx. Ctrl + ←/→
+  // restent un saut audio ±1 min.
   // ─────────────────────────────────────────────────────────────────────
   useKeyboardShortcuts((ev) => {
     const lower = ev.key.length === 1 ? ev.key.toLowerCase() : ev.key
@@ -269,29 +288,28 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
     // Aide — toujours disponible (touche ? = Maj+/)
     if (ev.key === '?') { setHelpOpen((v) => !v); return true }
 
-    // Lecture / Pause — toujours (démarre le 1er fichier si rien d'actif)
+    // Lecture / Pause — démarre le 1er fichier si rien d'actif
     if (ev.key === ' ' || lower === 'k') {
       showToast('⏯', sync.playing ? 'Pause' : 'Lecture')
       handlePlayPause()
       return true
     }
 
-    // Les raccourcis ci-dessous nécessitent un fichier actif.
-    if (!active) return false
-
     switch (ev.key) {
       case 'ArrowLeft':
-        seekToSec(currentSec + (ev.shift ? -30 : ev.mod ? -60 : -5))
-        showToast('⏪', ev.shift ? '-30s' : ev.mod ? '-1min' : '-5s')
+        if (ev.shift) return false // Maj + ← → pan du graphique (App.tsx)
+        seekToSec(currentSec + (ev.mod ? -60 : -5))
+        showToast('⏪', ev.mod ? '-1min' : '-5s')
         return true
       case 'ArrowRight':
-        seekToSec(currentSec + (ev.shift ? 30 : ev.mod ? 60 : 5))
-        showToast('⏩', ev.shift ? '+30s' : ev.mod ? '+1min' : '+5s')
+        if (ev.shift) return false // Maj + → → pan du graphique (App.tsx)
+        seekToSec(currentSec + (ev.mod ? 60 : 5))
+        showToast('⏩', ev.mod ? '+1min' : '+5s')
         return true
       case 'ArrowUp': adjustVolume(0.1); return true
       case 'ArrowDown': adjustVolume(-0.1); return true
       case 'Home': seekToSec(0); showToast('⏮', 'Début'); return true
-      case 'End': seekToSec(totalSec); showToast('⏭', 'Fin'); return true
+      case 'End': seekToSec(targetTotalSec); showToast('⏭', 'Fin'); return true
       case '>': cycleSpeed(1); return true
       case '<': cycleSpeed(-1); return true
     }
@@ -299,13 +317,13 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
       case 'j': seekToSec(currentSec - 10); showToast('⏪', '-10s'); return true
       case 'l': seekToSec(currentSec + 10); showToast('⏩', '+10s'); return true
       case 'm': toggleMute(); return true
-      case 'n': onOpenCalage(active.id); showToast('📍', 'Marqueur'); return true
+      case 'n': if (targetEntry) { onOpenCalage(targetEntry.id); showToast('📍', 'Marqueur') } return true
       case 'r': replay5(); return true
     }
     // Chiffres 0–9 → 0 % … 90 % de la durée
     if (ev.key >= '0' && ev.key <= '9' && !ev.mod && !ev.shift && !ev.alt) {
       const d = Number(ev.key)
-      seekToSec(totalSec * (d / 10))
+      seekToSec(targetTotalSec * (d / 10))
       showToast('⏱', `${d * 10}%`)
       return true
     }

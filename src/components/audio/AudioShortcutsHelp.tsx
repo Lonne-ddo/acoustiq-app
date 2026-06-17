@@ -33,11 +33,10 @@ const SHORTCUT_GROUPS: Group[] = [
       { keys: ['→'], label: '+5 secondes' },
       { keys: ['J'], label: '−10 secondes' },
       { keys: ['L'], label: '+10 secondes' },
-      { keys: ['Maj', '←'], label: '−30 secondes' },
-      { keys: ['Maj', '→'], label: '+30 secondes' },
       { keys: ['Ctrl', '←'], label: '−1 minute' },
       { keys: ['Ctrl', '→'], label: '+1 minute' },
       { keys: ['0', '…', '9'], label: 'Aller à 0 % … 90 % de la durée' },
+      { keys: ['Maj', '←→'], label: 'Déplacer le graphique (pan), pas l’audio' },
     ],
   },
   {

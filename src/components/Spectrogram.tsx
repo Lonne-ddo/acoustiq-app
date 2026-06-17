@@ -12,7 +12,7 @@ function hhmmToMin(t: string): number {
   const [h = '0', m = '0'] = t.split(':')
   return parseInt(h, 10) * 60 + parseInt(m, 10)
 }
-import { A_WEIGHT } from '../utils/acoustics'
+import { weightingVector, type Weighting } from '../utils/weighting'
 
 const DEFAULT_CANVAS_HEIGHT = 200  // hauteur affichée en px par spectrogramme (mode plein)
 const Y_AXIS_W = 70                // largeur réservée à l'axe Y (titre + étiquettes 11px)
@@ -667,6 +667,10 @@ export default function Spectrogram({
   const [minDb, setMinDb] = useState(30)
   const [maxDb, setMaxDb] = useState(90)
   const [mode, setMode] = useState<SpectroMode>('moyen')
+  // Pondération du spectrogramme. Z (LZeq brut) par défaut — conforme au
+  // standard acoustique environnemental (cf. G4 LD Utility) : préserve toute
+  // l'information physique sans masquer les basses fréquences.
+  const [weighting, setWeighting] = useState<Weighting>('Z')
   const [hoverTime, setHoverTime] = useState<number | null>(null)
   const [palette, setPalette] = useState<SpectroPalette>(() => {
     try {
@@ -719,11 +723,12 @@ export default function Spectrogram({
     return null
   }, [filesByPoint])
 
-  // Vecteur d'A-pondération par bande (LZeq → LAeq) appliqué à l'affichage.
-  const aWeightVector = useMemo(() => {
-    if (!freqBandsFromFile) return null
-    return freqBandsFromFile.map((f) => A_WEIGHT[f] ?? 0)
-  }, [freqBandsFromFile])
+  // Vecteur de pondération par bande (LZeq → pondération choisie) appliqué à
+  // l'affichage. En Z (défaut), atténuation nulle → spectrogramme LZeq brut.
+  const weightVector = useMemo(() => {
+    if (!freqBandsFromFile || weighting === 'Z') return null
+    return weightingVector(freqBandsFromFile, weighting)
+  }, [freqBandsFromFile, weighting])
 
   // Plage visible (avant aggregation) : utilisée pour la résolution adaptative.
   // Si zoomRange fourni → on l'utilise ; sinon on se base sur la plage des données.
@@ -738,10 +743,10 @@ export default function Spectrogram({
     [visibleSpanMin, aggregationSeconds],
   )
 
-  // Agrégation des spectres pour chaque point — applique l'A-weighting in-line
-  // pour que tous les calculs aval (couleurs, légende dB, min/max) soient en
-  // dB(A) cohérents entre 831C et 821SE. En mode multi-jours, les timestamps
-  // sont décalés de dayOffset (minutes) pour l'axe X absolu du chart.
+  // Agrégation des spectres pour chaque point — applique la pondération choisie
+  // in-line pour que tous les calculs aval (couleurs, légende dB, min/max)
+  // soient cohérents. En Z (défaut), aucune atténuation : LZeq brut. En mode
+  // multi-jours, les timestamps sont décalés de dayOffset (minutes) pour l'axe X.
   const spectraByPoint = useMemo(() => {
     const m = new Map<string, Map<number, number[]>>()
     for (const [pt, fs] of filesByPoint) {
@@ -751,18 +756,18 @@ export default function Spectrogram({
           : f.data.map((dp) => ({ ...dp, t: dp.t + dayOffset })),
       )
       const raw = aggregateSpectra(pointData, effectiveAggSec, mode)
-      if (!aWeightVector) {
+      if (!weightVector) {
         m.set(pt, raw)
         continue
       }
       const weighted = new Map<number, number[]>()
       for (const [t, sp] of raw) {
-        weighted.set(t, sp.map((v, i) => v + (aWeightVector[i] ?? 0)))
+        weighted.set(t, sp.map((v, i) => v + (weightVector[i] ?? 0)))
       }
       m.set(pt, weighted)
     }
     return m
-  }, [filesByPoint, effectiveAggSec, mode, aWeightVector])
+  }, [filesByPoint, effectiveAggSec, mode, weightVector])
 
   // Plage temporelle globale et nombre de bandes
   const { tMin, tMax, nBands, fullStart, fullEnd } = useMemo(() => {
@@ -965,6 +970,21 @@ export default function Spectrogram({
                      rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
           aria-label="Max dB"
         />
+      </div>
+      <div className="flex items-center gap-1">
+        <span className="text-[10px] text-gray-500">Pondération</span>
+        <select
+          value={weighting}
+          onChange={(e) => setWeighting(e.target.value as Weighting)}
+          className="text-[10px] bg-gray-800 text-gray-100 border border-gray-600 rounded
+                     px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+          aria-label="Pondération du spectrogramme"
+          title="Z = LZeq brut (linéaire, défaut) · A · C"
+        >
+          <option value="Z">Z (linéaire)</option>
+          <option value="A">A</option>
+          <option value="C">C</option>
+        </select>
       </div>
       <div className="flex items-center gap-1">
         <span className="text-[10px] text-gray-500">Palette</span>

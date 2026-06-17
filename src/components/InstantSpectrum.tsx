@@ -76,12 +76,26 @@ export default function InstantSpectrum({
 }: Props) {
   const [open, setOpen] = useState(true)
   // Survol du graphique LAeq reçu via CustomEvent (throttle rAF côté chart) —
-  // isolé ici pour ne pas re-rendre le graphique principal.
+  // isolé ici pour ne pas re-rendre le graphique principal. Au mouseleave
+  // (detail null), on temporise 500 ms avant de revenir au spectre moyen, pour
+  // éviter les flashs quand le curseur traverse brièvement une zone vide.
   const [hoverMin, setHoverMin] = useState<number | null>(null)
   useEffect(() => {
-    const onHover = (e: Event) => setHoverMin((e as CustomEvent).detail as number | null)
+    let clearTimer: ReturnType<typeof setTimeout> | null = null
+    const onHover = (e: Event) => {
+      const v = (e as CustomEvent).detail as number | null
+      if (clearTimer) { clearTimeout(clearTimer); clearTimer = null }
+      if (v === null) {
+        clearTimer = setTimeout(() => setHoverMin(null), 500)
+      } else {
+        setHoverMin(v)
+      }
+    }
     document.addEventListener('acoustiq:spectrum-hover', onHover)
-    return () => document.removeEventListener('acoustiq:spectrum-hover', onHover)
+    return () => {
+      document.removeEventListener('acoustiq:spectrum-hover', onHover)
+      if (clearTimer) clearTimeout(clearTimer)
+    }
   }, [])
   // Lecture audio prioritaire sur le survol.
   const instantMin = audioPlaying && audioPlayheadMin != null ? audioPlayheadMin : hoverMin
@@ -169,9 +183,33 @@ export default function InstantSpectrum({
       return { series: out, title, exportLabel: `spectre_${p.name}` }
     }
 
-    // MODE INSTANT (suivi curseur / lecture audio)
+    // MODE MOYEN PAR DÉFAUT : aucun survol → spectre moyen énergétique sur toute
+    // la durée du fichier visible (toutes les dates en multi-jours, sinon la date
+    // active). On bascule automatiquement vers l'instantané dès que l'utilisateur
+    // survole le graphique LAeq.
     if (instantMin === null) {
-      return { series: [], title: 'Spectre instantané — survolez le graphique', exportLabel: 'spectre' }
+      const datesToUse = isMulti ? sortedDates : [selectedDate]
+      const out: PointSeries[] = []
+      for (const pt of visiblePts) {
+        let merged: SpectraSample[] = []
+        for (const d of datesToUse) {
+          const s = samplesByPointDate.get(`${pt}|${d}`)
+          if (s) merged = merged.concat(s)
+        }
+        if (merged.length === 0) continue
+        const r = spectrumOverRange(merged, -Infinity, Infinity)
+        if (!r) continue
+        out.push({
+          pt, color: ptColor(pt, pointNames.indexOf(pt)),
+          leq: applyWeighting(r.leq, refFreqs, weighting),
+          min: null, max: null,
+        })
+      }
+      return {
+        series: out,
+        title: 'Spectre moyen du fichier (durée totale)',
+        exportLabel: 'spectre_moyen',
+      }
     }
     const dayIndex = isMulti ? Math.floor(instantMin / 1440) : 0
     const date = isMulti ? (sortedDates[dayIndex] ?? selectedDate) : selectedDate

@@ -11,24 +11,17 @@
  * Les niveaux d'entrée (`dp.spectra`) sont des LZeq par bande (non pondérés).
  */
 import type { DataPoint } from '../types'
-import { A_WEIGHT } from './acoustics'
+import { A_WEIGHTING, C_WEIGHTING, type Weighting } from './weighting'
 
-export type Weighting = 'Z' | 'A' | 'C'
+export type { Weighting }
 
-/** Pondération C par bande 1/3 d'octave (dB), CEI 61672. */
-export const C_WEIGHT: Record<number, number> = {
-  6.3: -21.3, 8: -17.7, 10: -14.3, 12.5: -11.2, 16: -8.5, 20: -6.2, 25: -4.4,
-  31.5: -3.0, 40: -2.0, 50: -1.3, 63: -0.8, 80: -0.5, 100: -0.3, 125: -0.2,
-  160: -0.1, 200: 0, 250: 0, 315: 0, 400: 0, 500: 0, 630: 0, 800: 0,
-  1000: 0, 1250: 0, 1600: -0.1, 2000: -0.2, 2500: -0.3, 3150: -0.5,
-  4000: -0.8, 5000: -1.3, 6300: -2.0, 8000: -3.0, 10000: -4.4,
-  12500: -6.2, 16000: -8.5, 20000: -11.2,
-}
+/** Pondération C par bande 1/3 d'octave (dB), CEI 61672 — table complète. */
+export const C_WEIGHT = C_WEIGHTING
 
 /** Applique la pondération choisie à un spectre LZeq aligné sur `freqs`. */
 export function applyWeighting(spectrum: number[], freqs: number[], w: Weighting): number[] {
   if (w === 'Z') return spectrum
-  const table = w === 'A' ? A_WEIGHT : C_WEIGHT
+  const table = w === 'A' ? A_WEIGHTING : C_WEIGHTING
   return spectrum.map((v, i) => v + (table[freqs[i]] ?? 0))
 }
 

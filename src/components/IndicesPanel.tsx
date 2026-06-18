@@ -4,7 +4,7 @@
  */
 import { useState, useMemo, useEffect, useRef } from 'react'
 import * as XLSX from 'xlsx'
-import { Download, TrendingDown, ChevronRight, Sun } from 'lucide-react'
+import { Download, TrendingDown, ChevronRight, Sun, X } from 'lucide-react'
 import HelpTooltip from './HelpTooltip'
 import type { MeasurementFile, MeteoData, Period, Category } from '../types'
 import {
@@ -105,6 +105,24 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
   const [startTime, setStartTime] = useState('00:00')
   const [endTime, setEndTime] = useState('23:59')
 
+  // Exclusion AD-HOC « à la volée » : catégories retirées du calcul des indices,
+  // transitoire et local au panneau (ne touche ni la config des catégories ni
+  // les autres onglets). Set vide ⇒ comportement par défaut strictement inchangé.
+  const [excludedCatIds, setExcludedCatIds] = useState<Set<string>>(new Set())
+  const toggleExcluded = (id: string) =>
+    setExcludedCatIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  const catName = (id: string) => (categories ?? []).find((c) => c.id === id)?.name ?? id
+  // Catégories proposables à l'exclusion : celles ayant ≥ 1 période assignée.
+  const excludableCats = useMemo(() => {
+    const withPeriods = new Set((periods ?? []).map((p) => p.categoryId))
+    return (categories ?? []).filter((c) => withPeriods.has(c.id))
+  }, [categories, periods])
+
   // Points actifs pour la journée sélectionnée
   const pointNames = useMemo(() => {
     const pts = new Set<string>()
@@ -120,7 +138,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
       pointNames.map((pt) => {
         const data = files
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories))
+          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
         return [
           pt,
           {
@@ -131,7 +149,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         ]
       }),
     ) as Record<string, { ljour: number | null; lsoir: number | null; lnuit: number | null }>
-  }, [files, pointMap, selectedDate, pointNames, periods, categories])
+  }, [files, pointMap, selectedDate, pointNames, periods, categories, excludedCatIds])
 
   // Caractéristiques du bruit (composante tonale par point) — basées sur la
   // moyenne énergétique des spectres 1/3 d'octave sur la plage sélectionnée.
@@ -142,7 +160,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
       pointNames.map((pt) => {
         const dps = files
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories))
+          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
           .filter((dp) => dp.t >= startMin && dp.t <= endMin)
         const specs = dps.map((d) => d.spectra).filter((s): s is number[] => !!s)
         if (specs.length === 0) return [pt, null]
@@ -155,7 +173,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         return [pt, detectKt(avgSpec, laeqA)]
       }),
     ) as Record<string, ReturnType<typeof detectKt> | null>
-  }, [files, pointMap, selectedDate, pointNames, mode, startTime, endTime, periods, categories])
+  }, [files, pointMap, selectedDate, pointNames, mode, startTime, endTime, periods, categories, excludedCatIds])
 
   // Calcul des indices par point
   const indicesByPoint = useMemo((): Record<string, IndexValues | null> => {
@@ -166,7 +184,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
       pointNames.map((pt) => {
         const values = files
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories))
+          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
           .filter((dp) => dp.t >= startMin && dp.t <= endMin)
           .map((dp) => dp.laeq)
 
@@ -188,7 +206,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         ]
       }),
     )
-  }, [files, pointMap, selectedDate, mode, startTime, endTime, pointNames, periods, categories])
+  }, [files, pointMap, selectedDate, mode, startTime, endTime, pointNames, periods, categories, excludedCatIds])
 
   // Réf stable pour `handleExportExcel` afin que l'écouteur global puisse
   // l'appeler sans dépendances (le composant peut être re-rendu plusieurs fois).
@@ -216,6 +234,9 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
       sheet1.push(['AcoustiQ — Indices acoustiques'])
       sheet1.push([`Date : ${selectedDate}`])
       sheet1.push([`Plage horaire : ${timeRangeLabel}`])
+      if (excludedCatIds.size > 0) {
+        sheet1.push([`Exclusion à la volée (catégories retirées du calcul) : ${[...excludedCatIds].map(catName).join(', ')}`])
+      }
       if (meteo) {
         const meteoBits: string[] = []
         if (meteo.windSpeed !== null) {
@@ -358,6 +379,43 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
           {calcLabel}
         </span>
 
+        {/* Exclusion « à la volée » : retire une/des catégorie(s) du calcul,
+            transitoire et local au panneau. Aucune sélection ⇒ défauts inchangés. */}
+        {excludableCats.length > 0 && (
+          <div className="flex items-center gap-1 flex-wrap">
+            <span className="text-[10px] text-gray-500 uppercase tracking-wide">Exclure :</span>
+            {excludableCats.map((c) => {
+              const on = excludedCatIds.has(c.id)
+              return (
+                <button
+                  key={c.id}
+                  onClick={() => toggleExcluded(c.id)}
+                  className={`flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded border transition-colors ${
+                    on
+                      ? 'bg-rose-900/50 border-rose-600 text-rose-200'
+                      : 'bg-gray-800 border-gray-700 text-gray-400 hover:text-gray-200'
+                  }`}
+                  title={on
+                    ? `Catégorie « ${c.name} » exclue du calcul — cliquer pour la réintégrer`
+                    : `Exclure « ${c.name} » du calcul des indices`}
+                >
+                  <span className="w-1.5 h-1.5 rounded-full" style={{ backgroundColor: c.color }} />
+                  {c.name}
+                  {on && <X size={9} />}
+                </button>
+              )
+            })}
+            {excludedCatIds.size > 0 && (
+              <button
+                onClick={() => setExcludedCatIds(new Set())}
+                className="text-[10px] text-gray-500 hover:text-gray-300 underline ml-1"
+              >
+                réinitialiser
+              </button>
+            )}
+          </div>
+        )}
+
         <button
           onClick={handleExportExcel}
           className="flex items-center gap-1 px-2 py-1 rounded text-xs font-medium
@@ -414,6 +472,23 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
           )}
         </div>
       </div>
+
+      {/* Bandeau récapitulatif de l'exclusion à la volée */}
+      {excludedCatIds.size > 0 && (
+        <div className="flex items-center gap-2 px-4 py-1 text-[11px] text-rose-200 bg-rose-950/30 border-b border-rose-900/40">
+          <X size={11} className="text-rose-400 shrink-0" />
+          <span>
+            Indices calculés <span className="font-semibold">en excluant</span> :{' '}
+            {[...excludedCatIds].map(catName).join(', ')}
+          </span>
+          <button
+            onClick={() => setExcludedCatIds(new Set())}
+            className="ml-auto text-rose-300 hover:text-rose-100 underline"
+          >
+            réinitialiser
+          </button>
+        </div>
+      )}
 
       {/* Tableau des indices */}
       <div className="overflow-x-auto">
@@ -575,10 +650,11 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         endMin={mode === 'custom' ? hhmmToMin(endTime) : Infinity}
         periods={periods}
         categories={categories}
+        excludedCatIds={excludedCatIds}
       />
 
       {/* Analyse bruit de fond (L90 horaire) */}
-      <AmbientNoiseSection files={files} pointMap={pointMap} selectedDate={selectedDate} pointNames={pointNames} periods={periods} categories={categories} />
+      <AmbientNoiseSection files={files} pointMap={pointMap} selectedDate={selectedDate} pointNames={pointNames} periods={periods} categories={categories} excludedCatIds={excludedCatIds} />
     </div>
   )
 }
@@ -588,7 +664,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
 // ────────────────────────────────────────────────────────────────────────────
 
 function DistributionSection({
-  files, pointMap, selectedDate, pointNames, startMin, endMin, periods, categories,
+  files, pointMap, selectedDate, pointNames, startMin, endMin, periods, categories, excludedCatIds,
 }: {
   files: MeasurementFile[]
   pointMap: Record<string, string>
@@ -598,6 +674,7 @@ function DistributionSection({
   endMin: number
   periods?: Period[]
   categories?: Category[]
+  excludedCatIds: Set<string>
 }) {
   const [showSection, setShowSection] = useState(true)
 
@@ -606,7 +683,7 @@ function DistributionSection({
     return pointNames.map((pt) => {
       const values = files
         .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-        .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories))
+        .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
         .filter((dp) => dp.t >= startMin && dp.t <= endMin)
         .map((dp) => dp.laeq)
       if (values.length === 0) return { pt, percentiles: null as number[] | null, min: 0, max: 0 }
@@ -620,7 +697,7 @@ function DistributionSection({
       }
       return { pt, percentiles, min: sorted[0], max: sorted[n - 1] }
     })
-  }, [files, pointMap, selectedDate, pointNames, startMin, endMin, periods, categories])
+  }, [files, pointMap, selectedDate, pointNames, startMin, endMin, periods, categories, excludedCatIds])
 
   if (pointNames.length === 0) return null
 
@@ -755,13 +832,14 @@ function DistributionMini({
 }
 
 /** Tableau L90 horaire avec identification de l'heure la plus calme */
-function AmbientNoiseSection({ files, pointMap, selectedDate, pointNames, periods, categories }: {
+function AmbientNoiseSection({ files, pointMap, selectedDate, pointNames, periods, categories, excludedCatIds }: {
   files: MeasurementFile[]
   pointMap: Record<string, string>
   selectedDate: string
   pointNames: string[]
   periods?: Period[]
   categories?: Category[]
+  excludedCatIds: Set<string>
 }) {
   const [showSection, setShowSection] = useState(false)
 
@@ -773,7 +851,7 @@ function AmbientNoiseSection({ files, pointMap, selectedDate, pointNames, period
       for (const pt of pointNames) {
         const values = files
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories))
+          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
           .filter((dp) => Math.floor(dp.t / 60) === h)
           .map((dp) => dp.laeq)
         if (values.length >= 3) {
@@ -786,7 +864,7 @@ function AmbientNoiseSection({ files, pointMap, selectedDate, pointNames, period
       }
       return entry
     })
-  }, [files, pointMap, selectedDate, pointNames, periods, categories])
+  }, [files, pointMap, selectedDate, pointNames, periods, categories, excludedCatIds])
 
   // Heure la plus calme par point
   const quietestHour = useMemo(() => {

@@ -257,12 +257,21 @@ export function filterDataByPeriods<T extends { t: number }>(
   isoDate: string,
   periods: Period[] | undefined | null,
   categories: Category[] | undefined | null,
+  opts?: { excludeCategoryIds?: Iterable<string> },
 ): T[] {
+  // Exclusion AD-HOC « à la volée » : ces catégories sont blacklistées en plus
+  // de la logique permanente (mode), QUEL QUE SOIT leur mode. Brique réutilisée
+  // par les agrégations filtrées (indices, courbes horaires, spectre/période).
+  // NB : `opts` absent OU `excludeCategoryIds` vide ⇒ AUCUN changement de
+  // comportement vs l'appel à 4 arguments (défauts strictement inchangés).
+  const adHocExcl = opts?.excludeCategoryIds ? new Set(opts.excludeCategoryIds) : null
   if (!periods || periods.length === 0 || !categories || categories.length === 0) return data
   const incIds = new Set(categories.filter((c) => c.visible && c.mode === 'include').map((c) => c.id))
   const excIds = new Set(categories.filter((c) => c.visible && c.mode === 'exclude').map((c) => c.id))
   const includes: RangeMs[] = periods.filter((p) => incIds.has(p.categoryId)).map((p) => ({ startMs: p.startMs, endMs: p.endMs }))
-  const excludes: RangeMs[] = periods.filter((p) => excIds.has(p.categoryId)).map((p) => ({ startMs: p.startMs, endMs: p.endMs }))
+  const excludes: RangeMs[] = periods
+    .filter((p) => excIds.has(p.categoryId) || (adHocExcl !== null && adHocExcl.has(p.categoryId)))
+    .map((p) => ({ startMs: p.startMs, endMs: p.endMs }))
   if (includes.length === 0 && excludes.length === 0) return data
 
   const baseMs = dpTimestampMs(isoDate, 0)

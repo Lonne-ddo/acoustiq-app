@@ -1702,8 +1702,8 @@ function MainPanel({
                 ref={containerRef}
                 className="flex flex-col shrink-0"
                 style={{
-                  height: `max(min(70vh, 720px), ${spectrogramHeight + 280}px)`,
-                  minHeight: Math.max(380, spectrogramHeight + 280),
+                  height: 'min(60vh, 560px)',
+                  minHeight: 320,
                 }}
               >
               <div className="flex-1 min-h-0">
@@ -1766,8 +1766,28 @@ function MainPanel({
                   recevabiliteOverlay={showMeteoRecevabilite ? recevabiliteOverlay : undefined}
                 />
               </div>
+              </div>
 
-              {/* Poignée de redimensionnement */}
+              {/* Lecteur audio — repositionné juste sous la courbe LAeq.
+                  TOUJOURS visible : sert aussi de zone de téléversement
+                  permanente (état vide inclus). */}
+              {!presentationMode && (
+                <div className="shrink-0">
+                  <StreamAudioPlayer
+                    entries={audioEntries.filter((e) => {
+                      const pt = audioPointMap[e.id]
+                      return !pt || assignedPoints.includes(pt)
+                    })}
+                    sync={audioSync}
+                    pointName={assignedPoints[0] ?? null}
+                    onOpenCalage={onOpenAudioCalage}
+                    onAddFiles={onAudioEntriesLoad}
+                    flashSignal={audioFlash}
+                  />
+                </div>
+              )}
+
+              {/* Poignée de redimensionnement du spectrogramme */}
               <div
                 className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
                 onMouseDown={handleResizeStart}
@@ -1825,8 +1845,6 @@ function MainPanel({
                 )}
               </div>
 
-              </div>
-
               {/* Spectre instantané — poignée de resize + panneau (entre
                   spectrogramme et périodes) */}
               {!presentationMode && (
@@ -1853,23 +1871,6 @@ function MainPanel({
                     />
                   </div>
                 </>
-              )}
-              {/* Lecteur audio flottant (streaming) — TOUJOURS visible : sert
-                  aussi de zone de téléversement permanente (état vide inclus). */}
-              {!presentationMode && (
-                <div className="shrink-0">
-                  <StreamAudioPlayer
-                    entries={audioEntries.filter((e) => {
-                      const pt = audioPointMap[e.id]
-                      return !pt || assignedPoints.includes(pt)
-                    })}
-                    sync={audioSync}
-                    pointName={assignedPoints[0] ?? null}
-                    onOpenCalage={onOpenAudioCalage}
-                    onAddFiles={onAudioEntriesLoad}
-                    flashSignal={audioFlash}
-                  />
-                </div>
               )}
               {!presentationMode && (
                 <>

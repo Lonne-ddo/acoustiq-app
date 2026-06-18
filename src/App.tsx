@@ -1420,22 +1420,22 @@ function MainPanel({
   // SON panneau et la colonne d'analyse scrolle verticalement pour
   // l'accommoder — pas de conteneur borné ni de tampon à somme nulle.
   // Défauts généreux pour que les panneaux respirent. Clés localStorage
-  // suffixées _v2 afin que ces nouveaux défauts s'appliquent même si
+  // suffixées _v3 afin que ces nouveaux défauts s'appliquent même si
   // d'anciennes hauteurs (plus petites) étaient déjà mémorisées.
 
-  // Courbe LAeq — grande et lisible (~320px par défaut).
+  // Courbe LAeq — grande et lisible (~420px par défaut).
   const CHART_MIN = 200
   const CHART_MAX = 900
-  const CHART_DEFAULT = 320
+  const CHART_DEFAULT = 420
   const [chartHeight, setChartHeight] = useState<number>(() => {
     try {
-      const v = parseInt(localStorage.getItem('acoustiq_chart_height_v2') ?? '', 10)
+      const v = parseInt(localStorage.getItem('acoustiq_chart_height_v3') ?? '', 10)
       if (Number.isFinite(v)) return Math.max(CHART_MIN, Math.min(CHART_MAX, v))
     } catch { /* ignore */ }
     return CHART_DEFAULT
   })
   useEffect(() => {
-    try { localStorage.setItem('acoustiq_chart_height_v2', String(chartHeight)) } catch { /* ignore */ }
+    try { localStorage.setItem('acoustiq_chart_height_v3', String(chartHeight)) } catch { /* ignore */ }
   }, [chartHeight])
 
   // Barre audio — compacte (~110px par défaut).
@@ -1444,44 +1444,44 @@ function MainPanel({
   const AUDIO_DEFAULT = 110
   const [audioHeight, setAudioHeight] = useState<number>(() => {
     try {
-      const v = parseInt(localStorage.getItem('acoustiq_audio_panel_height_v2') ?? '', 10)
+      const v = parseInt(localStorage.getItem('acoustiq_audio_panel_height_v3') ?? '', 10)
       if (Number.isFinite(v)) return Math.max(AUDIO_MIN_H, Math.min(AUDIO_MAX_H, v))
     } catch { /* ignore */ }
     return AUDIO_DEFAULT
   })
   useEffect(() => {
-    try { localStorage.setItem('acoustiq_audio_panel_height_v2', String(audioHeight)) } catch { /* ignore */ }
+    try { localStorage.setItem('acoustiq_audio_panel_height_v3', String(audioHeight)) } catch { /* ignore */ }
   }, [audioHeight])
 
-  // Spectrogramme (~350px par défaut).
+  // Spectrogramme (~480px par défaut).
   const SPECTRO_MIN = 200
   const SPECTRO_MAX = 800
-  const SPECTRO_DEFAULT = 350
+  const SPECTRO_DEFAULT = 480
   const [spectrogramHeight, setSpectrogramHeight] = useState<number>(() => {
     try {
-      const v = parseInt(localStorage.getItem('acoustiq_spectro_height_v2') ?? '', 10)
+      const v = parseInt(localStorage.getItem('acoustiq_spectro_height_v3') ?? '', 10)
       if (Number.isFinite(v)) return Math.max(SPECTRO_MIN, Math.min(SPECTRO_MAX, v))
     } catch { /* ignore */ }
     return SPECTRO_DEFAULT
   })
   useEffect(() => {
-    try { localStorage.setItem('acoustiq_spectro_height_v2', String(spectrogramHeight)) } catch { /* ignore */ }
+    try { localStorage.setItem('acoustiq_spectro_height_v3', String(spectrogramHeight)) } catch { /* ignore */ }
   }, [spectrogramHeight])
 
-  // Spectre instantané (~300px par défaut ; survol géré par InstantSpectrum
+  // Spectre instantané (~380px par défaut ; survol géré par InstantSpectrum
   // via un CustomEvent, pour ne pas re-rendre le graphique).
   const SPECTRUM_MIN = 200
   const SPECTRUM_MAX = 700
-  const SPECTRUM_DEFAULT = 300
+  const SPECTRUM_DEFAULT = 380
   const [spectrumHeight, setSpectrumHeight] = useState<number>(() => {
     try {
-      const v = parseInt(localStorage.getItem('acoustiq_spectrum_height_v2') ?? '', 10)
+      const v = parseInt(localStorage.getItem('acoustiq_spectrum_height_v3') ?? '', 10)
       if (Number.isFinite(v)) return Math.max(SPECTRUM_MIN, Math.min(SPECTRUM_MAX, v))
     } catch { /* ignore */ }
     return SPECTRUM_DEFAULT
   })
   useEffect(() => {
-    try { localStorage.setItem('acoustiq_spectrum_height_v2', String(spectrumHeight)) } catch { /* ignore */ }
+    try { localStorage.setItem('acoustiq_spectrum_height_v3', String(spectrumHeight)) } catch { /* ignore */ }
   }, [spectrumHeight])
 
   // Poignée de redimensionnement PAR PANNEAU : glisser vers le bas agrandit le

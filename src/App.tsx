@@ -1415,126 +1415,91 @@ function MainPanel({
   // automatiquement au 1er import. Activé via le bouton ❓ « Aide » du header.
   const [forceShowWorkflow, setForceShowWorkflow] = useState(false)
 
-  // --- Hauteur du spectrogramme en pixels (défaut 250, min 150, max 600) ---
-  // Mémorisée d'une session à l'autre via localStorage.
-  const SPECTRO_MIN = 150
-  const SPECTRO_MAX = 600
-  const SPECTRO_DEFAULT = 220
+  // ─── Hauteurs des panneaux de la zone d'analyse (px, persistées) ───
+  // Modèle PAR PANNEAU (façon G4 LD Utility) : chaque poignée agrandit/réduit
+  // SON panneau et la colonne d'analyse scrolle verticalement pour
+  // l'accommoder — pas de conteneur borné ni de tampon à somme nulle.
+  // Défauts généreux pour que les panneaux respirent. Clés localStorage
+  // suffixées _v2 afin que ces nouveaux défauts s'appliquent même si
+  // d'anciennes hauteurs (plus petites) étaient déjà mémorisées.
+
+  // Courbe LAeq — grande et lisible (~320px par défaut).
+  const CHART_MIN = 200
+  const CHART_MAX = 900
+  const CHART_DEFAULT = 320
+  const [chartHeight, setChartHeight] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem('acoustiq_chart_height_v2') ?? '', 10)
+      if (Number.isFinite(v)) return Math.max(CHART_MIN, Math.min(CHART_MAX, v))
+    } catch { /* ignore */ }
+    return CHART_DEFAULT
+  })
+  useEffect(() => {
+    try { localStorage.setItem('acoustiq_chart_height_v2', String(chartHeight)) } catch { /* ignore */ }
+  }, [chartHeight])
+
+  // Barre audio — compacte (~110px par défaut).
+  const AUDIO_MIN_H = 80
+  const AUDIO_MAX_H = 400
+  const AUDIO_DEFAULT = 110
+  const [audioHeight, setAudioHeight] = useState<number>(() => {
+    try {
+      const v = parseInt(localStorage.getItem('acoustiq_audio_panel_height_v2') ?? '', 10)
+      if (Number.isFinite(v)) return Math.max(AUDIO_MIN_H, Math.min(AUDIO_MAX_H, v))
+    } catch { /* ignore */ }
+    return AUDIO_DEFAULT
+  })
+  useEffect(() => {
+    try { localStorage.setItem('acoustiq_audio_panel_height_v2', String(audioHeight)) } catch { /* ignore */ }
+  }, [audioHeight])
+
+  // Spectrogramme (~350px par défaut).
+  const SPECTRO_MIN = 200
+  const SPECTRO_MAX = 800
+  const SPECTRO_DEFAULT = 350
   const [spectrogramHeight, setSpectrogramHeight] = useState<number>(() => {
     try {
-      const v = localStorage.getItem('acoustiq_spectro_height')
-      if (v) {
-        const n = parseInt(v, 10)
-        if (Number.isFinite(n)) return Math.max(SPECTRO_MIN, Math.min(SPECTRO_MAX, n))
-      }
-    } catch { /* localStorage indisponible */ }
+      const v = parseInt(localStorage.getItem('acoustiq_spectro_height_v2') ?? '', 10)
+      if (Number.isFinite(v)) return Math.max(SPECTRO_MIN, Math.min(SPECTRO_MAX, v))
+    } catch { /* ignore */ }
     return SPECTRO_DEFAULT
   })
   useEffect(() => {
-    try { localStorage.setItem('acoustiq_spectro_height', String(spectrogramHeight)) } catch { /* ignore */ }
+    try { localStorage.setItem('acoustiq_spectro_height_v2', String(spectrogramHeight)) } catch { /* ignore */ }
   }, [spectrogramHeight])
 
-  // --- Spectre instantané : hauteur du panneau (le survol est géré par
-  //     InstantSpectrum via un CustomEvent, pour ne pas re-rendre le graphique). ---
-  const SPECTRUM_MIN = 180
-  const SPECTRUM_MAX = 500
+  // Spectre instantané (~300px par défaut ; survol géré par InstantSpectrum
+  // via un CustomEvent, pour ne pas re-rendre le graphique).
+  const SPECTRUM_MIN = 200
+  const SPECTRUM_MAX = 700
+  const SPECTRUM_DEFAULT = 300
   const [spectrumHeight, setSpectrumHeight] = useState<number>(() => {
     try {
-      const v = parseInt(localStorage.getItem('acoustiq_spectrum_height') ?? '', 10)
+      const v = parseInt(localStorage.getItem('acoustiq_spectrum_height_v2') ?? '', 10)
       if (Number.isFinite(v)) return Math.max(SPECTRUM_MIN, Math.min(SPECTRUM_MAX, v))
     } catch { /* ignore */ }
-    return 200
+    return SPECTRUM_DEFAULT
   })
   useEffect(() => {
-    try { localStorage.setItem('acoustiq_spectrum_height', String(spectrumHeight)) } catch { /* ignore */ }
+    try { localStorage.setItem('acoustiq_spectrum_height_v2', String(spectrumHeight)) } catch { /* ignore */ }
   }, [spectrumHeight])
 
-  // --- Lecteur audio : hauteur du panneau (px, persistée). Pilotée par App
-  //     (et non plus en interne) pour permettre le redimensionnement à somme
-  //     nulle avec les panneaux voisins. ---
-  const AUDIO_MIN_H = 80
-  const AUDIO_MAX_H = 500
-  const [audioHeight, setAudioHeight] = useState<number>(() => {
-    try {
-      const v = parseInt(localStorage.getItem('acoustiq_audio_panel_height') ?? '', 10)
-      if (Number.isFinite(v)) return Math.max(AUDIO_MIN_H, Math.min(AUDIO_MAX_H, v))
-    } catch { /* ignore */ }
-    return 140
-  })
-  useEffect(() => {
-    try { localStorage.setItem('acoustiq_audio_panel_height', String(audioHeight)) } catch { /* ignore */ }
-  }, [audioHeight])
-
-  // --- Poignées de redimensionnement de la zone d'analyse ---
-  // La courbe LAeq est l'élément ÉLASTIQUE (flex-1, min CHART_MIN_H) ; chaque
-  // poignée échange la hauteur entre ses DEUX panneaux voisins, la courbe
-  // servant de tampon final → total constant, aucune zone scrollable.
-  const CHART_MIN_H = 140
-  const containerRef = useRef<HTMLDivElement>(null)
-  const dragRef = useRef<{ startY: number } | null>(null)
-
-  // Drag vertical générique : `onDelta(dy)` reçoit le déplacement signé.
-  const startVDrag = useCallback((e: React.MouseEvent, onDelta: (dy: number) => void) => {
-    e.preventDefault()
-    dragRef.current = { startY: e.clientY }
-    const onMove = (ev: MouseEvent) => {
-      if (!dragRef.current) return
-      onDelta(ev.clientY - dragRef.current.startY)
-    }
-    const onUp = () => {
-      dragRef.current = null
-      document.removeEventListener('mousemove', onMove)
-      document.removeEventListener('mouseup', onUp)
-    }
-    document.addEventListener('mousemove', onMove)
-    document.addEventListener('mouseup', onUp)
-  }, [])
-
-  // H1 — Courbe ↔ Audio : seule poignée qui change le total des panneaux du
-  // bas, donc la seule bornée par la hauteur du conteneur (courbe ≥ CHART_MIN_H).
-  const handleResizeChartAudio = useCallback((e: React.MouseEvent) => {
-    const startAudio = audioHeight
-    const containerH = containerRef.current?.getBoundingClientRect().height ?? 0
-    const spectroRendered = spectrogramExpanded ? spectrogramHeight + 28 : 28
-    const HANDLES = 24 // ~poignées + marges
-    const maxAudio = Math.max(
-      AUDIO_MIN_H,
-      Math.min(AUDIO_MAX_H, containerH - CHART_MIN_H - spectroRendered - spectrumHeight - HANDLES),
-    )
-    startVDrag(e, (dy) => {
-      // Glisser vers le bas agrandit la courbe (panneau du haut) → audio réduit.
-      setAudioHeight(Math.max(AUDIO_MIN_H, Math.min(maxAudio, startAudio - dy)))
-    })
-  }, [audioHeight, spectrogramExpanded, spectrogramHeight, spectrumHeight, startVDrag])
-
-  // H2 — Audio ↔ Spectrogramme : échange à somme nulle (courbe inchangée).
-  const handleResizeAudioSpectro = useCallback((e: React.MouseEvent) => {
-    const startAudio = audioHeight
-    const startSpectro = spectrogramHeight
-    startVDrag(e, (dy) => {
-      // Borne le delta pour que les DEUX panneaux restent dans leurs limites.
-      const d = Math.max(
-        Math.max(AUDIO_MIN_H - startAudio, startSpectro - SPECTRO_MAX),
-        Math.min(AUDIO_MAX_H - startAudio, startSpectro - SPECTRO_MIN, dy),
-      )
-      setAudioHeight(startAudio + d)
-      setSpectrogramHeight(startSpectro - d)
-    })
-  }, [audioHeight, spectrogramHeight, startVDrag])
-
-  // H3 — Spectrogramme ↔ Spectre : échange à somme nulle.
-  const handleResizeSpectroSpectre = useCallback((e: React.MouseEvent) => {
-    const startSpectro = spectrogramHeight
-    const startSpectre = spectrumHeight
-    startVDrag(e, (dy) => {
-      const d = Math.max(
-        Math.max(SPECTRO_MIN - startSpectro, startSpectre - SPECTRUM_MAX),
-        Math.min(SPECTRO_MAX - startSpectro, startSpectre - SPECTRUM_MIN, dy),
-      )
-      setSpectrogramHeight(startSpectro + d)
-      setSpectrumHeight(startSpectre - d)
-    })
-  }, [spectrogramHeight, spectrumHeight, startVDrag])
+  // Poignée de redimensionnement PAR PANNEAU : glisser vers le bas agrandit le
+  // panneau situé AU-DESSUS de la poignée, la colonne scrolle si nécessaire.
+  const startPanelResize = useCallback(
+    (e: React.MouseEvent, startH: number, setter: (h: number) => void, min: number, max: number) => {
+      e.preventDefault()
+      const startY = e.clientY
+      const onMove = (ev: MouseEvent) => setter(Math.max(min, Math.min(max, startH + (ev.clientY - startY))))
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove)
+        document.removeEventListener('mouseup', onUp)
+      }
+      document.addEventListener('mousemove', onMove)
+      document.addEventListener('mouseup', onUp)
+    },
+    [],
+  )
 
   // Position de lecture audio (minutes axe X absolu) — prioritaire sur le survol.
   const audioPlayheadAbsMin = useMemo(() => {
@@ -1747,15 +1712,10 @@ function MainPanel({
           )}
           {hasChart ? (
             <>
-              <div
-                ref={containerRef}
-                className="flex flex-col shrink-0 overflow-hidden"
-                style={{
-                  height: 'min(82vh, 940px)',
-                  minHeight: 460,
-                }}
-              >
-              <div className="flex-1 min-h-0" style={{ minHeight: CHART_MIN_H }}>
+              {/* Courbe LAeq — hauteur fixe redimensionnable ; la colonne
+                  d'analyse peut dépasser le viewport et scroller verticalement
+                  (plus de conteneur borné ni d'overflow-hidden). */}
+              <div className="shrink-0" style={{ height: chartHeight }}>
                 <TimeSeriesChart
                   files={chartFiles}
                   pointMap={pointMap}
@@ -1816,18 +1776,21 @@ function MainPanel({
                 />
               </div>
 
-              {/* Lecteur audio — sous la courbe. Poignée H1 (Courbe ↔ Audio)
-                  au-dessus. TOUJOURS visible : sert aussi de zone de
-                  téléversement permanente (état vide inclus). */}
+              {/* Poignée — redimensionne la courbe (glisser vers le bas =
+                  courbe plus grande ; la colonne scrolle). */}
+              <div
+                className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
+                onMouseDown={(e) => startPanelResize(e, chartHeight, setChartHeight, CHART_MIN, CHART_MAX)}
+                title="Glisser pour agrandir/réduire la courbe"
+              >
+                <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
+              </div>
+
+              {/* Lecteur audio — sous la courbe, compact. TOUJOURS visible :
+                  sert aussi de zone de téléversement permanente. Poignée en
+                  dessous pour le redimensionner. */}
               {!presentationMode && (
                 <>
-                  <div
-                    className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
-                    onMouseDown={handleResizeChartAudio}
-                    title="Glisser pour répartir la hauteur entre la courbe et l'audio"
-                  >
-                    <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
-                  </div>
                   <div className="shrink-0">
                     <StreamAudioPlayer
                       entries={audioEntries.filter((e) => {
@@ -1843,17 +1806,15 @@ function MainPanel({
                       flashSignal={audioFlash}
                     />
                   </div>
+                  <div
+                    className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
+                    onMouseDown={(e) => startPanelResize(e, audioHeight, setAudioHeight, AUDIO_MIN_H, AUDIO_MAX_H)}
+                    title="Glisser pour agrandir/réduire la barre audio"
+                  >
+                    <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
+                  </div>
                 </>
               )}
-
-              {/* Poignée H2 (Audio ↔ Spectrogramme) */}
-              <div
-                className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
-                onMouseDown={handleResizeAudioSpectro}
-                title="Glisser pour répartir la hauteur entre l'audio et le spectrogramme"
-              >
-                <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
-              </div>
 
               {/* Spectrogramme embarqué (collapsible, hauteur en px mémorisée) */}
               <div
@@ -1904,16 +1865,20 @@ function MainPanel({
                 )}
               </div>
 
-              {/* Spectre instantané — poignée H3 (Spectrogramme ↔ Spectre) + panneau */}
+              {/* Poignée — redimensionne le spectrogramme */}
+              {spectrogramExpanded && (
+                <div
+                  className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
+                  onMouseDown={(e) => startPanelResize(e, spectrogramHeight, setSpectrogramHeight, SPECTRO_MIN, SPECTRO_MAX)}
+                  title="Glisser pour agrandir/réduire le spectrogramme"
+                >
+                  <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
+                </div>
+              )}
+
+              {/* Spectre instantané + poignée de redimensionnement en dessous */}
               {!presentationMode && (
                 <>
-                  <div
-                    className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
-                    onMouseDown={handleResizeSpectroSpectre}
-                    title="Glisser pour répartir la hauteur entre le spectrogramme et le spectre"
-                  >
-                    <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
-                  </div>
                   <div className="shrink-0">
                     <InstantSpectrum
                       files={visibleChartFiles}
@@ -1928,9 +1893,15 @@ function MainPanel({
                       hiddenPoints={[...hiddenPoints]}
                     />
                   </div>
+                  <div
+                    className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
+                    onMouseDown={(e) => startPanelResize(e, spectrumHeight, setSpectrumHeight, SPECTRUM_MIN, SPECTRUM_MAX)}
+                    title="Glisser pour agrandir/réduire le spectre"
+                  >
+                    <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
+                  </div>
                 </>
               )}
-              </div>
 
               {!presentationMode && (
                 <>

@@ -1330,6 +1330,7 @@ interface MainPanelProps {
   onChartRangePicked: (startMin: number, endMin: number) => void
   chartHighlightRange: { startMin: number; endMin: number } | null
   onOpenAudioCalage: (entryId: string) => void
+  onAudioCalageApply: (entryId: string, patch: { startMin: number; date: string }) => void
   onDateChange: (date: string) => void
   onTabChange: (tab: Tab) => void
   onCellChange: (eventId: string, point: string, state: ConcordanceState) => void
@@ -1372,7 +1373,7 @@ function MainPanel({
   onAudioEntriesLoad, onParseFiles,
   chartPickArmed, onChartPicked,
   chartRangePickArmed, onChartRangePicked, chartHighlightRange,
-  onOpenAudioCalage,
+  onOpenAudioCalage, onAudioCalageApply,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
@@ -1781,6 +1782,7 @@ function MainPanel({
                     sync={audioSync}
                     pointName={assignedPoints[0] ?? null}
                     onOpenCalage={onOpenAudioCalage}
+                    onApplyCalage={onAudioCalageApply}
                     onAddFiles={onAudioEntriesLoad}
                     flashSignal={audioFlash}
                   />
@@ -3297,6 +3299,7 @@ export default function App() {
         onChartRangePicked={handleChartRangePicked}
         chartHighlightRange={chartHighlightRange}
         onOpenAudioCalage={setCalageEntryId}
+        onAudioCalageApply={handleAudioCalageApply}
         onDateChange={setSelectedDate}
         onTabChange={setActiveTab}
         onCellChange={handleCellChange}

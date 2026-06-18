@@ -131,6 +131,21 @@ export function useAudioSync(entries: AudioFileEntry[]): UseAudioSyncResult {
     }
   }, [])
 
+  // Resynchronisation de l'ancre : si le calage de l'entrée active change
+  // (recalage manuel/auto à chaud) pendant que le fichier reste chargé, le
+  // marqueur `_startMin` posé sur l'élément deviendrait périmé jusqu'au
+  // prochain playAt/seek — le curseur pointerait alors un mauvais instant.
+  // On met à jour `_startMin` dès que l'ancre change, et on rafraîchit la
+  // position affichée quand la lecture est en pause (en lecture, la boucle
+  // rAF relira `_startMin` à la frame suivante).
+  const activeStartMin = entries.find((e) => e.id === activeEntryId)?.startMin
+  useEffect(() => {
+    const el = audioRef.current
+    if (!el || activeStartMin === undefined) return
+    ;(el as HTMLAudioElement & { _startMin?: number })._startMin = activeStartMin
+    if (el.paused) setCurrentMin(activeStartMin + el.currentTime / 60)
+  }, [activeStartMin])
+
   // Boucle requestAnimationFrame pendant la lecture : met à jour `currentMin`
   // à la fréquence de rafraîchissement de l'écran (jusqu'à 60 fps) plutôt
   // qu'aux ~4 Hz de l'événement `timeupdate`, pour un curseur de lecture

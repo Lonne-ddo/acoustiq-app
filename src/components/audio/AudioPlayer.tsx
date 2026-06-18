@@ -54,6 +54,25 @@ function fmtSize(bytes: number): string {
   return `${Math.round(bytes / 1024)} KB`
 }
 
+const pad2 = (n: number) => String(n).padStart(2, '0')
+
+/** Minutes-depuis-minuit → heure d'horloge « HH:MM:SS » (= ancre = instant
+ *  de la courbe LAeq qui correspond à la position 0 de l'audio). */
+function minToClock(m: number): string {
+  const totalSec = Math.max(0, Math.round(m * 60))
+  return `${pad2(Math.floor(totalSec / 3600) % 24)}:${pad2(Math.floor((totalSec % 3600) / 60))}:${pad2(totalSec % 60)}`
+}
+
+/** Parse une heure d'horloge « HH:MM » / « HH:MM:SS » → minutes depuis minuit,
+ *  ou null si invalide. */
+function parseClock(v: string): number | null {
+  const m = v.trim().match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/)
+  if (!m) return null
+  const h = +m[1], mi = +m[2], s = m[3] ? +m[3] : 0
+  if (h > 23 || mi > 59 || s > 59) return null
+  return h * 60 + mi + s / 60
+}
+
 const AUDIO_RE = /\.(mp3|wav|m4a|ogg)$/i
 const BIG_FILE_BYTES = 500 * 1024 * 1024
 /** Vrai si l'événement de drag transporte des fichiers (et pas du texte/HTML). */
@@ -76,6 +95,9 @@ interface Props {
   defaultCollapsed?: boolean
   /** Ouvre le panneau de calage pour un fichier donné */
   onOpenCalage: (entryId: string) => void
+  /** Applique une ancre saisie inline (heure d'horloge du début de l'audio).
+   *  Même chemin que le calage du modal → caleStatus passe à "calibrated". */
+  onApplyCalage?: (entryId: string, patch: { startMin: number; date: string }) => void
   /** Importe de nouveaux fichiers audio (probe + ajout au state). Async. */
   onAddFiles?: (files: File[]) => void | Promise<void>
   /** Compteur incrémental : à chaque changement de valeur, la zone clignote
@@ -83,8 +105,10 @@ interface Props {
   flashSignal?: number
 }
 
-export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed = false, onOpenCalage, onAddFiles, flashSignal }: Props) {
+export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed = false, onOpenCalage, onApplyCalage, onAddFiles, flashSignal }: Props) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
+  // Édition inline de l'ancre (heure d'horloge du début de l'audio).
+  const [editAnchor, setEditAnchor] = useState(false)
   // Modal de confirmation quand on essaie de lire un fichier non calé.
   const [warnUncaled, setWarnUncaled] = useState<AudioFileEntry | null>(null)
 
@@ -196,6 +220,17 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
   // aux flèches de naviguer dès qu'un fichier est CHARGÉ (pas forcément joué).
   const targetEntry = active ?? entries[0] ?? null
   const targetTotalSec = targetEntry?.durationSec ?? 0
+
+  /** Applique l'ancre saisie inline : `v` est l'heure d'horloge (HH:MM:SS)
+   *  à laquelle correspond la position 0 de l'audio. On garde la date du
+   *  fichier et on délègue au même chemin de calage que le modal. */
+  const applyAnchor = useCallback((entry: AudioFileEntry, v: string) => {
+    setEditAnchor(false)
+    const startMin = parseClock(v)
+    if (startMin === null || !onApplyCalage) return
+    onApplyCalage(entry.id, { startMin, date: entry.date })
+    showToast('🕑', minToClock(startMin))
+  }, [onApplyCalage, showToast])
 
   // ─── Helpers de contrôle pilotés par les raccourcis ───
   /** Saute à une position absolue (secondes depuis le début du fichier cible).
@@ -669,6 +704,37 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
               ))}
             </div>
 
+            {/* Ancre de calage — heure d'horloge du début de l'audio (position 0).
+                Lecture claire + saisie manuelle inline (HH:MM:SS). C'est la
+                correspondance qui pilote le curseur et le clic-pour-positionner. */}
+            {targetEntry && (
+              editAnchor && onApplyCalage ? (
+                <input
+                  autoFocus
+                  type="text"
+                  defaultValue={minToClock(targetEntry.startMin)}
+                  onBlur={(e) => applyAnchor(targetEntry, e.currentTarget.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') e.currentTarget.blur()
+                    if (e.key === 'Escape') setEditAnchor(false)
+                  }}
+                  placeholder="HH:MM:SS"
+                  className="w-[92px] text-[10px] font-mono bg-gray-800 text-gray-100 border border-emerald-600 rounded px-1.5 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                  title="Heure d'horloge à laquelle commence l'audio (position 0)"
+                />
+              ) : (
+                <button
+                  onClick={() => onApplyCalage && setEditAnchor(true)}
+                  disabled={!onApplyCalage}
+                  className="flex items-center gap-1 text-[10px] text-gray-400 hover:text-gray-200 bg-gray-900 hover:bg-gray-800 border border-gray-700 rounded px-2 py-1 disabled:cursor-default"
+                  title="Heure de début de l'audio — cliquer pour saisir manuellement"
+                >
+                  <span className={`w-1.5 h-1.5 rounded-full ${statusDot(targetEntry.caleStatus).color}`} />
+                  Démarre à <span className="font-mono text-gray-200">{minToClock(targetEntry.startMin)}</span>
+                </button>
+              )
+            )}
+
             {/* ⏱ Caler — TOUJOURS visible. Si aucun fichier actif (lecture
                 jamais lancée), on cale par défaut le 1er fichier de la liste. */}
             <button
@@ -693,6 +759,24 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
               <HelpCircle size={13} />
             </button>
           </div>
+
+          {/* Bandeau anti-curseur-faux : tant que le fichier actif n'est pas
+              calé, son début est forcé à 00:00 → le curseur de lecture pointe
+              un mauvais instant. On bascule proprement vers la saisie manuelle. */}
+          {active && active.caleStatus === 'none' && onApplyCalage && !editAnchor && (
+            <div className="flex items-center gap-2 text-[10px] text-rose-200 bg-rose-950/40 border border-rose-800/60 rounded px-2 py-1">
+              <AlertTriangle size={11} className="shrink-0 text-rose-400" />
+              <span className="leading-snug">
+                Non calé — la position du curseur n'est pas fiable. Définissez l'heure de début de l'audio.
+              </span>
+              <button
+                onClick={() => setEditAnchor(true)}
+                className="ml-auto shrink-0 text-rose-100 bg-rose-800/60 hover:bg-rose-700/60 border border-rose-700 rounded px-2 py-0.5"
+              >
+                Définir l'heure
+              </button>
+            </div>
+          )}
 
           {/* Mode étendu : waveform + timeline + actions supplémentaires.
               Uniquement quand le panneau dépasse EXPANDED_THRESHOLD (200 px). */}

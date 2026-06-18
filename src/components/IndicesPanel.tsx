@@ -9,6 +9,7 @@ import HelpTooltip from './HelpTooltip'
 import type { MeasurementFile, MeteoData, Period, Category } from '../types'
 import {
   laeqAvg,
+  computeLn,
   computeL10,
   computeL50,
   computeL90,
@@ -51,9 +52,12 @@ function ptColor(pt: string, i: number) {
 // Définition des lignes d'indices avec descriptions
 const ROWS = [
   { key: 'laeq',   label: 'LAeq',   unit: 'dB(A)', help: 'Niveau sonore continu équivalent pondéré A — moyenne énergétique sur la période.' },
+  { key: 'l1',     label: 'L1',     unit: 'dB(A)', help: 'Niveau dépassé 1% du temps — pointes les plus rares (événements brefs).' },
   { key: 'l10',    label: 'L10',    unit: 'dB(A)', help: 'Niveau dépassé 10% du temps — caractérise les niveaux de pointe récurrents.' },
   { key: 'l50',    label: 'L50',    unit: 'dB(A)', help: 'Niveau dépassé 50% du temps — médiane, représente le bruit « typique ».' },
   { key: 'l90',    label: 'L90',    unit: 'dB(A)', help: 'Niveau dépassé 90% du temps — bruit résiduel (bruit de fond).' },
+  { key: 'l95',    label: 'L95',    unit: 'dB(A)', help: 'Niveau dépassé 95% du temps — bruit de fond bas.' },
+  { key: 'l99',    label: 'L99',    unit: 'dB(A)', help: 'Niveau dépassé 99% du temps — plancher de bruit résiduel.' },
   { key: 'lafmax', label: 'LAFmax', unit: 'dB(A)', help: 'Niveau maximal instantané pondéré A, constante Fast.' },
   { key: 'lafmin', label: 'LAFmin', unit: 'dB(A)', help: 'Niveau minimal instantané pondéré A, constante Fast.' },
 ] as const
@@ -62,9 +66,12 @@ type IndexKey = (typeof ROWS)[number]['key']
 
 interface IndexValues {
   laeq: number
+  l1: number
   l10: number
   l50: number
   l90: number
+  l95: number
+  l99: number
   lafmax: number
   lafmin: number
 }
@@ -169,9 +176,12 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
           pt,
           {
             laeq:   laeqAvg(values),
+            l1:     computeLn(values, 1),
             l10:    computeL10(values),
             l50:    computeL50(values),
             l90:    computeL90(values),
+            l95:    computeLn(values, 95),
+            l99:    computeLn(values, 99),
             lafmax: computeLAFmax(values),
             lafmin: computeLAFmin(values),
           } satisfies IndexValues,

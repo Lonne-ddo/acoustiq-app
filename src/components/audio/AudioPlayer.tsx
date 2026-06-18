@@ -103,9 +103,13 @@ interface Props {
   /** Compteur incrémental : à chaque changement de valeur, la zone clignote
    *  (utilisé par le drag-and-drop global de la page Visualisation). */
   flashSignal?: number
+  /** Hauteur du panneau pilotée par le parent (redimensionnement à somme
+   *  nulle géré au niveau App). Si défini, la poignée interne est masquée et
+   *  c'est le parent qui persiste la hauteur. */
+  controlledHeight?: number
 }
 
-export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed = false, onOpenCalage, onApplyCalage, onAddFiles, flashSignal }: Props) {
+export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed = false, onOpenCalage, onApplyCalage, onAddFiles, flashSignal, controlledHeight }: Props) {
   const [collapsed, setCollapsed] = useState(defaultCollapsed)
   // Édition inline de l'ancre (heure d'horloge du début de l'audio).
   const [editAnchor, setEditAnchor] = useState(false)
@@ -125,8 +129,14 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
     return AUDIO_HEIGHT_DEFAULT
   })
   useEffect(() => {
+    // En mode contrôlé, c'est le parent (App) qui possède et persiste la
+    // hauteur — on n'écrit pas la clé pour ne pas la concurrencer.
+    if (controlledHeight !== undefined) return
     try { localStorage.setItem(AUDIO_HEIGHT_KEY, String(height)) } catch { /* ignore */ }
-  }, [height])
+  }, [height, controlledHeight])
+
+  /** Hauteur effective : pilotée par le parent si fournie, sinon état interne. */
+  const panelHeight = controlledHeight ?? height
 
   const resizeRef = useRef<{ startY: number; startH: number } | null>(null)
   const handleResizeStart = useCallback((e: React.MouseEvent) => {
@@ -153,7 +163,7 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
     ? Math.max(0, (sync.currentMin - active.startMin) * 60)
     : 0
   const totalSec = active?.durationSec ?? 0
-  const expanded = !collapsed && height >= EXPANDED_THRESHOLD
+  const expanded = !collapsed && panelHeight >= EXPANDED_THRESHOLD
 
   // ─────────────────────────────────────────────────────────────────────
   // Toast de feedback des raccourcis (transitoire ~600 ms)
@@ -484,7 +494,7 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
           ? 'border-blue-500 ring-2 ring-blue-500/50'
           : 'border-gray-800'
       }`}
-      style={collapsed ? undefined : { height }}
+      style={collapsed ? undefined : { height: panelHeight }}
       onDragOver={onPanelDragOver}
       onDragLeave={onPanelDragLeave}
       onDrop={onPanelDrop}
@@ -506,10 +516,10 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
           <span className="text-sm font-semibold text-blue-200">Déposer pour ajouter l'audio</span>
         </div>
       )}
-      {/* Poignée de redimensionnement (3 px, cursor ns-resize).
-          Masquée quand le panneau est replié (la hauteur est alors dictée
-          par le seul en-tête cliquable). */}
-      {!collapsed && (
+      {/* Poignée de redimensionnement interne (3 px, cursor ns-resize).
+          Masquée quand le panneau est replié, ou en mode contrôlé (la
+          poignée est alors fournie par le parent au-dessus du panneau). */}
+      {!collapsed && controlledHeight === undefined && (
         <div
           onMouseDown={handleResizeStart}
           className="shrink-0 cursor-ns-resize group"
@@ -812,7 +822,7 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
                   key={active.id}
                   entry={active}
                   sync={sync}
-                  height={Math.max(60, height - 150)}
+                  height={Math.max(60, panelHeight - 150)}
                 />
               </div>
             </div>

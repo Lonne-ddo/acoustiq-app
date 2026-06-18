@@ -9,4 +9,9 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
+  // Port de dev fixé à 5174 pour éviter la collision avec l'autre projet
+  // Vite (5173). N'affecte que `npm run dev` — aucun impact build/déploiement.
+  server: {
+    port: 5174,
+  },
 })

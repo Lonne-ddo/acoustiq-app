@@ -288,41 +288,58 @@ export function laeqAvg(values: number[]): number {
 }
 
 /**
- * Calcule le percentile Lx à partir d'un tableau de niveaux en dB.
- * Filtre les valeurs NaN/null/Infinity en amont.
+ * Percentile STATISTIQUE `p` (0–100) d'un tableau de niveaux en dB, tri
+ * croissant : computePercentile(v, 90) = 90e percentile = valeur HAUTE
+ * (90 % des échantillons sont en dessous). Filtre NaN/null/Infinity en amont.
  *
- * @param values - tableau de niveaux dB
- * @param percentile - percentile souhaité (ex: 90 pour L90)
+ * Pour un indice acoustique Ln, ne pas appeler directement : utiliser
+ * `computeLn` qui applique la convention Ln = (100 − n)e percentile.
  */
 function computePercentile(values: number[], percentile: number): number {
   const valid = values.filter((v) => Number.isFinite(v))
   if (valid.length === 0) return 0
-  // Tri croissant : L90 = niveau dépassé 90% du temps (bruit de fond, valeur basse)
-  // L10 = niveau dépassé 10% du temps (pointes, valeur haute)
   const sorted = [...valid].sort((a, b) => a - b)
   const index = Math.round((percentile / 100) * (sorted.length - 1))
   return sorted[index]
 }
 
 /**
- * Calcule le L90 (niveau de bruit résiduel) d'un tableau de niveaux en dB
+ * Indice acoustique Ln : niveau dépassé n % du temps.
+ *
+ * Convention (Lignes directrices / usage acoustique) : Ln correspond au
+ * (100 − n)e percentile de la distribution triée par ordre croissant.
+ *   - L90 = 10e percentile  → valeur BASSE (bruit résiduel / bruit de fond)
+ *   - L50 = 50e percentile  → médiane
+ *   - L10 = 90e percentile  → valeur HAUTE (pointes récurrentes)
+ *
+ * NB : c'est la même convention que le graphique de distribution L1..L99 du
+ * panneau d'indices. Les anciennes implémentations de computeL10/L90
+ * appelaient `computePercentile(v, n)` directement, ce qui INVERSAIT L10 et
+ * L90 ; `computeLn` corrige cette inversion.
  */
-export function computeL90(values: number[]): number {
-  return computePercentile(values, 90)
+export function computeLn(values: number[], n: number): number {
+  return computePercentile(values, 100 - n)
 }
 
 /**
- * Calcule le L10 (niveau de bruit de pointe) d'un tableau de niveaux en dB
+ * Calcule le L90 (niveau de bruit résiduel, valeur basse) d'un tableau de niveaux en dB
+ */
+export function computeL90(values: number[]): number {
+  return computeLn(values, 90)
+}
+
+/**
+ * Calcule le L10 (niveau de bruit de pointe, valeur haute) d'un tableau de niveaux en dB
  */
 export function computeL10(values: number[]): number {
-  return computePercentile(values, 10)
+  return computeLn(values, 10)
 }
 
 /**
  * Calcule le L50 (niveau médian) d'un tableau de niveaux en dB
  */
 export function computeL50(values: number[]): number {
-  return computePercentile(values, 50)
+  return computeLn(values, 50)
 }
 
 /**

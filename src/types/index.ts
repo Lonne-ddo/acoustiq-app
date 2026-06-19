@@ -58,8 +58,10 @@ export const PERIOD_PALETTE: string[] = [
   '#6b7280', // gris
 ]
 
-/** Mode de contribution d'une catégorie au calcul des indices. */
-export type CategoryMode = 'include' | 'exclude' | 'annotation'
+/** Mode de contribution d'une catégorie au calcul des indices.
+ *  'reference' = inclus dans le calcul (comme 'include') mais marqué comme
+ *  bruit de fond de référence (rôle organisationnel ; unique par projet). */
+export type CategoryMode = 'include' | 'exclude' | 'annotation' | 'reference'
 
 /**
  * Catégorie de périodes — nommable, colorable. `mode` définit sa contribution
@@ -88,7 +90,7 @@ export const DEFAULT_CATEGORY_IDS = {
 export function makeDefaultCategories(): Category[] {
   return [
     { id: DEFAULT_CATEGORY_IDS.ambiant, name: 'Ambiant', color: '#22c55e', mode: 'include', visible: true },
-    { id: DEFAULT_CATEGORY_IDS.residuel, name: 'Résiduel', color: '#3b82f6', mode: 'include', visible: true },
+    { id: DEFAULT_CATEGORY_IDS.residuel, name: 'Résiduel', color: '#3b82f6', mode: 'reference', visible: true },
     { id: DEFAULT_CATEGORY_IDS.exclure, name: 'À exclure', color: '#ef4444', mode: 'exclude', visible: true },
     { id: DEFAULT_CATEGORY_IDS.annotation, name: 'Annotation', color: '#eab308', mode: 'annotation', visible: true },
   ]
@@ -150,7 +152,7 @@ export function normalizeProjectPeriods(
     ? (rawCategories as Array<Record<string, unknown>>).map((c) => {
         // Migration : ancien format {included, isAnnotation} → {mode, visible}.
         let mode: CategoryMode
-        if (c.mode === 'include' || c.mode === 'exclude' || c.mode === 'annotation') {
+        if (c.mode === 'include' || c.mode === 'exclude' || c.mode === 'annotation' || c.mode === 'reference') {
           mode = c.mode
         } else if (c.isAnnotation) {
           mode = 'annotation'

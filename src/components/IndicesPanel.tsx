@@ -442,11 +442,12 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
     return h > 0 ? `${h}h${m > 0 ? String(m).padStart(2, '0') : ''}` : `${m}min`
   }
 
-  // Bandeau « calcul sur » : catégories visibles en mode « include » avec périodes.
+  // Bandeau « calcul sur » : catégories visibles qui DÉFINISSENT la fenêtre
+  // (include + reference, qui se comportent en whitelist) avec périodes.
   const calcLabel = (() => {
     const totalStr = fileSpanMin > 0 ? ` (${fmtHm(fileSpanMin)})` : ''
     const cats = categories ?? []
-    const active = cats.filter((c) => c.visible && c.mode === 'include')
+    const active = cats.filter((c) => c.visible && (c.mode === 'include' || c.mode === 'reference'))
     const activeIds = new Set(active.map((c) => c.id))
     const used = (periods ?? []).filter((p) => activeIds.has(p.categoryId))
     if (used.length === 0) return `Calcul sur l'ensemble du fichier${totalStr}`

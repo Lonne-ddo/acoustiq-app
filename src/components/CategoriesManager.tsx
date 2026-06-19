@@ -8,7 +8,7 @@
 import { useMemo, useState } from 'react'
 import { Plus, Trash2, Check, X } from 'lucide-react'
 import type { Period, Category, CategoryMode } from '../types'
-import { PERIOD_PALETTE, DEFAULT_CATEGORY_IDS } from '../types'
+import { PERIOD_PALETTE } from '../types'
 
 interface Props {
   categories: Category[]
@@ -50,14 +50,15 @@ export default function CategoriesManager({
     return m
   }, [periods, categories])
 
-  function modeLabel(c: Category): string {
-    if (c.mode === 'include') return c.id === DEFAULT_CATEGORY_IDS.residuel ? 'Inclus (référence)' : 'Inclus dans le calcul'
-    if (c.mode === 'exclude') return 'Exclu du calcul'
-    return 'Annotation seulement'
-  }
-  function cycleMode(c: Category) {
-    const next: CategoryMode = c.mode === 'include' ? 'exclude' : c.mode === 'exclude' ? 'annotation' : 'include'
-    onCategoryUpdate(c.id, { mode: next })
+  /** Change le mode d'une catégorie. « Référence » est UNIQUE : la choisir
+   *  repasse toute autre catégorie « référence » en « inclus ». */
+  function setMode(c: Category, mode: CategoryMode) {
+    if (mode === 'reference') {
+      for (const o of categories) {
+        if (o.id !== c.id && o.mode === 'reference') onCategoryUpdate(o.id, { mode: 'include' })
+      }
+    }
+    onCategoryUpdate(c.id, { mode })
   }
   function pulseCategory(id: string) {
     document.dispatchEvent(new CustomEvent('acoustiq:pulse-category', { detail: id }))
@@ -79,6 +80,13 @@ export default function CategoriesManager({
     onCategoryRemove(c.id, reassign && target ? target.id : null)
   }
   function createCategory() {
+    // Unicité de « référence » : si la nouvelle catégorie l'est, retirer le rôle
+    // aux autres.
+    if (newCatMode === 'reference') {
+      for (const o of categories) {
+        if (o.mode === 'reference') onCategoryUpdate(o.id, { mode: 'include' })
+      }
+    }
     onCategoryAdd({
       id: crypto.randomUUID(),
       name: newCatName.trim() || `Catégorie ${categories.length + 1}`,
@@ -171,13 +179,19 @@ export default function CategoriesManager({
                 <Trash2 size={11} />
               </button>
             </div>
-            <button
-              onClick={(e) => { stop(e); cycleMode(c) }}
-              className="ml-5 text-[9px] text-gray-500 hover:text-gray-300"
-              title="Cliquer pour changer le mode (Inclure → Exclure → Annotation)"
-            >
-              {modeLabel(c)}
-            </button>
+            <div className="ml-5 mt-0.5" onClick={stop}>
+              <select
+                value={c.mode}
+                onChange={(e) => setMode(c, e.target.value as CategoryMode)}
+                className="text-[9px] bg-gray-800 text-gray-300 border border-gray-700 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500"
+                title="Mode de contribution au calcul"
+              >
+                <option value="include">Inclus dans le calcul</option>
+                <option value="exclude">Exclu du calcul</option>
+                <option value="reference">Référence (inclus)</option>
+                <option value="annotation">Annotation seulement</option>
+              </select>
+            </div>
           </div>
         )
       })}
@@ -202,6 +216,7 @@ export default function CategoriesManager({
             >
               <option value="include">Inclure</option>
               <option value="exclude">Exclure</option>
+              <option value="reference">Référence</option>
               <option value="annotation">Annotation</option>
             </select>
             <div className="flex gap-0.5">

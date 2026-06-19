@@ -266,7 +266,8 @@ export function filterDataByPeriods<T extends { t: number }>(
   // comportement vs l'appel à 4 arguments (défauts strictement inchangés).
   const adHocExcl = opts?.excludeCategoryIds ? new Set(opts.excludeCategoryIds) : null
   if (!periods || periods.length === 0 || !categories || categories.length === 0) return data
-  const incIds = new Set(categories.filter((c) => c.visible && c.mode === 'include').map((c) => c.id))
+  // 'reference' contribue au calcul comme 'include' (bruit de fond de référence).
+  const incIds = new Set(categories.filter((c) => c.visible && (c.mode === 'include' || c.mode === 'reference')).map((c) => c.id))
   const excIds = new Set(categories.filter((c) => c.visible && c.mode === 'exclude').map((c) => c.id))
   const includes: RangeMs[] = periods.filter((p) => incIds.has(p.categoryId)).map((p) => ({ startMs: p.startMs, endMs: p.endMs }))
   const excludes: RangeMs[] = periods

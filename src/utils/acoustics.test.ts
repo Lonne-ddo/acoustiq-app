@@ -152,6 +152,18 @@ describe('filterDataByPeriods — comportement par DÉFAUT (4 args, opts absent)
     expect(tsOf(out)).toEqual([60, 120]) // 0 et 200 hors [60,180)
   })
 
+  it('mode reference = whitelist comme include (contribue au calcul)', () => {
+    const data = pts([0, 60, 120, 200])
+    const out = filterDataByPeriods(data, D, [per('ref', 60, 180)], [cat('ref', 'reference')])
+    expect(tsOf(out)).toEqual([60, 120])
+  })
+
+  it("exclude fonctionne sur N'IMPORTE QUELLE catégorie (pas que « À exclure »)", () => {
+    const data = pts([0, 60, 90, 120])
+    const out = filterDataByPeriods(data, D, [per('trafic', 60, 120)], [cat('trafic', 'exclude')])
+    expect(tsOf(out)).toEqual([0, 120]) // 60 et 90 retirés
+  })
+
   it('mode exclude = blacklist (retire les périodes exclues)', () => {
     const data = pts([0, 60, 90, 120, 180])
     const out = filterDataByPeriods(data, D, [per('exc', 60, 120)], cats)

@@ -6,6 +6,11 @@ import {
   computeL90,
   filterDataByPeriods,
   dpTimestampMs,
+  computeLaftm5,
+  computeKi9801,
+  computeKb9801,
+  analyzeKt9801,
+  analyzeKt,
 } from './acoustics'
 import type { Category, Period } from '../types'
 
@@ -179,5 +184,98 @@ describe('filterDataByPeriods — exclusion ad-hoc (opts.excludeCategoryIds)', (
     const data = pts([0, 60, 150, 200])
     const out = filterDataByPeriods(data, D, periods, cats, { excludeCategoryIds: new Set(['trafic']) })
     expect(tsOf(out)).toEqual([0, 60, 200])
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────
+// Correctifs Note 98-01 — Ki (LAFTM5), Kb, Kt 98-01
+// ─────────────────────────────────────────────────────────────────────────
+describe('computeLaftm5 — max glissant 5 s FORWARD (EQ-09 : MAX(J5:J9)) → moyenne énergétique', () => {
+  it('série constante → LAFTM5 = la constante', () => {
+    expect(computeLaftm5([70, 70, 70, 70, 70])).toBe(70)
+  })
+
+  it('fenêtre FORWARD : un pic en fin remplit les fenêtres des 5 s précédentes', () => {
+    // Pic à l’index 4 : pour i ∈ [0..4], la fenêtre [i..i+4] contient l’index 4
+    // → tous les maxima = 80.
+    expect(computeLaftm5([50, 50, 50, 50, 80])).toBe(80)
+  })
+
+  it('direction forward (pas trailing) : un pic en TÊTE ne remplit pas tout', () => {
+    // En trailing on obtiendrait 80 ; en forward seul i=0 voit le pic → < 80.
+    const v = computeLaftm5([80, 50, 50, 50, 50]) as number
+    expect(v).toBeLessThan(80)
+    expect(v).toBeGreaterThan(50)
+  })
+
+  it('fenêtre bornée à 5 s (forward)', () => {
+    // 6 échantillons, pic à l’index 5 : i=0 (fenêtre [0..4]) ne l’atteint pas
+    // → LAFTM5 < 80 (fenêtre bien limitée à 5 s).
+    const v = computeLaftm5([50, 50, 50, 50, 50, 80]) as number
+    expect(v).toBeLessThan(80)
+    expect(v).toBeGreaterThan(50)
+  })
+
+  it('série vide → null (Ki indisponible)', () => {
+    expect(computeLaftm5([])).toBeNull()
+    expect(computeLaftm5([NaN, Infinity])).toBeNull()
+  })
+})
+
+describe('computeKi9801 — Ki = LAFTM5 − LAeq, gate > 2', () => {
+  it('appliqué si > 2 dB', () => {
+    expect(computeKi9801(70, 65)).toBe(5)
+  })
+  it('non appliqué si ≤ 2 dB → 0', () => {
+    expect(computeKi9801(66, 65)).toBe(0)
+    expect(computeKi9801(67, 65)).toBe(0) // exactement 2 → non appliqué
+  })
+  it('null si LAFTM5 indisponible', () => {
+    expect(computeKi9801(null, 65)).toBeNull()
+  })
+  it('chaîne complète depuis le LAFmax 1 s', () => {
+    const laftm5 = computeLaftm5([50, 50, 50, 50, 80]) // forward : = 80
+    expect(computeKi9801(laftm5, 60)).toBe(20)
+  })
+})
+
+describe('computeKb9801 — Kb = LCeq − LAeq, gate ≥ 20', () => {
+  it('différence brute si ≥ 20 dB', () => {
+    expect(computeKb9801(90, 65)).toBe(25)
+    expect(computeKb9801(85, 65)).toBe(20) // exactement 20 → appliqué
+  })
+  it('0 si < 20 dB', () => {
+    expect(computeKb9801(80, 65)).toBe(0)
+  })
+  it('null si LCeq absent', () => {
+    expect(computeKb9801(undefined, 65)).toBeNull()
+    expect(computeKb9801(null, 65)).toBeNull()
+  })
+})
+
+describe('analyzeKt9801 — seuils 15/8/5 + significativité ≤ 14,5', () => {
+  // Spectre LZeq de 24 bandes, plat à 50 dB, avec une émergence E sur la bande
+  // 160 Hz (index 5 de KT_BAND_FREQS).
+  const spec160 = (emergence: number) => {
+    const s = new Array(24).fill(50)
+    s[5] = 50 + emergence
+    return s
+  }
+
+  it('160 Hz exige 15 dB en 98-01 (vs 8 dB en MELCCFP 2026)', () => {
+    const s = spec160(10) // 10 dB : ≥ 8 (2026) mais < 15 (98-01)
+    expect(analyzeKt9801(s, 50).kt).toBe(0)   // 98-01 : non tonal
+    expect(analyzeKt(s, 50).kt).toBe(5)        // MELCCFP : tonal
+  })
+
+  it('160 Hz tonal en 98-01 si émergence ≥ 15', () => {
+    expect(analyzeKt9801(spec160(16), 50).kt).toBe(5)
+  })
+
+  it('significativité : exclu si (global − bande) > 14,5', () => {
+    // band 160 Hz : LAeq_band = (50+16) + A_WEIGHT[160](−13,4) = 52,6.
+    const s = spec160(16)
+    expect(analyzeKt9801(s, 65).kt).toBe(5)  // 65 − 52,6 = 12,4 ≤ 14,5 → significatif
+    expect(analyzeKt9801(s, 70).kt).toBe(0)  // 70 − 52,6 = 17,4 > 14,5 → exclu
   })
 })

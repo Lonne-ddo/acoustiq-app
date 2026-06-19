@@ -616,6 +616,112 @@ export function computeKi(laftEq: number, laeq: number): number {
   return ki > 2 ? ki : 0
 }
 
+/* ==========================================================================
+ *  TERMES CORRECTIFS — Note d'instruction 98-01 (formulaire EQ-09-BV-24)
+ *  Cadre DISTINCT des Lignes directrices MELCCFP 2026 ci-dessus : ne pas
+ *  confondre avec analyzeKt / computeKb / computeKi (cadre 2026).
+ * ========================================================================== */
+
+/**
+ * LAFTM5 — moyenne énergétique (dBAvg) du MAX GLISSANT sur 5 s du LAFmax 1 s.
+ *
+ * Conforme à EQ-09 : pour chaque seconde i, K = MAX(LAFmax sur i … i+4),
+ * soit la seconde courante + les 4 SUIVANTES (fenêtre FORWARD, tronquée à la
+ * fin), puis agrégation énergétique (laeqAvg) de toute la série des maxima.
+ *
+ * @returns null si la série est vide / sans valeur finie (⇒ Ki indisponible).
+ */
+export function computeLaftm5(lafmaxSeries: number[]): number | null {
+  const v = lafmaxSeries.filter((x) => Number.isFinite(x))
+  if (v.length === 0) return null
+  const rollingMax: number[] = []
+  for (let i = 0; i < v.length; i++) {
+    let m = -Infinity
+    const end = Math.min(v.length - 1, i + 4)
+    for (let j = i; j <= end; j++) if (v[j] > m) m = v[j]
+    rollingMax.push(m)
+  }
+  return laeqAvg(rollingMax)
+}
+
+/**
+ * Ki (Note 98-01) — terme correctif d'impulsivité.
+ *     Ki = LAFTM5 − LAeq    (appliqué uniquement si > 2 dBA)
+ *
+ * @param laftm5 issu de computeLaftm5 (null si LAFmax indisponible)
+ * @param laeq   LAeq énergétique de la période (dB(A))
+ * @returns la valeur Ki (0 si ≤ 2), ou null si laftm5 est null (indisponible).
+ */
+export function computeKi9801(laftm5: number | null, laeq: number): number | null {
+  if (laftm5 === null || !Number.isFinite(laeq)) return null
+  const ki = laftm5 - laeq
+  return ki > 2 ? ki : 0
+}
+
+/**
+ * Kb (Note 98-01) — terme correctif basses fréquences.
+ *     Kb = LCeq − LAeq      (signalé/appliqué si ≥ 20 dB)
+ * Différence brute (décision projet), 0 en deçà de 20.
+ *
+ * @returns la valeur Kb, ou null si lceq absent (⇒ Kb indisponible).
+ */
+export function computeKb9801(lceq: number | null | undefined, laeq: number): number | null {
+  if (lceq == null || !Number.isFinite(lceq) || !Number.isFinite(laeq)) return null
+  const d = lceq - laeq
+  return d >= 20 ? d : 0
+}
+
+/**
+ * Seuil d'émergence tonale Kt — Note 98-01 : 15 dB (50–160 Hz), 8 dB
+ * (200–400 Hz), 5 dB (500 Hz–10 kHz). (Diffère du Tableau 2 MELCCFP 2026 où
+ * 160 Hz relève déjà du seuil 8 — d'où une fonction séparée.)
+ */
+function ktThreshold9801(fc: number): number {
+  if (fc <= 160) return 15
+  if (fc <= 400) return 8
+  return 5
+}
+
+/**
+ * Analyse tonale Kt — Note 98-01 (variante SÉPARÉE de `analyzeKt` MELCCFP 2026).
+ *
+ * Identique dans la structure (Δ vs les deux voisines, A-weighting par bande),
+ * mais : seuils 15/8/5 via `ktThreshold9801` (160 Hz = 15) et significativité
+ * « (LAeq_global − LAeq_band) ≤ 14,5 dB » (exclu au-delà), au lieu du ≥ 15 dB
+ * du cadre 2026.
+ */
+export function analyzeKt9801(spectrum: number[], globalLAeq: number): KtAnalysis {
+  const bands: KtBandRow[] = []
+  if (!spectrum || spectrum.length === 0) {
+    return { bands, kt: 0, triggeringIndex: null }
+  }
+  const N = Math.min(KT_BAND_FREQS.length, spectrum.length)
+  for (let i = 0; i < N; i++) {
+    const freq = KT_BAND_FREQS[i]
+    const lzeq = spectrum[i]
+    const aw = A_WEIGHT[freq] ?? 0
+    const laeqBand = lzeq + aw
+    const threshold = ktThreshold9801(freq)
+    const diffPrev = i === 0 ? null : lzeq - spectrum[i - 1]
+    const diffNext = i === N - 1 ? null : lzeq - spectrum[i + 1]
+    const isBoundary = diffPrev === null || diffNext === null
+    // Significatif si (LAeq_global − LAeq_band) ≤ 14,5 ⇒ exclu strictement au-delà.
+    const excluded = Number.isFinite(globalLAeq) && globalLAeq - laeqBand > 14.5
+    const isTonal =
+      !isBoundary &&
+      (diffPrev as number) >= threshold &&
+      (diffNext as number) >= threshold &&
+      !excluded
+    bands.push({ freq, lzeq, laeqBand, diffPrev, diffNext, threshold, isBoundary, excluded, isTonal })
+  }
+  const triggering = bands.findIndex((b) => b.isTonal)
+  return {
+    bands,
+    kt: triggering >= 0 ? 5 : 0,
+    triggeringIndex: triggering >= 0 ? triggering : null,
+  }
+}
+
 /**
  * Niveau acoustique d'évaluation horaire LAr,1h selon les Lignes directrices
  * MELCCFP 2026 :

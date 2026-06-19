@@ -25,7 +25,8 @@ export interface DataPoint {
   t: number           // minutes depuis minuit
   laeq: number
   lceq?: number       // LCeq (pondération C) — utilisé pour le terme Kb
-  laftEq?: number     // LAImax / LAFTeq (proxy) — utilisé pour le terme Ki
+  laftEq?: number     // LAImax / LAFTeq (proxy) — utilisé pour le terme Ki (cadre 2026)
+  lafmax?: number     // LAFmax 1 s (Fast) — requis pour Ki (Note 98-01, LAFTM5)
   spectra?: number[]  // bandes tiers/octave LZeq si disponibles (aligné sur spectraFreqs)
   spectraMax?: number[] // LZFmax par bande (même ordre) si disponible
 }

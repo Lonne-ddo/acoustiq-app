@@ -4,7 +4,7 @@
 import * as XLSX from 'xlsx'
 import type { MeasurementFile, DataPoint } from '../types'
 import { findSummarySheet, findHistorySheet } from './parser821SE'
-import { detectFreqColumns, extractSpectrumRow } from '../utils/spectraColumns'
+import { detectFreqColumns, extractSpectrumRow, detectMetricColumn } from '../utils/spectraColumns'
 
 /**
  * Bandes 1/3 d'octave émises par le 831C dans les colonnes 41-67 (27 bandes
@@ -141,6 +141,10 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
   // on retombe sur le bloc positionnel historique 41–67 (LZeq).
   const headerRow0 = (rows[0] as unknown[] | undefined) ?? []
   const freqCols = detectFreqColumns(headerRow0)
+  // Colonne LAFmax 1 s (Fast) détectée par en-tête — requise pour le Ki 98-01
+  // (LAFTM5). Si absente, `lafmax` reste indéfini → Ki indisponible (jamais de
+  // proxy LAImax silencieux).
+  const lafmaxCol = detectMetricColumn(headerRow0, ['LAFmax', 'LAFMx', 'LAF Max', 'LAFMax'])
 
   const data: DataPoint[] = []
 
@@ -178,6 +182,14 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
     const laftNum = typeof laftVal === 'number' ? laftVal : parseFloat(String(laftVal))
     const laftEq = isNaN(laftNum) ? undefined : laftNum
 
+    // LAFmax 1 s (Fast) — détecté par en-tête (col variable). Requis pour Ki 98-01.
+    let lafmax: number | undefined
+    if (lafmaxCol != null) {
+      const lv = row[lafmaxCol]
+      const ln = typeof lv === 'number' ? lv : parseFloat(String(lv))
+      lafmax = Number.isFinite(ln) ? ln : undefined
+    }
+
     // Spectres : colonnes 1/3 (ou 1/1) LZeq détectées par en-tête, sinon bloc
     // positionnel historique 41–67 (LZeq, 6.3 Hz – 20 kHz).
     let spectra: number[] = []
@@ -198,6 +210,7 @@ export function parse831C(buffer: ArrayBuffer, fileName: string): MeasurementFil
       laeq,
       ...(lceq !== undefined ? { lceq } : {}),
       ...(laftEq !== undefined ? { laftEq } : {}),
+      ...(lafmax !== undefined ? { lafmax } : {}),
       ...(spectra.length > 0 ? { spectra } : {}),
       ...(spectraMax && spectraMax.length > 0 ? { spectraMax } : {}),
     })

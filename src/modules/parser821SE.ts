@@ -225,6 +225,7 @@ interface ColumnMap {
   laeqCol: number
   recordTypeCol: number  // -1 if not found
   lceqCol: number        // -1 if not found
+  lafmaxCol: number      // -1 if not found — LAFmax 1 s (Fast), pour Ki 98-01
   spectraStart: number   // -1 if not found
   spectraEnd: number     // -1 if not found
 }
@@ -254,6 +255,10 @@ function detectColumns(headers: string[]): ColumnMap {
   // LCeq (identical FR/EN)
   const lceqCol = h.findIndex((x) => x === 'lceq' || x.includes('lc eq'))
 
+  // LAFmax 1 s (Fast) — normalisé pour matcher « LAFmax » / « LAF max » /
+  // « LAF_max » sans confondre avec LAFmin / LASmax / LAImax / LZFmax.
+  const lafmaxCol = h.findIndex((x) => x.replace(/[\s_]+/g, '') === 'lafmax')
+
   // Spectra LZeq bands (contiguous block)
   let spectraStart = -1
   let spectraEnd = -1
@@ -270,7 +275,7 @@ function detectColumns(headers: string[]): ColumnMap {
     }
   }
 
-  return { timeCol, laeqCol, recordTypeCol, lceqCol, spectraStart, spectraEnd }
+  return { timeCol, laeqCol, recordTypeCol, lceqCol, lafmaxCol, spectraStart, spectraEnd }
 }
 
 // ---------------------------------------------------------------------------
@@ -412,6 +417,13 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
       return Number.isFinite(n) ? n : undefined
     })() : undefined
 
+    // LAFmax 1 s optionnel (Ki 98-01)
+    const lafmax = cols.lafmaxCol >= 0 ? (() => {
+      const v = row[cols.lafmaxCol]
+      const n = typeof v === 'number' ? v : parseFloat(String(v))
+      return Number.isFinite(n) ? n : undefined
+    })() : undefined
+
     // Spectres : colonnes 1/3 (ou 1/1) LZeq détectées par en-tête, sinon bloc
     // « LZeq… » / positions fixes (fallback historique).
     let spectra: number[] = []
@@ -431,6 +443,7 @@ export function parse821SE(buffer: ArrayBuffer, fileName: string): MeasurementFi
       t,
       laeq,
       ...(lceq !== undefined ? { lceq } : {}),
+      ...(lafmax !== undefined ? { lafmax } : {}),
       ...(spectra.length > 0 ? { spectra } : {}),
       ...(spectraMax && spectraMax.length > 0 ? { spectraMax } : {}),
     })

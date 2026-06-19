@@ -52,6 +52,27 @@ export function parseSpectrumColumn(header: unknown): { type: SpectrumColType | 
   return { type: null, freq: null }
 }
 
+/**
+ * Cherche l'index de colonne d'une métrique large bande (LAeq, LAFmax, LCeq…)
+ * par NOM d'en-tête. La comparaison ignore la casse et toute ponctuation /
+ * espace (« LAF Max », « LAF_max », « LAFmax » → identiques). Les en-têtes de
+ * spectre (suffixés d'une fréquence, « LZFmax 1000 ») ne matchent jamais.
+ *
+ * @param headers ligne d'en-têtes
+ * @param aliases variantes acceptées de la métrique
+ * @returns 1er index de colonne correspondant, ou null
+ */
+export function detectMetricColumn(headers: unknown[], aliases: string[]): number | null {
+  const norm = (s: string) => s.toLowerCase().replace(/[\s_./()-]+/g, '')
+  const want = new Set(aliases.map(norm))
+  for (let c = 0; c < headers.length; c++) {
+    const h = headers[c]
+    if (h == null) continue
+    if (want.has(norm(String(h)))) return c
+  }
+  return null
+}
+
 export interface FreqColumns {
   /** Indices de colonnes du jeu Leq, triés par fréquence croissante. */
   cols: number[]

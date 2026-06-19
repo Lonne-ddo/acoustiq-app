@@ -16,6 +16,10 @@ import {
   computeLAFmax,
   computeLAFmin,
   detectKt,
+  computeLaftm5,
+  computeKi9801,
+  computeKb9801,
+  analyzeKt9801,
   filterDataByPeriods,
 } from '../utils/acoustics'
 
@@ -173,6 +177,46 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         return [pt, detectKt(avgSpec, laeqA)]
       }),
     ) as Record<string, ReturnType<typeof detectKt> | null>
+  }, [files, pointMap, selectedDate, pointNames, mode, startTime, endTime, periods, categories, excludedCatIds])
+
+  // Correctifs Note 98-01 (Kt / Ki / Kb) par point — cadre DISTINCT du 2026,
+  // calculés sur la même fenêtre filtrée que les autres indices. Chaque terme
+  // peut être null = « indisponible » (donnée source absente) plutôt qu'un
+  // chiffre faux : Ki sans LAFmax, Kb sans LCeq, Kt sans spectre.
+  const corr9801ByPoint = useMemo(() => {
+    const startMin = mode === 'custom' ? hhmmToMin(startTime) : -Infinity
+    const endMin = mode === 'custom' ? hhmmToMin(endTime) : Infinity
+    return Object.fromEntries(
+      pointNames.map((pt) => {
+        const dps = files
+          .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
+          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
+          .filter((dp) => dp.t >= startMin && dp.t <= endMin)
+        if (dps.length === 0) return [pt, null]
+        const laeqWin = laeqAvg(dps.map((d) => d.laeq))
+
+        // Kb = LCeq − LAeq (énergétiques). null si aucun LCeq parsé.
+        const lceqVals = dps.map((d) => d.lceq).filter((v): v is number => typeof v === 'number')
+        const kb = lceqVals.length > 0 ? computeKb9801(laeqAvg(lceqVals), laeqWin) : null
+
+        // Ki = LAFTM5 − LAeq. null si aucun LAFmax 1 s parsé.
+        const lafVals = dps.map((d) => d.lafmax).filter((v): v is number => typeof v === 'number')
+        const ki = lafVals.length > 0 ? computeKi9801(computeLaftm5(lafVals), laeqWin) : null
+
+        // Kt 98-01 sur le spectre moyen énergétique par bande. null si pas de spectre.
+        const specs = dps.map((d) => d.spectra).filter((s): s is number[] => !!s)
+        let kt: number | null = null
+        if (specs.length > 0) {
+          const nBands = specs[0].length
+          const avgSpec = new Array(nBands).fill(0).map((_, i) =>
+            laeqAvg(specs.map((s) => s[i]).filter((v) => typeof v === 'number')),
+          )
+          kt = analyzeKt9801(avgSpec, laeqWin).kt
+        }
+
+        return [pt, { kt, ki, kb }]
+      }),
+    ) as Record<string, { kt: number | null; ki: number | null; kb: number | null } | null>
   }, [files, pointMap, selectedDate, pointNames, mode, startTime, endTime, periods, categories, excludedCatIds])
 
   // Calcul des indices par point
@@ -575,6 +619,69 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
             </tr>
           </tbody>
         </table>
+      </div>
+
+      {/* Correctifs Note 98-01 (Kt / Ki / Kb) — sous-section DISTINCTE du
+          cadre MELCCFP 2026. Termes affichés séparément (pas de niveau combiné). */}
+      <div className="border-t border-gray-800">
+        <div className="flex items-center gap-2 px-4 py-2">
+          <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
+            Correctifs 98-01
+          </span>
+          <HelpTooltip
+            text="Termes correctifs de la Note d'instruction 98-01 (formulaire EQ-09). Kt tonal (seuils 15/8/5 dB ; significatif si écart global−bande ≤ 14,5 dB). Ki = LAFTM5 − LAeq (LAFTM5 = moyenne énergétique du max glissant 5 s du LAFmax 1 s ; appliqué si > 2 dB). Kb = LCeq − LAeq (signalé si ≥ 20 dB). Cadre distinct des Lignes directrices MELCCFP 2026."
+            position="right"
+          />
+        </div>
+        <div className="overflow-x-auto px-4 pb-3">
+          <table className="w-full text-xs">
+            <thead>
+              <tr className="border-b border-gray-800/60">
+                <th className="text-left px-2 py-1 text-gray-500 font-medium w-32">Terme</th>
+                {pointNames.map((pt, i) => (
+                  <th key={pt} className="px-2 py-1 font-semibold text-center" style={{ color: ptColor(pt, i) }}>
+                    {pt}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {([
+                { key: 'kt', label: 'Kt — tonal' },
+                { key: 'ki', label: 'Ki — impulsif' },
+                { key: 'kb', label: 'Kb — basses fréq.' },
+              ] as const).map((row, ri) => (
+                <tr key={row.key} className={ri % 2 === 0 ? 'bg-gray-900' : 'bg-gray-850'}>
+                  <td className="px-2 py-1 text-gray-400 font-medium">{row.label}</td>
+                  {pointNames.map((pt) => {
+                    const c = corr9801ByPoint[pt]
+                    const v = c ? c[row.key] : null
+                    if (v === null || v === undefined) {
+                      return (
+                        <td
+                          key={pt}
+                          className="px-2 py-1 text-center text-gray-700"
+                          title="Donnée source absente — Ki : LAFmax 1 s ; Kb : LCeq ; Kt : spectre 1/3 d'octave"
+                        >
+                          indispo.
+                        </td>
+                      )
+                    }
+                    const applied = v > 0
+                    return (
+                      <td
+                        key={pt}
+                        className={`px-2 py-1 text-center tabular-nums ${applied ? 'text-orange-400' : 'text-gray-300'}`}
+                      >
+                        {v.toFixed(1)} dB
+                      </td>
+                    )
+                  })}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
 
       {/* Périodes MELCCFP — Ljour / Lsoir / Lnuit */}

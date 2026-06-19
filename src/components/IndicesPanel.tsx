@@ -23,6 +23,8 @@ import {
   analyzeKt9801,
   leqOnRegPeriod,
   type RegPeriodLeq,
+  leqByClockHour,
+  dayEnergyDistribution,
   filterDataByPeriods,
 } from '../utils/acoustics'
 
@@ -331,6 +333,40 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         }
         sheet2.push(line)
       }
+
+      // Répartition journée + Leq24h (EQ-09 « Repartition-journée »).
+      const dayByPt = Object.fromEntries(
+        pointNames.map((pt) => {
+          const data = files
+            .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
+            .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
+          const hourly = leqByClockHour(data)
+          return [pt, { hourly, dist: dayEnergyDistribution(hourly) }]
+        }),
+      ) as Record<string, { hourly: ReturnType<typeof leqByClockHour>; dist: ReturnType<typeof dayEnergyDistribution> }>
+      sheet2.push([])
+      sheet2.push(['Leq24h — dB(A) (24 h d’horloge présentes requis)', ...pointNames])
+      sheet2.push(['Leq24h', ...pointNames.map((pt) => {
+        const d = dayByPt[pt].dist
+        return d.leq24h !== null ? round1(d.leq24h) : `indispo. (${d.hoursPresent}/24 h)`
+      })])
+      sheet2.push(['Couverture 24 h', ...pointNames.map((pt) => {
+        const d = dayByPt[pt].dist
+        return `${d.coveredMin}/1440 (${Math.round(Math.min(1, d.coveredMin / 1440) * 100)}%)`
+      })])
+      sheet2.push([])
+      sheet2.push(['Répartition horaire — Leq1h dB(A) (part %)', ...pointNames])
+      for (let h = 0; h < 24; h++) {
+        const line: Array<string | number> = [`${String(h).padStart(2, '0')}h`]
+        for (const pt of pointNames) {
+          const { hourly, dist } = dayByPt[pt]
+          const leq = hourly[h].leq
+          const part = dist.parts[h]
+          line.push(leq !== null ? `${round1(leq)} (${part !== null ? (part * 100).toFixed(1) : '—'}%)` : '')
+        }
+        sheet2.push(line)
+      }
+
       sheet2.push([])
       sheet2.push(['Généré par AcoustiQ — https://acoustiq-app.pages.dev'])
       const wsPeriodes = XLSX.utils.aoa_to_sheet(sheet2)
@@ -768,6 +804,17 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         </div>
       </div>
 
+      {/* Répartition journée + Leq24h (sous-bloc des périodes réglementaires) */}
+      <DayDistributionSection
+        files={files}
+        pointMap={pointMap}
+        selectedDate={selectedDate}
+        pointNames={pointNames}
+        periods={periods}
+        categories={categories}
+        excludedCatIds={excludedCatIds}
+      />
+
       {/* Distribution L1..L99 par point */}
       <DistributionSection
         files={files}
@@ -951,6 +998,126 @@ function DistributionMini({
             </g>
           )
         })}
+      </svg>
+    </div>
+  )
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// DayDistributionSection — répartition énergétique 24 h + Leq24h (EQ-09)
+// ────────────────────────────────────────────────────────────────────────────
+function DayDistributionSection({
+  files, pointMap, selectedDate, pointNames, periods, categories, excludedCatIds,
+}: {
+  files: MeasurementFile[]
+  pointMap: Record<string, string>
+  selectedDate: string
+  pointNames: string[]
+  periods?: Period[]
+  categories?: Category[]
+  excludedCatIds: Set<string>
+}) {
+  const [showSection, setShowSection] = useState(true)
+
+  const dayByPoint = useMemo(() => {
+    return pointNames.map((pt) => {
+      // Journée ENTIÈRE (le Leq24h est un concept 24 h, pas de plage perso),
+      // en respectant le filtrage par période nommée + exclusion à la volée.
+      const data = files
+        .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
+        .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
+      const hourly = leqByClockHour(data)
+      return { pt, dist: dayEnergyDistribution(hourly) }
+    })
+  }, [files, pointMap, selectedDate, pointNames, periods, categories, excludedCatIds])
+
+  if (pointNames.length === 0) return null
+
+  return (
+    <div className="border-t border-gray-800">
+      <button
+        onClick={() => setShowSection(!showSection)}
+        className="flex items-center gap-2 px-4 py-2 w-full text-left hover:bg-gray-800/50 transition-colors"
+      >
+        <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">Répartition journée</span>
+        <HelpTooltip
+          text={'Répartition énergétique par heure d’horloge et Leq24h (EQ-09 « Repartition-journée »).\n\nLeq24h = 10·log10(Σ 10^(Leq1h/10) / 24), calculé uniquement si les 24 heures d’horloge sont présentes (sinon « indispo. »). Le % indique la couverture 24 h (ambre si < 95 %).'}
+          position="right"
+        />
+        <ChevronRight size={12} className={`text-gray-600 transition-transform ${showSection ? 'rotate-90' : ''}`} />
+      </button>
+
+      {showSection && (
+        <div className="px-4 pb-3 animate-[fadeIn_0.15s_ease-out]">
+          <div className="flex gap-3 overflow-x-auto">
+            {dayByPoint.map(({ pt, dist }, i) => (
+              <DayDistributionMini key={pt} pointName={pt} color={ptColor(pt, i)} dist={dist} />
+            ))}
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/** Mini : Leq24h + couverture 24 h + 24 barres de répartition énergétique horaire. */
+function DayDistributionMini({
+  pointName, color, dist,
+}: {
+  pointName: string
+  color: string
+  dist: { parts: (number | null)[]; leq24h: number | null; hoursPresent: number; coveredMin: number }
+}) {
+  const W = 240, H = 84, PAD_L = 4, PAD_R = 4, PAD_T = 4, PAD_B = 14
+  const plotW = W - PAD_L - PAD_R
+  const plotH = H - PAD_T - PAD_B
+  const barW = plotW / 24
+  const maxPart = Math.max(0.0001, ...dist.parts.map((p) => p ?? 0))
+  const coverage = Math.min(1, dist.coveredMin / 1440)
+  const pct = Math.round(coverage * 100)
+  const partial = coverage < 0.95
+  const has24 = dist.hoursPresent === 24
+
+  return (
+    <div className="shrink-0">
+      <div className="flex items-center gap-1.5 mb-0.5">
+        <span className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
+        <span className="text-[10px] font-semibold" style={{ color }}>{pointName}</span>
+        <span className="text-[10px] text-gray-400 tabular-nums">
+          Leq24h{' '}
+          {has24 && dist.leq24h !== null ? (
+            <span className="font-mono text-gray-200">{dist.leq24h.toFixed(1)} dB(A)</span>
+          ) : (
+            <span className="text-gray-500">indispo. ({dist.hoursPresent}/24 h)</span>
+          )}
+        </span>
+        <span
+          className={`text-[10px] ${partial ? 'text-amber-400' : 'text-gray-600'}`}
+          title={`Couverture 24 h : ${dist.coveredMin}/1440 min`}
+        >
+          · {pct}%
+        </span>
+      </div>
+      <svg width={W} height={H} className="block" style={{ background: '#0b1220', borderRadius: 4 }}>
+        {dist.parts.map((p, h) => {
+          const bh = ((p ?? 0) / maxPart) * plotH
+          const x = PAD_L + h * barW
+          const isPeak = p !== null && p >= maxPart * 0.6
+          return (
+            <rect
+              key={h}
+              x={x}
+              y={PAD_T + (plotH - bh)}
+              width={Math.max(0.8, barW - 0.6)}
+              height={Math.max(0, bh)}
+              fill={color}
+              fillOpacity={p === null ? 0.12 : isPeak ? 1 : 0.45}
+            />
+          )
+        })}
+        {[0, 6, 12, 18].map((h) => (
+          <text key={h} x={PAD_L + h * barW} y={H - 3} fontSize={8} fill="#6b7280">{h}h</text>
+        ))}
       </svg>
     </div>
   )

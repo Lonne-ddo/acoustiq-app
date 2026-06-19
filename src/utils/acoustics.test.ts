@@ -13,6 +13,8 @@ import {
   analyzeKt9801,
   analyzeKt,
   leqOnRegPeriod,
+  leqByClockHour,
+  dayEnergyDistribution,
 } from './acoustics'
 import type { Category, Period } from '../types'
 
@@ -354,5 +356,62 @@ describe('leqOnRegPeriod — Leq période + couverture', () => {
   it('plusieurs échantillons dans la même minute = 1 minute couverte', () => {
     const data = [s(480, 50), s(480.5, 50), s(480.99, 50)]
     expect(leqOnRegPeriod(data, 7, 19).coveredMin).toBe(1)
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────
+// leqByClockHour / dayEnergyDistribution — répartition journée + Leq24h
+// ─────────────────────────────────────────────────────────────────────────
+describe('leqByClockHour / dayEnergyDistribution', () => {
+  const s = (t: number, laeq: number) => ({ t, laeq })
+  /** 1 échantillon par heure d'horloge, niveau donné par heure. */
+  const fullDay = (perHour: number[]) => perHour.map((l, h) => s(h * 60, l))
+
+  it('leqByClockHour : Leq énergétique + couverture par heure', () => {
+    const hourly = leqByClockHour([s(480, 50), s(480.5, 50), s(9 * 60, 70)])
+    expect(hourly).toHaveLength(24)
+    expect(hourly[8].leq).toBe(50)
+    expect(hourly[8].coveredMin).toBe(1) // même minute → 1
+    expect(hourly[9].leq).toBe(70)
+    expect(hourly[0].leq).toBeNull()
+  })
+
+  it('Σ parts = 1 (à l’arrondi) sur les heures présentes', () => {
+    const dist = dayEnergyDistribution(leqByClockHour(fullDay(Array(24).fill(60))))
+    const sum = dist.parts.reduce<number>((a, p) => a + (p ?? 0), 0)
+    expect(sum).toBeCloseTo(1, 6)
+    expect(dist.parts.every((p) => p !== null)).toBe(true)
+  })
+
+  it('Leq24h = 10·log10(moyenne des énergies horaires) si 24 h présentes', () => {
+    const dist = dayEnergyDistribution(leqByClockHour(fullDay(Array(24).fill(60))))
+    expect(dist.hoursPresent).toBe(24)
+    expect(dist.leq24h).toBeCloseTo(60, 6) // toutes à 60 → Leq24h = 60
+  })
+
+  it('Leq24h pondère énergétiquement (une heure forte domine)', () => {
+    const perHour = Array(24).fill(60); perHour[0] = 70
+    const dist = dayEnergyDistribution(leqByClockHour(fullDay(perHour)))
+    // Σ H = 1e7 + 23·1e6 = 33e6 → Leq24h = 10·log10(33e6/24) ≈ 61,38
+    expect(dist.leq24h).toBeCloseTo(61.38, 1)
+    expect(dist.parts[0]).toBeCloseTo(1e7 / 33e6, 5)
+  })
+
+  it('partiel (< 24 h) → leq24h null, hoursPresent correct, heure vide → part null', () => {
+    const data = fullDay(Array(24).fill(60)).filter((d) => d.t !== 5 * 60) // retire l’heure 5
+    const dist = dayEnergyDistribution(leqByClockHour(data))
+    expect(dist.hoursPresent).toBe(23)
+    expect(dist.leq24h).toBeNull()
+    expect(dist.parts[5]).toBeNull()
+  })
+
+  it('couverture globale = somme des minutes couvertes', () => {
+    const data = [
+      ...Array.from({ length: 60 }, (_, i) => s(8 * 60 + i, 55)), // heure 8 pleine
+      s(9 * 60, 55), // heure 9 : 1 min
+    ]
+    const dist = dayEnergyDistribution(leqByClockHour(data))
+    expect(dist.coveredMin).toBe(61)
+    expect(dist.hoursPresent).toBe(2)
   })
 })

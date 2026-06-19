@@ -342,6 +342,67 @@ export function leqOnRegPeriod(
   }
 }
 
+/** Leq énergétique + couverture d'une heure d'horloge. */
+export interface ClockHourLeq {
+  /** Heure d'horloge 0..23. */
+  hour: number
+  /** Moyenne énergétique des LAeq de l'heure, null si aucun échantillon. */
+  leq: number | null
+  /** Minutes distinctes (floor(t)) couvertes dans l'heure (0..60). */
+  coveredMin: number
+}
+
+/**
+ * Leq par HEURE D'HORLOGE (moyenne énergétique), sur 24 h. Brique réutilisable
+ * (répartition journée / Leq24h, et future feature « courbes horaires »).
+ * `t` en minutes depuis minuit ; heure = floor(t/60) mod 24.
+ */
+export function leqByClockHour(data: { t: number; laeq: number }[]): ClockHourLeq[] {
+  const vals: number[][] = Array.from({ length: 24 }, () => [])
+  const minutes: Array<Set<number>> = Array.from({ length: 24 }, () => new Set())
+  for (const d of data) {
+    if (!Number.isFinite(d.laeq) || !Number.isFinite(d.t)) continue
+    const h = ((Math.floor(d.t / 60) % 24) + 24) % 24
+    vals[h].push(d.laeq)
+    minutes[h].add(Math.floor(d.t))
+  }
+  return Array.from({ length: 24 }, (_, h) => ({
+    hour: h,
+    leq: vals[h].length > 0 ? laeqAvg(vals[h]) : null,
+    coveredMin: minutes[h].size,
+  }))
+}
+
+/** Répartition énergétique de la journée + Leq24h (EQ-09 « Repartition-journée »). */
+export interface DayDistribution {
+  /** Part de l'énergie journalière par heure (Σ = 1 sur les heures présentes) ; null si heure vide. */
+  parts: (number | null)[]
+  /** Leq24h = 10·log10(Σ Hi / 24). null sauf si les 24 heures sont présentes. */
+  leq24h: number | null
+  /** Nombre d'heures d'horloge présentes (0..24). */
+  hoursPresent: number
+  /** Total de minutes distinctes couvertes sur la journée (0..1440). */
+  coveredMin: number
+}
+
+/**
+ * Répartition énergétique + Leq24h à partir des 24 Leq horaires.
+ *   Hi = 10^(Leq1h_i/10) ; part_i = Hi / Σ Hj ; Leq24h = 10·log10(Σ Hi / 24).
+ * Conformément à EQ-09, le Leq24h DIRECT n'est défini que si les 24 heures
+ * d'horloge sont présentes (sinon null → relevé partiel, extrapolation future).
+ */
+export function dayEnergyDistribution(hourly: ClockHourLeq[]): DayDistribution {
+  const energies = hourly.map((h) =>
+    h.leq !== null && Number.isFinite(h.leq) ? Math.pow(10, h.leq / 10) : null,
+  )
+  const sumE = energies.reduce<number>((a, e) => a + (e ?? 0), 0)
+  const parts = energies.map((e) => (e !== null && sumE > 0 ? e / sumE : null))
+  const hoursPresent = energies.filter((e) => e !== null).length
+  const coveredMin = hourly.reduce((a, h) => a + Math.min(60, h.coveredMin), 0)
+  const leq24h = hoursPresent === 24 ? 10 * Math.log10(sumE / 24) : null
+  return { parts, leq24h, hoursPresent, coveredMin }
+}
+
 /**
  * Percentile STATISTIQUE `p` (0–100) d'un tableau de niveaux en dB, tri
  * croissant : computePercentile(v, 90) = 90e percentile = valeur HAUTE

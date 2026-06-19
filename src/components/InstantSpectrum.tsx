@@ -49,6 +49,9 @@ interface Props {
   height: number
   /** Masquage de points (partagé avec le graphique). */
   hiddenPoints?: string[]
+  /** Mode embarqué : masque l'en-tête repliable propre (toujours déplié, remplit
+   *  le parent). Utilisé quand un conteneur externe fournit déjà l'en-tête/onglet. */
+  hideHeader?: boolean
 }
 
 function isoFromMs(ms: number): string {
@@ -72,9 +75,11 @@ function fmtClock(tMin: number, withSec = true): string {
 
 export default function InstantSpectrum({
   files, pointMap, selectedDate, availableDates, multiDay,
-  audioPlayheadMin, audioPlaying, periods, height, hiddenPoints,
+  audioPlayheadMin, audioPlaying, periods, height, hiddenPoints, hideHeader,
 }: Props) {
   const [open, setOpen] = useState(true)
+  // En mode embarqué (onglet externe), toujours déplié et sans en-tête propre.
+  const expanded = hideHeader ? true : open
   // Survol du graphique LAeq reçu via CustomEvent (throttle rAF côté chart) —
   // isolé ici pour ne pas re-rendre le graphique principal. Au mouseleave
   // (detail null), on temporise 500 ms avant de revenir au spectre moyen, pour
@@ -417,19 +422,26 @@ export default function InstantSpectrum({
   const periodOptions = useMemo(() => periods.filter((p) => p.name), [periods])
 
   return (
-    <div className="border-t border-gray-800 bg-gray-900/40 flex flex-col" style={{ height: open ? height : undefined }}>
-      {/* En-tête collapsible */}
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="w-full flex items-center gap-2 px-4 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-800/60 transition-colors shrink-0"
-        aria-expanded={open}
-      >
-        {open ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
-        <span className="font-semibold uppercase tracking-wider">Spectre instantané</span>
-        <span className="text-gray-600 normal-case font-normal truncate">— {title}</span>
-      </button>
+    <div
+      className={hideHeader
+        ? 'flex flex-col h-full'
+        : 'border-t border-gray-800 bg-gray-900/40 flex flex-col'}
+      style={hideHeader ? undefined : { height: open ? height : undefined }}
+    >
+      {/* En-tête collapsible propre — masqué en mode embarqué */}
+      {!hideHeader && (
+        <button
+          onClick={() => setOpen((v) => !v)}
+          className="w-full flex items-center gap-2 px-4 py-1.5 text-xs text-gray-400 hover:text-gray-200 hover:bg-gray-800/60 transition-colors shrink-0"
+          aria-expanded={open}
+        >
+          {open ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
+          <span className="font-semibold uppercase tracking-wider">Spectre instantané</span>
+          <span className="text-gray-600 normal-case font-normal truncate">— {title}</span>
+        </button>
+      )}
 
-      {open && (
+      {expanded && (
         <>
           {/* Barre de contrôle */}
           <div className="flex items-center gap-2 flex-wrap px-4 py-1 border-b border-gray-800/60 shrink-0 text-[10px]">

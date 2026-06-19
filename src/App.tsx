@@ -22,7 +22,6 @@ import {
   Plus,
   Loader2,
   ChevronDown,
-  ChevronUp,
   GitCompare,
   ClipboardCheck,
   Volume2,
@@ -1278,8 +1277,8 @@ interface MainPanelProps {
   onConformiteSummaryChange: (summary: ConformiteSummary | null) => void
   aggregationSeconds: number
   onAggregationChange: (s: number) => void
-  spectrogramExpanded: boolean
-  onSpectrogramToggle: () => void
+  spectroTab: 'spectrogram' | 'spectrum'
+  onSpectroTabChange: (t: 'spectrogram' | 'spectrum') => void
   onAddEvent: (event: SourceEvent) => void
   mapImage: string | null
   onMapImageChange: (image: string | null) => void
@@ -1355,7 +1354,7 @@ function MainPanel({
   projectName, recentProjects, settings,
   conformiteSummary, onConformiteSummaryChange,
   aggregationSeconds, onAggregationChange,
-  spectrogramExpanded, onSpectrogramToggle, onAddEvent,
+  spectroTab, onSpectroTabChange, onAddEvent,
   mapImage, onMapImageChange, mapMarkers, onMapMarkersChange,
   overlayDate, onOverlayDateChange, candidates,
   annotations, pendingAnnotationText,
@@ -1816,92 +1815,97 @@ function MainPanel({
                 </>
               )}
 
-              {/* Spectrogramme embarqué (collapsible, hauteur en px mémorisée) */}
-              <div
-                className="border-t border-gray-800 bg-gray-900/40 flex flex-col shrink-0"
-                style={{ height: spectrogramExpanded ? spectrogramHeight + 28 /* header */ : undefined }}
-              >
-                <button
-                  onClick={onSpectrogramToggle}
-                  className="w-full flex items-center gap-2 px-6 py-1.5 text-xs text-gray-400
-                             hover:text-gray-200 hover:bg-gray-800/60 transition-colors shrink-0"
-                  aria-expanded={spectrogramExpanded}
-                >
-                  {spectrogramExpanded ? <ChevronDown size={12} /> : <ChevronUp size={12} />}
-                  <Layers size={12} />
-                  <span className="font-semibold uppercase tracking-wider">Spectrogramme</span>
-                  <span className="text-gray-600 normal-case font-normal">
-                    — synchronisé avec le graphique ({spectrogramHeight}px)
-                  </span>
-                </button>
-                {spectrogramExpanded && (
-                  <div className="flex-1 min-h-0" style={{ minHeight: SPECTRO_MIN }}>
-                    <Spectrogram
-                      files={visibleChartFiles}
-                      pointMap={pointMap}
-                      selectedDate={selectedDate}
-                      availableDates={availableDates}
-                      onDateChange={onDateChange}
-                      events={events}
-                      periods={periods}
-                      categories={categories}
-                      zoomRange={zoomRange}
-                      onZoomChange={onZoomChange}
-                      aggregationSeconds={aggregationSeconds}
-                      compact
-                      height={spectrogramHeight}
-                      multiDay={availableDates.length > 1 && !overlayDate}
-                      playheadMin={(() => {
-                        const a = audioEntries.find((e) => e.id === audioSync.activeEntryId)
-                        if (!a || audioSync.currentMin === null) return null
-                        const isMulti = availableDates.length > 1 && !overlayDate
-                        const offset = isMulti
-                          ? Math.max(0, availableDates.indexOf(a.date)) * 1440
-                          : 0
-                        return offset + audioSync.currentMin
-                      })()}
-                    />
-                  </div>
-                )}
-              </div>
+              {/* Spectrogramme / Spectre — section unique à ONGLETS sous l'audio.
+                  Une seule vue est montée à la fois → les contrôles d'en-tête de
+                  chaque composant deviennent contextuels. overflow-hidden = aucun
+                  scroll vertical. En présentation : verrouillé sur Spectrogramme. */}
+              {(() => {
+                const effTab = presentationMode ? 'spectrogram' : spectroTab
+                const activeHeight = effTab === 'spectrogram' ? spectrogramHeight : spectrumHeight
+                return (
+                  <>
+                    <div
+                      className="border-t border-gray-800 bg-gray-900/40 flex flex-col shrink-0 overflow-hidden"
+                      style={{ height: activeHeight + 30 /* en-tête onglets */ }}
+                    >
+                      {/* En-tête : toggle 2 onglets (figé en présentation) */}
+                      <div className="flex items-center gap-2 px-6 py-1 shrink-0">
+                        <Layers size={12} className="text-gray-400 shrink-0" />
+                        {presentationMode ? (
+                          <span className="text-xs font-semibold uppercase tracking-wider text-gray-300">Spectrogramme</span>
+                        ) : (
+                          <div className="flex rounded-md border border-gray-700 overflow-hidden">
+                            {([
+                              { id: 'spectrogram', label: 'Spectrogramme' },
+                              { id: 'spectrum', label: 'Spectre' },
+                            ] as const).map(({ id, label }) => (
+                              <button
+                                key={id}
+                                onClick={() => onSpectroTabChange(id)}
+                                aria-pressed={spectroTab === id}
+                                className={`text-[11px] font-semibold uppercase tracking-wider px-2.5 py-0.5 transition-colors ${
+                                  spectroTab === id ? 'bg-emerald-700 text-white' : 'bg-gray-800 text-gray-400 hover:text-gray-200'
+                                }`}
+                              >
+                                {label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                        <span className="text-gray-600 text-xs normal-case truncate">— synchronisé avec le graphique</span>
+                      </div>
 
-              {/* Poignée — redimensionne le spectrogramme */}
-              {spectrogramExpanded && (
-                <div
-                  className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
-                  onMouseDown={(e) => startPanelResize(e, spectrogramHeight, setSpectrogramHeight, SPECTRO_MIN, SPECTRO_MAX)}
-                  title="Glisser pour agrandir/réduire le spectrogramme"
-                >
-                  <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
-                </div>
-              )}
+                      {/* Contenu : seul le composant de l'onglet actif est monté */}
+                      <div className="flex-1 min-h-0 overflow-hidden">
+                        {effTab === 'spectrogram' ? (
+                          <Spectrogram
+                            files={visibleChartFiles}
+                            pointMap={pointMap}
+                            selectedDate={selectedDate}
+                            availableDates={availableDates}
+                            onDateChange={onDateChange}
+                            events={events}
+                            periods={periods}
+                            categories={categories}
+                            zoomRange={zoomRange}
+                            onZoomChange={onZoomChange}
+                            aggregationSeconds={aggregationSeconds}
+                            compact
+                            height={spectrogramHeight}
+                            multiDay={availableDates.length > 1 && !overlayDate}
+                            playheadMin={audioPlayheadAbsMin}
+                          />
+                        ) : (
+                          <InstantSpectrum
+                            files={visibleChartFiles}
+                            pointMap={pointMap}
+                            selectedDate={selectedDate}
+                            availableDates={availableDates}
+                            multiDay={availableDates.length > 1 && !overlayDate}
+                            audioPlayheadMin={audioPlayheadAbsMin}
+                            audioPlaying={audioSync.playing}
+                            periods={periods}
+                            height={spectrumHeight}
+                            hiddenPoints={[...hiddenPoints]}
+                            hideHeader
+                          />
+                        )}
+                      </div>
+                    </div>
 
-              {/* Spectre instantané + poignée de redimensionnement en dessous */}
-              {!presentationMode && (
-                <>
-                  <div className="shrink-0">
-                    <InstantSpectrum
-                      files={visibleChartFiles}
-                      pointMap={pointMap}
-                      selectedDate={selectedDate}
-                      availableDates={availableDates}
-                      multiDay={availableDates.length > 1 && !overlayDate}
-                      audioPlayheadMin={audioPlayheadAbsMin}
-                      audioPlaying={audioSync.playing}
-                      periods={periods}
-                      height={spectrumHeight}
-                      hiddenPoints={[...hiddenPoints]}
-                    />
-                  </div>
-                  <div
-                    className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
-                    onMouseDown={(e) => startPanelResize(e, spectrumHeight, setSpectrumHeight, SPECTRUM_MIN, SPECTRUM_MAX)}
-                    title="Glisser pour agrandir/réduire le spectre"
-                  >
-                    <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
-                  </div>
-                </>
-              )}
+                    {/* Poignée — redimensionne l'onglet ACTIF (hauteur mémorisée par onglet) */}
+                    <div
+                      className="h-1.5 cursor-row-resize bg-gray-800 hover:bg-emerald-600/60 transition-colors shrink-0 flex items-center justify-center group"
+                      onMouseDown={(e) => effTab === 'spectrogram'
+                        ? startPanelResize(e, spectrogramHeight, setSpectrogramHeight, SPECTRO_MIN, SPECTRO_MAX)
+                        : startPanelResize(e, spectrumHeight, setSpectrumHeight, SPECTRUM_MIN, SPECTRUM_MAX)}
+                      title="Glisser pour agrandir/réduire la vue active"
+                    >
+                      <div className="w-8 h-0.5 bg-gray-600 group-hover:bg-emerald-400 rounded-full" />
+                    </div>
+                  </>
+                )
+              })()}
 
               {!presentationMode && (
                 <>
@@ -2160,7 +2164,7 @@ export default function App() {
   // Pas d'agrégation lifté ici pour partage entre chart, spectrogramme embarqué et plein écran
   // Défaut : 5 secondes (compromis lisibilité / résolution)
   const [aggregationSeconds, setAggregationSeconds] = useState<number>(30)
-  const [spectrogramExpanded, setSpectrogramExpanded] = useState<boolean>(true)
+  const [spectroTab, setSpectroTab] = useState<'spectrogram' | 'spectrum'>('spectrogram')
 
   // Plan de site
   const [mapImage, setMapImage] = useState<string | null>(null)
@@ -3276,8 +3280,8 @@ export default function App() {
         onConformiteSummaryChange={setConformiteSummary}
         aggregationSeconds={aggregationSeconds}
         onAggregationChange={setAggregationSeconds}
-        spectrogramExpanded={spectrogramExpanded}
-        onSpectrogramToggle={() => setSpectrogramExpanded((v) => !v)}
+        spectroTab={spectroTab}
+        onSpectroTabChange={setSpectroTab}
         onAddEvent={handleEventAdd}
         mapImage={mapImage}
         onMapImageChange={setMapImage}

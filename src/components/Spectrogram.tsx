@@ -1027,7 +1027,7 @@ export default function Spectrogram({
           )}
           {headerControls}
         </div>
-        <div className="flex-1 overflow-y-auto px-4 py-2">
+        <div className="flex-1 overflow-y-hidden px-4 py-2">
           <div className="flex gap-0">
             <div ref={wheelWrapRef} className="relative flex-1 min-w-0">
               {pointNames.map((pt, i) => (
@@ -1125,7 +1125,7 @@ export default function Spectrogram({
       </div>
 
       {/* Zone scrollable : spectrogrammes empilés */}
-      <div className="flex-1 overflow-y-auto px-4 py-4">
+      <div className="flex-1 overflow-y-hidden px-4 py-4">
         <div className="flex gap-0">
           {/* Colonne principale : spectrogrammes + axe X */}
           <div ref={wheelWrapRef} className="relative flex-1 min-w-0">

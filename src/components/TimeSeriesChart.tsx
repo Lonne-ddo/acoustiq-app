@@ -1818,12 +1818,14 @@ export default function TimeSeriesChart({
                 itemStyle={{ color: '#d1d5db' }}
                 formatter={(value) => [`${value} dB(A)`, undefined]}
                 labelFormatter={(label) => {
-                  if (!isMultiDay) return String(label)
+                  // `label` = X = t en minutes depuis minuit → heure d'horloge.
                   const t = typeof label === 'number' ? label : Number(label)
                   if (!Number.isFinite(t)) return String(label)
+                  const clock = minutesToHHMMSS(((t % 1440) + 1440) % 1440)
+                  if (!isMultiDay) return clock
                   const dayIdx = Math.floor(t / 1440)
                   const dateIso = sortedDates[dayIdx] ?? sortedDates[0]
-                  return `${longFrDate(dateIso)} · ${minutesToHHMM(((t % 1440) + 1440) % 1440)}`
+                  return `${longFrDate(dateIso)} · ${clock}`
                 }}
               />
 

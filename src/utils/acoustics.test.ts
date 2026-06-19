@@ -12,6 +12,7 @@ import {
   computeKb9801,
   analyzeKt9801,
   analyzeKt,
+  leqOnRegPeriod,
 } from './acoustics'
 import type { Category, Period } from '../types'
 
@@ -300,5 +301,58 @@ describe('analyzeKt9801 — seuils 15/8/5 + significativité ≤ 14,5', () => {
     const s = spec160(16)
     expect(analyzeKt9801(s, 65).kt).toBe(5)  // 65 − 52,6 = 12,4 ≤ 14,5 → significatif
     expect(analyzeKt9801(s, 70).kt).toBe(0)  // 70 − 52,6 = 17,4 > 14,5 → exclu
+  })
+})
+
+// ─────────────────────────────────────────────────────────────────────────
+// leqOnRegPeriod — Leq par période réglementaire (jour/soir/nuit) + couverture
+// ─────────────────────────────────────────────────────────────────────────
+describe('leqOnRegPeriod — Leq période + couverture', () => {
+  const s = (t: number, laeq: number) => ({ t, laeq })
+
+  it('moyenne ÉNERGÉTIQUE (pas arithmétique) sur le jour', () => {
+    // 60 et 70 dB → laeqAvg ≈ 67,4 (et non 65).
+    const r = leqOnRegPeriod([s(8 * 60, 60), s(9 * 60, 70)], 7, 19)
+    expect(r.leq).toBeCloseTo(67.4, 1)
+    expect(r.periodMin).toBe(720)
+    expect(r.coveredMin).toBe(2)
+  })
+
+  it('affecte chaque échantillon à la bonne période', () => {
+    const data = [s(8 * 60, 50), s(20 * 60, 60), s(23 * 60, 40)]
+    expect(leqOnRegPeriod(data, 7, 19).leq).toBe(50)  // jour 08h
+    expect(leqOnRegPeriod(data, 19, 22).leq).toBe(60) // soir 20h
+    expect(leqOnRegPeriod(data, 22, 7).leq).toBe(40)  // nuit 23h
+  })
+
+  it('gère le passage minuit (nuit 22-07)', () => {
+    const data = [s(23 * 60, 45), s(2 * 60, 45)] // 23h et 02h = nuit
+    const nuit = leqOnRegPeriod(data, 22, 7)
+    expect(nuit.leq).toBe(45)
+    expect(nuit.coveredMin).toBe(2)
+    expect(nuit.periodMin).toBe(540)
+    expect(leqOnRegPeriod(data, 7, 19).leq).toBeNull() // jour : rien
+  })
+
+  it('couverture partielle (< 100 %)', () => {
+    // 120 minutes distinctes couvertes sur 720 (jour) → 1/6.
+    const data = Array.from({ length: 120 }, (_, i) => s(7 * 60 + i, 55))
+    const r = leqOnRegPeriod(data, 7, 19)
+    expect(r.leq).toBeCloseTo(55, 6)
+    expect(r.coveredMin).toBe(120)
+    expect(r.periodMin).toBe(720)
+    expect(r.coveredMin / r.periodMin).toBeCloseTo(1 / 6, 5)
+  })
+
+  it('période absente → leq null, couverture 0', () => {
+    const soir = leqOnRegPeriod([s(8 * 60, 50)], 19, 22)
+    expect(soir.leq).toBeNull()
+    expect(soir.coveredMin).toBe(0)
+    expect(soir.periodMin).toBe(180)
+  })
+
+  it('plusieurs échantillons dans la même minute = 1 minute couverte', () => {
+    const data = [s(480, 50), s(480.5, 50), s(480.99, 50)]
+    expect(leqOnRegPeriod(data, 7, 19).coveredMin).toBe(1)
   })
 })

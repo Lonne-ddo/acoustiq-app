@@ -296,6 +296,52 @@ export function laeqAvg(values: number[]): number {
   return 10 * Math.log10(sum / valid.length)
 }
 
+/** Résultat d'un Leq sur période réglementaire, avec couverture temporelle. */
+export interface RegPeriodLeq {
+  /** Moyenne énergétique des LAeq dans l'intervalle, null si aucun échantillon. */
+  leq: number | null
+  /** Minutes DISTINCTES (floor(t)) contenant ≥ 1 échantillon dans l'intervalle. */
+  coveredMin: number
+  /** Durée de l'intervalle en minutes (jour 720 / soir 180 / nuit 540). */
+  periodMin: number
+}
+
+/**
+ * Leq d'une PÉRIODE RÉGLEMENTAIRE [startH h, endH h), moyenne ÉNERGÉTIQUE, avec
+ * mesure de la couverture temporelle. Bornes communes Note 98-01 (EQ-09) et
+ * Lignes directrices MELCCFP 2026 : jour 07-19, soir 19-22, nuit 22-07 (le
+ * passage minuit est géré quand endH < startH).
+ *
+ * `coverage = min(1, coveredMin / periodMin)` permet de signaler une période
+ * partiellement couverte par la mesure (données ne couvrant pas tout l'intervalle).
+ *
+ * @param data échantillons { t (minutes depuis minuit), laeq }
+ */
+export function leqOnRegPeriod(
+  data: { t: number; laeq: number }[],
+  startH: number,
+  endH: number,
+): RegPeriodLeq {
+  const sMin = startH * 60
+  const eMin = endH * 60
+  // Durée de l'intervalle (modulo 24 h ; 0 ⇒ journée pleine 1440).
+  const periodMin = (((eMin - sMin) % 1440) + 1440) % 1440 || 1440
+  const inRange = (t: number) =>
+    eMin > sMin ? t >= sMin && t < eMin : t >= sMin || t < eMin
+  const vals: number[] = []
+  const minutes = new Set<number>()
+  for (const d of data) {
+    if (!inRange(d.t) || !Number.isFinite(d.laeq)) continue
+    vals.push(d.laeq)
+    minutes.add(Math.floor(d.t))
+  }
+  return {
+    leq: vals.length > 0 ? laeqAvg(vals) : null,
+    coveredMin: minutes.size,
+    periodMin,
+  }
+}
+
 /**
  * Percentile STATISTIQUE `p` (0–100) d'un tableau de niveaux en dB, tri
  * croissant : computePercentile(v, 90) = 90e percentile = valeur HAUTE

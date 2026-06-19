@@ -21,24 +21,19 @@ import {
   computeKi9801,
   computeKb9801,
   analyzeKt9801,
+  leqOnRegPeriod,
+  type RegPeriodLeq,
   filterDataByPeriods,
 } from '../utils/acoustics'
 
-/** Calcule LAeq sur une plage horaire (en heures) ; gère le passage minuit. */
-function laeqOnPeriod(data: { t: number; laeq: number }[], startH: number, endH: number): number | null {
-  const sMin = startH * 60
-  const eMin = endH * 60
-  const inRange = (t: number) =>
-    eMin > sMin ? t >= sMin && t < eMin : t >= sMin || t < eMin
-  const vals = data.filter((d) => inRange(d.t)).map((d) => d.laeq)
-  return vals.length > 0 ? laeqAvg(vals) : null
-}
-
 const PERIODS_HELP =
-  'Périodes définies par les Lignes directrices MELCCFP 2026 :\n' +
+  'Leq par période réglementaire (moyenne énergétique). Bornes communes à la ' +
+  'Note 98-01 (EQ-09) et aux Lignes directrices MELCCFP 2026 :\n' +
   '• Jour : 07h00 – 19h00\n' +
   '• Soir : 19h00 – 22h00\n' +
-  '• Nuit : 22h00 – 07h00 (passage minuit inclus)'
+  '• Nuit : 22h00 – 07h00 (passage minuit inclus)\n\n' +
+  'Le % indique la couverture temporelle de l’intervalle par la mesure ' +
+  '(ambre si < 95 % = période partielle).'
 
 // Palette partagée avec le graphique
 const POINT_COLORS: Record<string, string> = {
@@ -137,7 +132,8 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
     return [...pts].sort()
   }, [files, pointMap, selectedDate])
 
-  // Calcul des Lpériodes MELCCFP par point (jour/soir/nuit, journée complète)
+  // Leq par période réglementaire (jour/soir/nuit) + couverture, par point —
+  // sur la même fenêtre filtrée que les autres indices. Bornes 98-01 / 2026.
   const periodsByPoint = useMemo(() => {
     return Object.fromEntries(
       pointNames.map((pt) => {
@@ -147,13 +143,13 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         return [
           pt,
           {
-            ljour: laeqOnPeriod(data, 7, 19),
-            lsoir: laeqOnPeriod(data, 19, 22),
-            lnuit: laeqOnPeriod(data, 22, 7),
+            ljour: leqOnRegPeriod(data, 7, 19),
+            lsoir: leqOnRegPeriod(data, 19, 22),
+            lnuit: leqOnRegPeriod(data, 22, 7),
           },
         ]
       }),
-    ) as Record<string, { ljour: number | null; lsoir: number | null; lnuit: number | null }>
+    ) as Record<string, { ljour: RegPeriodLeq; lsoir: RegPeriodLeq; lnuit: RegPeriodLeq }>
   }, [files, pointMap, selectedDate, pointNames, periods, categories, excludedCatIds])
 
   // Caractéristiques du bruit (composante tonale par point) — basées sur la
@@ -308,18 +304,30 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
       const wsIndices = XLSX.utils.aoa_to_sheet(sheet1)
       XLSX.utils.book_append_sheet(wb, wsIndices, 'Indices')
 
-      // ── Feuille 2 : Périodes MELCCFP ──────────────────────────────────────
+      // ── Feuille 2 : Périodes réglementaires (Leq + couverture) ────────────
+      const PERIOD_LABEL = { ljour: 'Ljour (07h–19h)', lsoir: 'Lsoir (19h–22h)', lnuit: 'Lnuit (22h–07h)' } as const
       const sheet2: Array<Array<string | number>> = []
-      sheet2.push(['AcoustiQ — Périodes MELCCFP 2026'])
+      sheet2.push(['AcoustiQ — Périodes réglementaires (bornes communes Note 98-01 / MELCCFP 2026)'])
       sheet2.push([`Date : ${selectedDate}`])
       sheet2.push([])
-      sheet2.push(['Période', ...pointNames])
+      sheet2.push(['Leq par période — dB(A)', ...pointNames])
       for (const k of ['ljour', 'lsoir', 'lnuit'] as const) {
-        const label = k === 'ljour' ? 'Ljour (07h–19h)' : k === 'lsoir' ? 'Lsoir (19h–22h)' : 'Lnuit (22h–07h)'
-        const line: Array<string | number> = [label]
+        const line: Array<string | number> = [PERIOD_LABEL[k]]
         for (const pt of pointNames) {
-          const v = periodsByPoint[pt]?.[k]
-          line.push(v !== null && v !== undefined ? round1(v) : '')
+          const leq = periodsByPoint[pt]?.[k]?.leq
+          line.push(leq !== null && leq !== undefined ? round1(leq) : '')
+        }
+        sheet2.push(line)
+      }
+      sheet2.push([])
+      sheet2.push(['Couverture temporelle — min couvertes / min période (·%)', ...pointNames])
+      for (const k of ['ljour', 'lsoir', 'lnuit'] as const) {
+        const line: Array<string | number> = [PERIOD_LABEL[k]]
+        for (const pt of pointNames) {
+          const cell = periodsByPoint[pt]?.[k]
+          if (!cell) { line.push(''); continue }
+          const pct = cell.periodMin > 0 ? Math.round(Math.min(1, cell.coveredMin / cell.periodMin) * 100) : 0
+          line.push(`${cell.coveredMin}/${cell.periodMin} (${pct}%)`)
         }
         sheet2.push(line)
       }
@@ -685,12 +693,12 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         </div>
       </div>
 
-      {/* Périodes MELCCFP — Ljour / Lsoir / Lnuit */}
+      {/* Périodes réglementaires — Ljour / Lsoir / Lnuit (bornes 98-01 / 2026) */}
       <div className="border-t border-gray-800">
         <div className="flex items-center gap-2 px-4 py-2">
           <Sun size={12} className="text-amber-400" />
           <span className="text-xs font-semibold text-gray-400 uppercase tracking-wider">
-            Périodes MELCCFP
+            Périodes réglementaires
           </span>
           <HelpTooltip text={PERIODS_HELP} position="right" />
         </div>
@@ -721,8 +729,14 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
                     <span className="ml-1.5 text-[10px] text-gray-600">{row.range}</span>
                   </td>
                   {pointNames.map((pt) => {
-                    const v = periodsByPoint[pt]?.[row.key]
-                    const hasData = v !== null && v !== undefined
+                    const cell = periodsByPoint[pt]?.[row.key]
+                    const leq = cell?.leq ?? null
+                    const hasData = leq !== null && leq !== undefined
+                    const coverage = cell && cell.periodMin > 0
+                      ? Math.min(1, cell.coveredMin / cell.periodMin)
+                      : 0
+                    const pct = Math.round(coverage * 100)
+                    const partial = coverage < 0.95 // ambre uniquement si < 95 %
                     return (
                       <td
                         key={pt}
@@ -732,11 +746,17 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
                       >
                         {hasData ? (
                           <>
-                            {fmt(v)}
+                            {fmt(leq)}
                             <span className="text-gray-600 ml-0.5">dB(A)</span>
+                            <span
+                              className={`ml-1 text-[10px] ${partial ? 'text-amber-400' : 'text-gray-600'}`}
+                              title={`Couverture temporelle : ${cell!.coveredMin} / ${cell!.periodMin} min`}
+                            >
+                              · {pct}%
+                            </span>
                           </>
                         ) : (
-                          '—'
+                          '−'
                         )}
                       </td>
                     )

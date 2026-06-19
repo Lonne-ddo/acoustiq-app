@@ -304,12 +304,16 @@ export function laeqAvg(values: number[]): number {
  * Pour un indice acoustique Ln, ne pas appeler directement : utiliser
  * `computeLn` qui applique la convention Ln = (100 − n)e percentile.
  */
+/** Valeur au percentile statistique `p` (0–100) d'un tableau DÉJÀ trié ASC. */
+function percentileOfSorted(sortedAsc: number[], p: number): number {
+  return sortedAsc[Math.round((p / 100) * (sortedAsc.length - 1))]
+}
+
 function computePercentile(values: number[], percentile: number): number {
   const valid = values.filter((v) => Number.isFinite(v))
   if (valid.length === 0) return 0
   const sorted = [...valid].sort((a, b) => a - b)
-  const index = Math.round((percentile / 100) * (sorted.length - 1))
-  return sorted[index]
+  return percentileOfSorted(sorted, percentile)
 }
 
 /**
@@ -328,6 +332,21 @@ function computePercentile(values: number[], percentile: number): number {
  */
 export function computeLn(values: number[], n: number): number {
   return computePercentile(values, 100 - n)
+}
+
+/**
+ * Variante BATCH de `computeLn` : calcule plusieurs Ln en triant la série UNE
+ * seule fois (au lieu d'un tri par appel). Même convention exacte que
+ * `computeLn` — Ln = (100 − n)e percentile — via le helper partagé
+ * `percentileOfSorted`. Utilisé pour la distribution L1..L99.
+ *
+ * @returns un tableau aligné sur `ns` ; chaque valeur vaut 0 si la série est vide.
+ */
+export function computeLnSeries(values: number[], ns: number[]): number[] {
+  const valid = values.filter((v) => Number.isFinite(v))
+  if (valid.length === 0) return ns.map(() => 0)
+  const sorted = [...valid].sort((a, b) => a - b)
+  return ns.map((n) => percentileOfSorted(sorted, 100 - n))
 }
 
 /**

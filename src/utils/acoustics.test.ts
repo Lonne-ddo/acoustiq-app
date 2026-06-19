@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   computeLn,
+  computeLnSeries,
   computeL10,
   computeL50,
   computeL90,
@@ -72,6 +73,28 @@ describe('computeL10 / L50 / L90 — inversion corrigée', () => {
     expect(computeL90(SHUFFLED)).toBe(computeLn(SHUFFLED, 90))
     expect(computeL10(SHUFFLED)).toBe(computeLn(SHUFFLED, 10))
     expect(computeL50(SHUFFLED)).toBe(computeLn(SHUFFLED, 50))
+  })
+})
+
+describe('computeLnSeries — batch, source unique partagée avec computeLn', () => {
+  it('même convention que computeLn sur la rampe 0..100', () => {
+    expect(computeLnSeries(RAMP, [1, 10, 50, 90, 99])).toEqual([99, 90, 50, 10, 1])
+  })
+
+  it('L90 < L50 < L10 et L90 = valeur de fond basse', () => {
+    const [l90, l50, l10] = computeLnSeries(RAMP, [90, 50, 10])
+    expect(l90).toBe(10) // bas (bruit de fond)
+    expect(l90).toBeLessThan(l50)
+    expect(l50).toBeLessThan(l10)
+  })
+
+  it('strictement égal à computeLn élément par élément (indépendant de l’ordre)', () => {
+    const ns = [1, 5, 10, 50, 90, 95, 99]
+    expect(computeLnSeries(SHUFFLED, ns)).toEqual(ns.map((n) => computeLn(SHUFFLED, n)))
+  })
+
+  it('série vide → zéros alignés sur ns', () => {
+    expect(computeLnSeries([], [10, 50, 90])).toEqual([0, 0, 0])
   })
 })
 

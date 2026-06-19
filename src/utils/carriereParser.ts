@@ -17,6 +17,7 @@
  * Bp par période (Jour / Soir / Nuit).
  */
 import * as XLSX from 'xlsx'
+import { computeLn } from './acoustics'
 
 // ─── Paramètres ─────────────────────────────────────────────────────────────
 export interface CarriereParams {
@@ -391,14 +392,6 @@ function energyMean(values: number[]): number {
   return 10 * Math.log10(sum / valid.length)
 }
 
-/** L_x = niveau dépassé x % du temps → percentile (100 - x) en tri ascendant. */
-function lxLevel(values: number[], x: number): number {
-  const valid = values.filter((v) => Number.isFinite(v))
-  if (valid.length === 0) return 0
-  const sorted = [...valid].sort((a, b) => a - b)
-  const idx = Math.round(((100 - x) / 100) * (sorted.length - 1))
-  return sorted[Math.max(0, Math.min(sorted.length - 1, idx))]
-}
 
 // ─── 4. Agrégation horaire ──────────────────────────────────────────────────
 export function computeHourly(rows: RawTimeHistoryRow[]): HourlyResult[] {
@@ -423,13 +416,13 @@ export function computeHourly(rows: RawTimeHistoryRow[]): HourlyResult[] {
 
     const laf10 = hasLaf10
       ? energyMean(list.map((r) => r.laf10 as number))
-      : lxLevel(laeqs, 10)
+      : computeLn(laeqs, 10)
     const laf50 = hasLaf50
       ? energyMean(list.map((r) => r.laf50 as number))
-      : lxLevel(laeqs, 50)
+      : computeLn(laeqs, 50)
     const laf90 = hasLaf90
       ? energyMean(list.map((r) => r.laf90 as number))
-      : lxLevel(laeqs, 90)
+      : computeLn(laeqs, 90)
     const lafmax = hasLafmax
       ? Math.max(...list.map((r) => r.lafmax as number))
       : Math.max(...laeqs)

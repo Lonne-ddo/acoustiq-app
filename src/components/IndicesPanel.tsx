@@ -10,6 +10,7 @@ import type { MeasurementFile, MeteoData, Period, Category } from '../types'
 import {
   laeqAvg,
   computeLn,
+  computeLnSeries,
   computeL10,
   computeL50,
   computeL90,
@@ -787,6 +788,7 @@ function DistributionSection({
 
   // Calcul des percentiles L1..L99 par point
   const distributions = useMemo(() => {
+    const LN_X = Array.from({ length: 99 }, (_, i) => i + 1) // L1..L99
     return pointNames.map((pt) => {
       const values = files
         .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
@@ -794,15 +796,11 @@ function DistributionSection({
         .filter((dp) => dp.t >= startMin && dp.t <= endMin)
         .map((dp) => dp.laeq)
       if (values.length === 0) return { pt, percentiles: null as number[] | null, min: 0, max: 0 }
-      const sorted = [...values].sort((a, b) => a - b)
-      const n = sorted.length
-      const percentiles: number[] = []
-      // Lx convention : niveau dépassé x% du temps → percentile (100 - x) du tri ASC
-      for (let x = 1; x <= 99; x++) {
-        const idx = Math.round(((100 - x) / 100) * (n - 1))
-        percentiles.push(sorted[Math.max(0, Math.min(n - 1, idx))])
-      }
-      return { pt, percentiles, min: sorted[0], max: sorted[n - 1] }
+      // Source unique : computeLnSeries (= computeLn pour chaque x), un seul tri.
+      const percentiles = computeLnSeries(values, LN_X)
+      let min = Infinity, max = -Infinity
+      for (const v of values) { if (v < min) min = v; if (v > max) max = v }
+      return { pt, percentiles, min, max }
     })
   }, [files, pointMap, selectedDate, pointNames, startMin, endMin, periods, categories, excludedCatIds])
 
@@ -962,9 +960,8 @@ function AmbientNoiseSection({ files, pointMap, selectedDate, pointNames, period
           .filter((dp) => Math.floor(dp.t / 60) === h)
           .map((dp) => dp.laeq)
         if (values.length >= 3) {
-          const sorted = [...values].sort((a, b) => a - b)
-          const idx = Math.round(0.9 * (sorted.length - 1))
-          entry[pt] = Math.round(sorted[idx] * 10) / 10
+          // L90 = bruit de fond (valeur BASSE) via la source unique computeLn.
+          entry[pt] = Math.round(computeL90(values) * 10) / 10
         } else {
           entry[pt] = null
         }

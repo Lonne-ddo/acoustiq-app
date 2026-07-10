@@ -184,7 +184,7 @@ function readAsArrayBuffer(file: File): Promise<ArrayBuffer> {
 }
 
 /** Extensions audio acceptées par le système de streaming */
-const AUDIO_EXTS = ['mp3', 'wav', 'm4a', 'ogg'] as const
+const AUDIO_EXTS = ['mp3', 'wav', 'm4a', 'ogg', 'flac'] as const
 type AudioExt = (typeof AUDIO_EXTS)[number]
 function audioExtOf(name: string): AudioExt | null {
   const m = name.toLowerCase().match(/\.([a-z0-9]+)$/)
@@ -832,7 +832,7 @@ function Sidebar({
     const selected = Array.from(e.target.files ?? [])
     if (selected.length === 0) return
     const xlsx = selected.filter((f) => /\.xlsx$/i.test(f.name))
-    const audios = selected.filter((f) => /\.(mp3|wav|m4a|ogg)$/i.test(f.name))
+    const audios = selected.filter((f) => /\.(mp3|wav|m4a|ogg|flac)$/i.test(f.name))
     if (xlsx.length > 0) onParseFiles(xlsx)
     if (audios.length > 0) void onAudioEntriesLoad(audios)
     e.target.value = ''
@@ -855,7 +855,7 @@ function Sidebar({
     setDragOver(false)
     const droppedFiles = Array.from(e.dataTransfer.files)
     const xlsx = droppedFiles.filter((f) => /\.xlsx$/i.test(f.name))
-    const audios = droppedFiles.filter((f) => /\.(mp3|wav|m4a|ogg)$/i.test(f.name))
+    const audios = droppedFiles.filter((f) => /\.(mp3|wav|m4a|ogg|flac)$/i.test(f.name))
     const json = droppedFiles.filter((f) => /\.json$/i.test(f.name))
     if (xlsx.length > 0) onParseFiles(xlsx)
     if (audios.length > 0) {
@@ -876,19 +876,31 @@ function Sidebar({
   async function handleAudioLoad(e: React.ChangeEvent<HTMLInputElement>) {
     const file = e.target.files?.[0]
     if (!file) return
-    const buf = await readAsArrayBuffer(file)
-    const ctx = new AudioContext()
-    const decoded = await ctx.decodeAudioData(buf)
-    await ctx.close()
-    onAudioLoaded({
-      id: crypto.randomUUID(),
-      name: file.name,
-      date: extractDateFromName(file.name) ?? '',
-      buffer: decoded,
-      duration: decoded.duration,
-      startOffsetMin: 0,
-    })
-    e.target.value = ''
+    try {
+      const buf = await readAsArrayBuffer(file)
+      const ctx = new AudioContext()
+      const decoded = await ctx.decodeAudioData(buf)
+      await ctx.close()
+      onAudioLoaded({
+        id: crypto.randomUUID(),
+        name: file.name,
+        date: extractDateFromName(file.name) ?? '',
+        buffer: decoded,
+        duration: decoded.duration,
+        startOffsetMin: 0,
+      })
+    } catch (err) {
+      // decodeAudioData rejette si le navigateur ne sait pas décoder le
+      // conteneur/codec (fichier non-audio, WAV non-PCM exotique, AAC sans
+      // codec OS…). On le signale au lieu d'un échec muet.
+      showToast(
+        `« ${file.name} » : format audio non décodable par le navigateur (essayez WAV PCM 16-bit ou MP3).`,
+        'error',
+      )
+      console.error('decodeAudioData a échoué', err)
+    } finally {
+      e.target.value = ''
+    }
   }
 
   // Mode rétracté : icônes seules
@@ -1035,7 +1047,7 @@ function Sidebar({
 
         {/* ─── 📂 FICHIERS ─────────────────────────────────────────────── */}
         <SidebarSection title="📂 Fichiers" defaultOpen persistKey="files">
-          <input ref={inputRef} type="file" accept=".xlsx,.mp3,.wav,.m4a,.ogg" multiple className="hidden" onChange={handleFileChange} />
+          <input ref={inputRef} type="file" accept=".xlsx,.mp3,.wav,.m4a,.ogg,.flac" multiple className="hidden" onChange={handleFileChange} />
           <button
             onClick={() => inputRef.current?.click()}
             disabled={loading}
@@ -1222,7 +1234,7 @@ function Sidebar({
               />
             ) : (
               <div className="px-3 py-3 border-t border-gray-800">
-                <input ref={audioInputRef} type="file" accept=".wav" className="hidden" onChange={handleAudioLoad} />
+                <input ref={audioInputRef} type="file" accept=".wav,.mp3,.m4a,.ogg,.flac,audio/*" className="hidden" onChange={handleAudioLoad} />
                 <button
                   onClick={() => audioInputRef.current?.click()}
                   className="w-full flex items-center justify-center gap-1.5 px-2 py-1.5 rounded
@@ -1402,7 +1414,7 @@ function MainPanel({
     e.preventDefault()
     setPageDragOver(false)
     const dropped = Array.from(e.dataTransfer.files)
-    const audios = dropped.filter((f) => /\.(mp3|wav|m4a|ogg)$/i.test(f.name))
+    const audios = dropped.filter((f) => /\.(mp3|wav|m4a|ogg|flac)$/i.test(f.name))
     const measures = dropped.filter((f) => /\.(xlsx|csv|ldbin)$/i.test(f.name))
     if (audios.length > 0) {
       void onAudioEntriesLoad(audios)

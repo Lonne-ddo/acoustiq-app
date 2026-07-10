@@ -359,8 +359,8 @@ export interface AudioFileEntry {
   name: string
   /** Taille en octets */
   size: number
-  /** Extension normalisée : mp3 | wav | m4a | ogg */
-  ext: 'mp3' | 'wav' | 'm4a' | 'ogg'
+  /** Extension normalisée : mp3 | wav | m4a | ogg | flac */
+  ext: 'mp3' | 'wav' | 'm4a' | 'ogg' | 'flac'
   /** Blob URL (URL.createObjectURL) — à révoquer au retrait */
   blobUrl: string
   /** Durée en secondes, probée via <audio> metadata */

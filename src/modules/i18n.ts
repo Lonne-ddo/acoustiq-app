@@ -14,7 +14,7 @@ const translations: Record<string, Record<string, string>> = {
   'sidebar.files': { fr: 'Fichiers de mesure', en: 'Measurement files' },
   'sidebar.filesEmpty': { fr: 'Cliquez sur "Importer" ci-dessus', en: 'Click "Import" above' },
   'sidebar.assignPoint': { fr: '— Assigner un point —', en: '— Assign a point —' },
-  'sidebar.loadWav': { fr: 'Charger un fichier .wav', en: 'Load a .wav file' },
+  'sidebar.loadWav': { fr: 'Charger un fichier audio', en: 'Load an audio file' },
   'sidebar.remove': { fr: 'Retirer', en: 'Remove' },
 
   // Onglets

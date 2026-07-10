@@ -291,7 +291,7 @@ export default function YamnetClassifier({
               </span>
               <input
                 type="file"
-                accept="audio/*,.wav,.mp3,.m4a,.ogg"
+                accept="audio/*,.wav,.mp3,.m4a,.ogg,.flac"
                 className="hidden"
                 onChange={(e) => {
                   const f = e.target.files?.[0]

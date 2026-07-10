@@ -73,7 +73,7 @@ function parseClock(v: string): number | null {
   return h * 60 + mi + s / 60
 }
 
-const AUDIO_RE = /\.(mp3|wav|m4a|ogg)$/i
+const AUDIO_RE = /\.(mp3|wav|m4a|ogg|flac)$/i
 const BIG_FILE_BYTES = 500 * 1024 * 1024
 /** Vrai si l'événement de drag transporte des fichiers (et pas du texte/HTML). */
 function dragHasFiles(e: React.DragEvent): boolean {
@@ -505,7 +505,7 @@ export default function AudioPlayer({ entries, sync, pointName, defaultCollapsed
       <input
         ref={fileInputRef}
         type="file"
-        accept=".mp3,.wav,.m4a,.ogg,audio/*"
+        accept=".mp3,.wav,.m4a,.ogg,.flac,audio/*"
         multiple
         className="hidden"
         onChange={onPickFiles}

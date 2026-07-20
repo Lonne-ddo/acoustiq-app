@@ -115,8 +115,7 @@ import { parseAudioFilename, deriveStartTimesFromSequence } from './utils/audioF
 import Conformite2026 from './components/Conformite2026'
 import SiteMap from './components/SiteMap'
 import Settings from './components/Settings'
-import UserMenu from './components/UserMenu'
-import { AUTH_ENABLED } from './config/auth'
+import CspProbePanel from './components/CspProbePanel'
 import { FEATURES } from './config/features'
 import ShortcutsModal from './components/ShortcutsModal'
 import Onboarding, { shouldShowOnboarding, resetOnboarding } from './components/Onboarding'
@@ -236,7 +235,7 @@ function saveRecent(projects: RecentProject[]) {
   localStorage.setItem(RECENT_KEY, JSON.stringify(projects.slice(0, MAX_RECENT)))
 }
 
-type Tab = 'chart' | 'map' | 'lw' | 'isolement' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation' | 'carriere' | 'yamnet' | 'ecme' | 'vue3d' | 'meteo'
+type Tab = 'chart' | 'map' | 'lw' | 'isolement' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation' | 'carriere' | 'yamnet' | 'ecme' | 'vue3d' | 'meteo' | 'diag'
 
 /**
  * Regroupement des onglets en 4 catégories principales pour réduire le bruit
@@ -261,6 +260,7 @@ const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
   ecme: 'outils',
   vue3d: 'outils',
   meteo: 'outils',
+  diag: 'outils',
 }
 
 // Sous-onglets dérivés des feature flags (src/config/features.ts).
@@ -289,6 +289,7 @@ const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
     ...(FEATURES.carte ? [{ id: 'map' as Tab, label: 'Carte' }] : []),
     { id: 'regulation', label: 'Réglementation' },
     { id: 'history', label: 'Historique' },
+    { id: 'diag', label: 'Diagnostic réseau' },
   ],
 }
 
@@ -1622,14 +1623,6 @@ function MainPanel({
           >
             v{APP_VERSION}
           </button>
-          {!AUTH_ENABLED && (
-            <span
-              className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-gray-400 bg-gray-800 border border-gray-700 rounded"
-              title="Authentification désactivée (src/config/auth.ts → AUTH_ENABLED)"
-            >
-              Dev mode
-            </span>
-          )}
           {files.length > 0 && (
             <button
               onClick={() => setForceShowWorkflow((v) => !v)}
@@ -1665,7 +1658,6 @@ function MainPanel({
           >
             <SettingsIcon size={14} />
           </button>
-          <UserMenu />
         </div>
       </header>
       )}
@@ -2073,6 +2065,12 @@ function MainPanel({
               projectPoints={meteoProjectPoints}
             />
           </Suspense>
+        </div>
+      )}
+
+      {effectiveTab === 'diag' && (
+        <div className="flex-1 min-h-0 overflow-auto animate-[fadeIn_0.15s_ease-out]">
+          <CspProbePanel />
         </div>
       )}
 

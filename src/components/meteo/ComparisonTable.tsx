@@ -1,6 +1,15 @@
 import { useMemo } from 'react'
 import { SOURCES, type SourceResult, type SourceId } from '../../utils/meteoSources'
 import { parseHourTimestamp } from '../../utils/recevabilite'
+import {
+  detectDiscord,
+  formatDiscord,
+  DISCORD_VARS,
+  DISCORD_VAR_META,
+  type DiscordVar,
+  type DiscordResult,
+  type HourDiscord,
+} from '../../utils/meteoDiscord'
 
 interface Props {
   sources: SourceResult[]
@@ -10,6 +19,14 @@ interface ComparisonRow {
   hourKey: string
   date: Date
   values: Record<SourceId, ComparisonCell | null>
+  /** Désaccord inter-sources pré-calculé pour l'heure (informatif). */
+  discord: HourDiscord
+}
+
+interface DiscordSummary {
+  total: number
+  disagreeHours: number
+  perVar: Record<DiscordVar, number>
 }
 
 interface ComparisonCell {
@@ -27,20 +44,8 @@ function hourKey(s: string): string {
 const fmt = (v: number | null, decimals = 1) =>
   v == null || !Number.isFinite(v) ? '—' : v.toFixed(decimals)
 
-function cmpAccent(values: (number | null)[]): {
-  min: number | null
-  max: number | null
-  spread: number | null
-} {
-  const present = values.filter((v): v is number => v != null)
-  if (present.length === 0) return { min: null, max: null, spread: null }
-  const min = Math.min(...present)
-  const max = Math.max(...present)
-  return { min, max, spread: max - min }
-}
-
 export default function ComparisonTable({ sources }: Props) {
-  const { rows, sourceIds } = useMemo(() => {
+  const { rows, sourceIds, summary } = useMemo(() => {
     const map = new Map<string, ComparisonRow>()
     const ids: SourceId[] = []
     sources.forEach((s) => {
@@ -53,6 +58,7 @@ export default function ComparisonTable({ sources }: Props) {
             hourKey: key,
             date: parseHourTimestamp(r.datetime),
             values: { openmeteo: null, gem: null, eccc: null },
+            discord: detectDiscord({}),
           }
           map.set(key, row)
         }
@@ -64,11 +70,34 @@ export default function ComparisonTable({ sources }: Props) {
         }
       })
     })
+
+    const sorted = Array.from(map.values()).sort(
+      (a, b) => a.date.getTime() - b.date.getTime(),
+    )
+
+    // Désaccord par heure + synthèse (une seule passe).
+    const perVar: Record<DiscordVar, number> = {
+      temperature: 0,
+      windSpeed: 0,
+      precipitation: 0,
+      humidity: 0,
+    }
+    let disagreeHours = 0
+    for (const row of sorted) {
+      row.discord = detectDiscord({
+        temperature: ids.map((id) => row.values[id]?.temperature ?? null),
+        windSpeed: ids.map((id) => row.values[id]?.windSpeed ?? null),
+        precipitation: ids.map((id) => row.values[id]?.precipitation ?? null),
+        humidity: ids.map((id) => row.values[id]?.humidity ?? null),
+      })
+      if (row.discord.anyDisagree) disagreeHours++
+      for (const v of row.discord.vars) perVar[v]++
+    }
+
     return {
-      rows: Array.from(map.values()).sort(
-        (a, b) => a.date.getTime() - b.date.getTime(),
-      ),
+      rows: sorted,
       sourceIds: ids,
+      summary: { total: sorted.length, disagreeHours, perVar } as DiscordSummary,
     }
   }, [sources])
 
@@ -81,7 +110,9 @@ export default function ComparisonTable({ sources }: Props) {
   }
 
   return (
-    <div className="overflow-auto max-h-[420px] border border-gray-800 rounded">
+    <div className="space-y-2">
+      <DiscordSummaryStrip summary={summary} />
+      <div className="overflow-auto max-h-[420px] border border-gray-800 rounded">
       <table className="w-full text-xs">
         <thead className="bg-gray-900 sticky top-0 z-10">
           <tr className="text-gray-400">
@@ -107,14 +138,20 @@ export default function ComparisonTable({ sources }: Props) {
         </thead>
         <tbody>
           {rows.map((row) => {
-            const winds = sourceIds.map((id) => row.values[id]?.windSpeed ?? null)
-            const temps = sourceIds.map((id) => row.values[id]?.temperature ?? null)
-            const windCmp = cmpAccent(winds)
-            const tempCmp = cmpAccent(temps)
+            const disc = row.discord
             return (
               <tr key={row.hourKey} className="border-t border-gray-800 text-gray-300">
                 <td className="px-2 py-1 whitespace-nowrap border-r border-gray-800">
                   {fmtDateLabel(row.date)}
+                  {disc.anyDisagree && (
+                    <span
+                      className="ml-1 text-amber-400"
+                      title={`Sources en désaccord — ${formatDiscord(disc)}`}
+                      aria-label={`heure en désaccord entre sources : ${formatDiscord(disc)}`}
+                    >
+                      ⚠
+                    </span>
+                  )}
                 </td>
                 {sourceIds.map((id) => {
                   const v = row.values[id]
@@ -128,30 +165,7 @@ export default function ComparisonTable({ sources }: Props) {
                         —
                       </td>
                     )
-                  const tempClass =
-                    tempCmp.spread != null && tempCmp.spread > 5 && v.temperature != null
-                      ? v.temperature === tempCmp.max
-                        ? 'text-rose-400'
-                        : v.temperature === tempCmp.min
-                          ? 'text-sky-400'
-                          : ''
-                      : ''
-                  const windClass =
-                    windCmp.spread != null && windCmp.spread > 5 && v.windSpeed != null
-                      ? v.windSpeed === windCmp.max
-                        ? 'text-rose-400'
-                        : v.windSpeed === windCmp.min
-                          ? 'text-sky-400'
-                          : ''
-                      : ''
-                  return (
-                    <CellsForSource
-                      key={id}
-                      v={v}
-                      tempClass={tempClass}
-                      windClass={windClass}
-                    />
-                  )
+                  return <CellsForSource key={id} v={v} discord={disc} />
                 })}
               </tr>
             )
@@ -168,6 +182,7 @@ export default function ComparisonTable({ sources }: Props) {
           )}
         </tbody>
       </table>
+      </div>
     </div>
   )
 }
@@ -183,30 +198,84 @@ function Cells4Headers() {
   )
 }
 
-function CellsForSource({
-  v,
-  tempClass,
-  windClass,
-}: {
-  v: ComparisonCell
-  tempClass: string
-  windClass: string
-}) {
+/**
+ * Marquage d'une cellule pour une variable en désaccord. La couleur ne porte
+ * JAMAIS l'info seule : un glyphe directionnel (▲ = plus haute valeur, ▼ = plus
+ * basse) accompagne systématiquement le tint, avec un `title` explicite.
+ */
+function cellMark(
+  varKey: DiscordVar,
+  res: DiscordResult,
+  value: number | null,
+): { tint: string; glyph: string; title?: string } {
+  if (!res.disagree || value == null) return { tint: '', glyph: '' }
+  const m = DISCORD_VAR_META[varKey]
+  const title = `Désaccord ${m.label} Δ${res.amplitude!.toFixed(m.decimals)} ${m.unit}`
+  if (value === res.max) return { tint: 'text-rose-400', glyph: '▲', title }
+  if (value === res.min) return { tint: 'text-sky-400', glyph: '▼', title }
+  return { tint: '', glyph: '', title }
+}
+
+function DiscordGlyph({ g }: { g: string }) {
+  if (!g) return null
+  return (
+    <sup className="ml-0.5 text-[8px] align-super" aria-hidden="true">
+      {g}
+    </sup>
+  )
+}
+
+function CellsForSource({ v, discord }: { v: ComparisonCell; discord: HourDiscord }) {
+  const t = cellMark('temperature', discord.byVar.temperature, v.temperature)
+  const h = cellMark('humidity', discord.byVar.humidity, v.humidity)
+  const p = cellMark('precipitation', discord.byVar.precipitation, v.precipitation)
+  const w = cellMark('windSpeed', discord.byVar.windSpeed, v.windSpeed)
+  // La précip garde son indice de recevabilité (rose si > 0) en l'absence de
+  // désaccord ; le glyphe ▲/▼ signale le désaccord indépendamment de la couleur.
+  const precipTint =
+    p.tint || (v.precipitation != null && v.precipitation > 0 ? 'text-rose-400' : '')
   return (
     <>
-      <td className={`px-1 py-1 text-right ${tempClass}`}>{fmt(v.temperature)}</td>
-      <td className="px-1 py-1 text-right">{fmt(v.humidity, 0)}</td>
-      <td
-        className={`px-1 py-1 text-right ${
-          v.precipitation != null && v.precipitation > 0 ? 'text-rose-400' : ''
-        }`}
-      >
-        {fmt(v.precipitation, 1)}
+      <td className={`px-1 py-1 text-right ${t.tint}`} title={t.title}>
+        {fmt(v.temperature)}
+        <DiscordGlyph g={t.glyph} />
       </td>
-      <td className={`px-1 py-1 text-right border-r border-gray-800 ${windClass}`}>
+      <td className={`px-1 py-1 text-right ${h.tint}`} title={h.title}>
+        {fmt(v.humidity, 0)}
+        <DiscordGlyph g={h.glyph} />
+      </td>
+      <td className={`px-1 py-1 text-right ${precipTint}`} title={p.title}>
+        {fmt(v.precipitation, 1)}
+        <DiscordGlyph g={p.glyph} />
+      </td>
+      <td className={`px-1 py-1 text-right border-r border-gray-800 ${w.tint}`} title={w.title}>
         {fmt(v.windSpeed, 1)}
+        <DiscordGlyph g={w.glyph} />
       </td>
     </>
+  )
+}
+
+/** Synthèse compacte « Δ N/Total heures en désaccord — T° a · vent b · … ». */
+function DiscordSummaryStrip({ summary }: { summary: DiscordSummary }) {
+  if (summary.total === 0) return null
+  if (summary.disagreeHours === 0) {
+    return (
+      <div className="text-xs text-gray-500 px-1">
+        Aucun désaccord inter-sources détecté ({summary.total} heures).
+      </div>
+    )
+  }
+  const parts = DISCORD_VARS.filter((v) => summary.perVar[v] > 0).map(
+    (v) => `${DISCORD_VAR_META[v].label} ${summary.perVar[v]}`,
+  )
+  return (
+    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-amber-300/90 bg-amber-950/20 border border-amber-900/40 rounded px-2 py-1.5">
+      <span className="font-semibold">
+        ⚠ Δ {summary.disagreeHours}/{summary.total} heures en désaccord
+      </span>
+      <span className="text-amber-300/70">— {parts.join(' · ')}</span>
+    </div>
   )
 }
 

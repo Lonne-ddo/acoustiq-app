@@ -43,6 +43,7 @@ import {
   type RecevabiliteHour,
   type RecevabiliteConfig,
 } from '../utils/recevabilite'
+import { detectDiscord, formatDiscord, type HourDiscord } from '../utils/meteoDiscord'
 import type {
   MeteoModuleState,
   PointMeteoResults,
@@ -391,6 +392,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         map.set(key, row)
       }
     }
+    const discMap = discordByHour(activeSources)
     const sortedKeys = Array.from(map.keys()).sort()
     const header = ['datetime']
     sourceIds.forEach((id) => {
@@ -403,6 +405,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         `${lbl} Dir °`,
       )
     })
+    header.push('Désaccord')
     const lines: string[][] = [header]
     for (const key of sortedKeys) {
       const row = map.get(key)!
@@ -416,6 +419,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
           fmtCsv(row[`${id}_Dir`], 0),
         )
       }
+      const disc = discMap.get(key)
+      line.push(disc ? formatDiscord(disc) : '')
       lines.push(line)
     }
     download(
@@ -465,6 +470,12 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         row[`${lbl} Vent km/h`] = r.windSpeed
         compMap.set(key, row)
       }
+    }
+    // Colonne « Désaccord » (dernière), une par heure.
+    const discMap = discordByHour(activeSources)
+    for (const [key, row] of compMap) {
+      const disc = discMap.get(key)
+      row['Désaccord'] = disc ? formatDiscord(disc) : ''
     }
     const compRows = Array.from(compMap.values()).sort((a, b) =>
       String(a.Heure).localeCompare(String(b.Heure)),
@@ -1110,6 +1121,29 @@ function SectionHeader({ index, title }: { index: number; title: string }) {
 function hourKey(s: string): string {
   const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2})/)
   return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}` : s
+}
+
+/** Désaccord inter-sources par heure (clé = hourKey) pour les exports. */
+function discordByHour(sources: SourceResult[]): Map<string, HourDiscord> {
+  const acc = new Map<
+    string,
+    { temperature: (number | null)[]; windSpeed: (number | null)[]; precipitation: (number | null)[]; humidity: (number | null)[] }
+  >()
+  for (const s of sources) {
+    for (const r of s.rows) {
+      const key = hourKey(r.datetime)
+      const e =
+        acc.get(key) ?? { temperature: [], windSpeed: [], precipitation: [], humidity: [] }
+      e.temperature.push(r.temperature)
+      e.windSpeed.push(r.windSpeed)
+      e.precipitation.push(r.precipitation)
+      e.humidity.push(r.humidity)
+      acc.set(key, e)
+    }
+  }
+  const out = new Map<string, HourDiscord>()
+  for (const [key, cells] of acc) out.set(key, detectDiscord(cells))
+  return out
 }
 
 function fmtCsv(v: number | null | undefined, decimals: number): string {

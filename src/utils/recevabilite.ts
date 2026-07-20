@@ -9,8 +9,13 @@
  *     de la chaussée n'affecte pas la recevabilité.
  *
  * Trois niveaux : 'ok' (recevable) · 'warn' (à signaler) · 'bad' (non recevable).
- * Périodes §2.2 : jour 07 h–19 h, nuit 19 h–07 h.
+ * Périodes réglementaires : jour 07 h–19 h, soir 19 h–22 h, nuit 22 h–07 h —
+ * bornes réutilisées depuis `REG_PERIODS`/`regPeriodOfHour` (source unique dans
+ * acoustics.ts). La période est une ÉTIQUETTE : elle n'influe pas sur le niveau
+ * de recevabilité (les critères vent/précip/chaussée sont indépendants de l'heure).
  */
+
+import { regPeriodOfHour, type RegPeriod } from './acoustics'
 
 export interface MeteoHourRow {
   /** ISO-8601 ou « YYYY-MM-DD HH:MM[:SS] » dans le fuseau local. */
@@ -30,8 +35,8 @@ export type RecevabiliteLevel = 'ok' | 'warn' | 'bad'
 
 export interface RecevabiliteHour extends MeteoHourRow {
   date: Date
-  /** Période MELCCFP : jour 07 h–19 h, nuit 19 h–07 h. */
-  period: 'jour' | 'nuit'
+  /** Période MELCCFP : jour 07 h–19 h, soir 19 h–22 h, nuit 22 h–07 h. */
+  period: RegPeriod
   /** Niveau §3.6 : recevable / à signaler / non recevable. */
   level: RecevabiliteLevel
   /** Raccourci : `level === 'ok'`. Conservé pour les consommateurs existants. */
@@ -49,25 +54,18 @@ export const RECEVABILITE_LABEL: Record<RecevabiliteLevel, string> = {
   bad: 'non recevable',
 }
 
-export function isDayHour(date: Date): boolean {
-  const h = date.getHours()
-  return h >= 7 && h < 19
+/** Période réglementaire (jour/soir/nuit) d'un instant — via la source unique. */
+export function periodLabel(date: Date): RegPeriod {
+  return regPeriodOfHour(date.getHours())
 }
 
-export function periodLabel(date: Date): 'jour' | 'nuit' {
-  return isDayHour(date) ? 'jour' : 'nuit'
-}
-
-/**
- * Filtre de période §2.2. La nuit est le complément du jour, ce qui couvre
- * naturellement 19 h–23 h ET 00 h–07 h sans logique de passage à minuit.
- */
+/** Filtre de période §2.2, ternaire (jour/soir/nuit) ou `all`. */
 export function passesPeriodFilter(
   date: Date,
-  filter: 'all' | 'jour' | 'nuit',
+  filter: 'all' | RegPeriod,
 ): boolean {
   if (filter === 'all') return true
-  return filter === 'jour' ? isDayHour(date) : !isDayHour(date)
+  return periodLabel(date) === filter
 }
 
 /** Parse un timestamp en respectant l'absence de fuseau (heure locale). */
@@ -124,7 +122,7 @@ export function evaluateRecevabilite(
   parsed.sort((a, b) => a.date.getTime() - b.date.getTime())
 
   return parsed.map((row) => {
-    const period: 'jour' | 'nuit' = isDayHour(row.date) ? 'jour' : 'nuit'
+    const period: RegPeriod = regPeriodOfHour(row.date.getHours())
     const reasons: string[] = []
     let level: RecevabiliteLevel = 'ok'
 
@@ -165,6 +163,8 @@ export interface RecevabiliteStats {
   pourcentage: number
   jourTotal: number
   jourRecevable: number
+  soirTotal: number
+  soirRecevable: number
   nuitTotal: number
   nuitRecevable: number
 }
@@ -175,6 +175,8 @@ export function computeStats(hours: RecevabiliteHour[]): RecevabiliteStats {
   let bad = 0
   let jourTotal = 0
   let jourRecevable = 0
+  let soirTotal = 0
+  let soirRecevable = 0
   let nuitTotal = 0
   let nuitRecevable = 0
   for (const h of hours) {
@@ -184,6 +186,9 @@ export function computeStats(hours: RecevabiliteHour[]): RecevabiliteStats {
     if (h.period === 'jour') {
       jourTotal++
       if (h.recevable) jourRecevable++
+    } else if (h.period === 'soir') {
+      soirTotal++
+      if (h.recevable) soirRecevable++
     } else {
       nuitTotal++
       if (h.recevable) nuitRecevable++
@@ -198,6 +203,8 @@ export function computeStats(hours: RecevabiliteHour[]): RecevabiliteStats {
     pourcentage: total === 0 ? 0 : (recevables / total) * 100,
     jourTotal,
     jourRecevable,
+    soirTotal,
+    soirRecevable,
     nuitTotal,
     nuitRecevable,
   }

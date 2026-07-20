@@ -22,6 +22,7 @@ import {
   computeKb9801,
   analyzeKt9801,
   leqOnRegPeriod,
+  REG_PERIODS,
   type RegPeriodLeq,
   leqByClockHour,
   dayEnergyDistribution,
@@ -145,9 +146,9 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         return [
           pt,
           {
-            ljour: leqOnRegPeriod(data, 7, 19),
-            lsoir: leqOnRegPeriod(data, 19, 22),
-            lnuit: leqOnRegPeriod(data, 22, 7),
+            ljour: leqOnRegPeriod(data, REG_PERIODS.jour.startH, REG_PERIODS.jour.endH),
+            lsoir: leqOnRegPeriod(data, REG_PERIODS.soir.startH, REG_PERIODS.soir.endH),
+            lnuit: leqOnRegPeriod(data, REG_PERIODS.nuit.startH, REG_PERIODS.nuit.endH),
           },
         ]
       }),

@@ -308,10 +308,39 @@ export interface RegPeriodLeq {
 }
 
 /**
+ * Périodes réglementaires MELCCFP 2026 (= Note 98-01, EQ-09) — SOURCE UNIQUE des
+ * bornes horaires. Tout consommateur (Leq par période, recevabilité météo, …)
+ * réutilise ces valeurs plutôt que de recopier 7/19/22. Sémantique alignée sur
+ * `leqOnRegPeriod` : borne de début INCLUSIVE, borne de fin EXCLUSIVE.
+ *
+ * NB : ne pas confondre avec le modèle BINAIRE jour/nuit du Tableau 1 de
+ * conformité (`Conformite2026.periodOf`), où le soir est volontairement absent.
+ */
+export type RegPeriod = 'jour' | 'soir' | 'nuit'
+
+export const REG_PERIODS: Record<RegPeriod, { startH: number; endH: number }> = {
+  jour: { startH: 7, endH: 19 },
+  soir: { startH: 19, endH: 22 },
+  nuit: { startH: 22, endH: 7 },
+}
+
+/**
+ * Période réglementaire d'une heure d'horloge (0..23, tolère hors bornes via
+ * modulo 24). Cohérent avec `REG_PERIODS` et la sémantique [start, end) de
+ * `leqOnRegPeriod` : 19 h → soir, 22 h → nuit, 7 h → jour.
+ */
+export function regPeriodOfHour(hour: number): RegPeriod {
+  const h = ((Math.floor(hour) % 24) + 24) % 24
+  if (h >= REG_PERIODS.jour.startH && h < REG_PERIODS.jour.endH) return 'jour'
+  if (h >= REG_PERIODS.soir.startH && h < REG_PERIODS.soir.endH) return 'soir'
+  return 'nuit'
+}
+
+/**
  * Leq d'une PÉRIODE RÉGLEMENTAIRE [startH h, endH h), moyenne ÉNERGÉTIQUE, avec
  * mesure de la couverture temporelle. Bornes communes Note 98-01 (EQ-09) et
  * Lignes directrices MELCCFP 2026 : jour 07-19, soir 19-22, nuit 22-07 (le
- * passage minuit est géré quand endH < startH).
+ * passage minuit est géré quand endH < startH). Voir `REG_PERIODS`.
  *
  * `coverage = min(1, coveredMin / periodMin)` permet de signaler une période
  * partiellement couverte par la mesure (données ne couvrant pas tout l'intervalle).

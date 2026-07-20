@@ -17,7 +17,23 @@ interface Props {
   recevabiliteBySource: Record<string, RecevabiliteHour[]>
 }
 
-type PeriodFilter = 'all' | 'jour' | 'nuit'
+type PeriodFilter = 'all' | 'jour' | 'soir' | 'nuit'
+
+const PERIOD_FILTER_LABEL: Record<PeriodFilter, string> = {
+  all: 'Tout',
+  jour: 'Jour',
+  soir: 'Soir',
+  nuit: 'Nuit',
+}
+
+// Styles de la pastille de période. La couleur ne porte JAMAIS l'info seule :
+// le libellé (« jour »/« soir »/« nuit ») est toujours présent dans la pastille.
+// Soir = #CC79A7 (violet rougeâtre Okabe-Ito, palette accessible).
+const PERIOD_BADGE_CLASS: Record<'jour' | 'soir' | 'nuit', string> = {
+  jour: 'bg-amber-900/30 text-amber-400',
+  soir: 'text-[#CC79A7] bg-[#CC79A7]/15',
+  nuit: 'bg-indigo-900/30 text-indigo-400',
+}
 
 const fmtNum = (v: number | null | undefined, decimals = 1) =>
   v == null || !Number.isFinite(v) ? '—' : v.toFixed(decimals)
@@ -104,7 +120,7 @@ export default function SourceTable({ sources, recevabiliteBySource }: Props) {
 
       <div className="flex flex-wrap gap-3 items-center text-xs">
         <div className="flex gap-1">
-          {(['all', 'jour', 'nuit'] as PeriodFilter[]).map((p) => (
+          {(['all', 'jour', 'soir', 'nuit'] as PeriodFilter[]).map((p) => (
             <button
               key={p}
               onClick={() => setPeriodFilter(p)}
@@ -114,7 +130,7 @@ export default function SourceTable({ sources, recevabiliteBySource }: Props) {
                   : 'bg-gray-800 text-gray-400 border-gray-700 hover:bg-gray-700'
               }`}
             >
-              {p === 'all' ? 'Tout' : p === 'jour' ? 'Jour' : 'Nuit'}
+              {PERIOD_FILTER_LABEL[p]}
             </button>
           ))}
         </div>
@@ -164,11 +180,7 @@ export default function SourceTable({ sources, recevabiliteBySource }: Props) {
                   <td className="px-2 py-1 whitespace-nowrap">{fmtDateLabel(d)}</td>
                   <td className="px-2 py-1">
                     <span
-                      className={`text-[10px] px-1.5 rounded ${
-                        h.period === 'jour'
-                          ? 'bg-amber-900/30 text-amber-400'
-                          : 'bg-indigo-900/30 text-indigo-400'
-                      }`}
+                      className={`text-[10px] px-1.5 rounded ${PERIOD_BADGE_CLASS[h.period]}`}
                     >
                       {h.period}
                     </span>

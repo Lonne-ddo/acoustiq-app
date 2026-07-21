@@ -44,8 +44,26 @@ export interface RecevabiliteHour extends MeteoHourRow {
   reasons: string[]
 }
 
-/** §3.6 — seuil de vent unique (km/h). */
-export const SEUIL_VENT_KMH = 20
+/**
+ * Seuils de recevabilité §3.6 — SOURCE UNIQUE (doctrine REG_PERIODS). Aucun
+ * littéral de seuil ailleurs dans le code. `precipMaxMm` est VOLONTAIREMENT
+ * partagé entre la recevabilité (précip qui invalide) et l'état de chaussée
+ * (précip qui mouille) : même fait physique, couplage explicite (cf. libellé UI).
+ */
+export interface RecevabiliteConfig {
+  /** Vent max (km/h) : ≥ ce seuil ⇒ non recevable. */
+  windMaxKmh: number
+  /** Précip max (mm) : > ce seuil ⇒ non recevable ET chaussée non sèche. */
+  precipMaxMm: number
+  /** HR seuil chaussée sèche (%) : ≤ ce seuil (sans précip, gel) ⇒ sèche. */
+  hrDryPct: number
+}
+
+export const DEFAUT_MELCCFP: RecevabiliteConfig = {
+  windMaxKmh: 20,
+  precipMaxMm: 0,
+  hrDryPct: 90,
+}
 
 /** Libellés d'affichage par niveau. */
 export const RECEVABILITE_LABEL: Record<RecevabiliteLevel, string> = {
@@ -98,12 +116,13 @@ export function chausseeSeche(
   temp: number | null,
   hr: number | null,
   precip: number | null,
+  config: RecevabiliteConfig = DEFAUT_MELCCFP,
 ): 'sèche' | 'non sèche' | null {
   if (precip == null || temp == null) return null
-  if (precip > 0) return 'non sèche'
+  if (precip > config.precipMaxMm) return 'non sèche' // STRICT (jamais >=)
   if (temp > 0) return 'sèche'
   if (hr == null) return null
-  return hr <= 90 ? 'sèche' : 'non sèche'
+  return hr <= config.hrDryPct ? 'sèche' : 'non sèche'
 }
 
 /**
@@ -114,6 +133,7 @@ export function chausseeSeche(
 export function evaluateRecevabilite(
   rows: MeteoHourRow[],
   asphalt = true,
+  config: RecevabiliteConfig = DEFAUT_MELCCFP,
 ): RecevabiliteHour[] {
   const parsed = rows.map((r) => ({
     ...r,
@@ -126,16 +146,16 @@ export function evaluateRecevabilite(
     const reasons: string[] = []
     let level: RecevabiliteLevel = 'ok'
 
-    if (row.windSpeed != null && row.windSpeed >= SEUIL_VENT_KMH) {
-      reasons.push(`vent ${row.windSpeed.toFixed(1)} km/h ≥ ${SEUIL_VENT_KMH}`)
+    if (row.windSpeed != null && row.windSpeed >= config.windMaxKmh) {
+      reasons.push(`vent ${row.windSpeed.toFixed(1)} km/h ≥ ${config.windMaxKmh}`)
       level = 'bad'
     }
-    if (row.precipitation != null && row.precipitation > 0) {
-      reasons.push(`précip. ${row.precipitation.toFixed(1)} mm > 0`)
+    if (row.precipitation != null && row.precipitation > config.precipMaxMm) {
+      reasons.push(`précip. ${row.precipitation.toFixed(1)} mm > ${config.precipMaxMm}`)
       level = 'bad'
     }
     if (level === 'ok' && asphalt) {
-      const cs = chausseeSeche(row.temperature, row.humidity, row.precipitation)
+      const cs = chausseeSeche(row.temperature, row.humidity, row.precipitation, config)
       if (cs === 'non sèche') {
         reasons.push('chaussée non sèche')
         level = 'warn'

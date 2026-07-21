@@ -11,7 +11,12 @@ import {
   type SourceOutcome,
   type SourceResult,
 } from './meteoSources'
-import { evaluateRecevabilite, parseHourTimestamp } from './recevabilite'
+import {
+  evaluateRecevabilite,
+  parseHourTimestamp,
+  DEFAUT_MELCCFP,
+  type RecevabiliteConfig,
+} from './recevabilite'
 
 export interface PointMeteoResults {
   pointId: string
@@ -32,6 +37,8 @@ export interface MeteoModuleState {
    * verdict §3.6 → il est persisté avec le projet (cf. serializeMeteoModule).
    */
   eccStationByPoint: Record<string, string>
+  /** Seuils de recevabilité §3.6 effectifs (influencent le verdict → persistés). */
+  recevabiliteConfig: RecevabiliteConfig
 }
 
 export interface ProjectPointHint {
@@ -64,6 +71,7 @@ export function makeDefaultMeteoState(): MeteoModuleState {
     results: [],
     asphalt: true,
     eccStationByPoint: {},
+    recevabiliteConfig: { ...DEFAUT_MELCCFP },
   }
 }
 
@@ -80,6 +88,7 @@ export interface PersistedMeteoModule {
   selectedSources: SourceId[]
   asphalt: boolean
   eccStationByPoint: Record<string, string>
+  recevabiliteConfig: RecevabiliteConfig
 }
 
 export function serializeMeteoModule(state: MeteoModuleState): PersistedMeteoModule {
@@ -90,6 +99,7 @@ export function serializeMeteoModule(state: MeteoModuleState): PersistedMeteoMod
     selectedSources: Array.from(state.selectedSources),
     asphalt: state.asphalt,
     eccStationByPoint: { ...state.eccStationByPoint },
+    recevabiliteConfig: { ...state.recevabiliteConfig },
   }
 }
 
@@ -104,6 +114,7 @@ export function deserializeMeteoModule(p: PersistedMeteoModule): MeteoModuleStat
     results: [],
     asphalt: p.asphalt ?? base.asphalt,
     eccStationByPoint: p.eccStationByPoint ?? {},
+    recevabiliteConfig: { ...DEFAUT_MELCCFP, ...(p.recevabiliteConfig ?? {}) },
   }
 }
 
@@ -137,7 +148,7 @@ export function recevabiliteForDate(
   if (!first) return []
   const firstOk = first.outcomes.find((o): o is SourceResult => !isError(o))
   if (!firstOk) return []
-  const ev = evaluateRecevabilite(firstOk.rows, state.asphalt)
+  const ev = evaluateRecevabilite(firstOk.rows, state.asphalt, state.recevabiliteConfig)
   const out: { startMin: number; endMin: number; recevable: boolean }[] = []
   for (const h of ev) {
     const d = h.date instanceof Date ? h.date : parseHourTimestamp(h.datetime)

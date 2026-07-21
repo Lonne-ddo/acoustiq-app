@@ -3,8 +3,8 @@ import { Check, AlertTriangle, X } from 'lucide-react'
 import {
   type RecevabiliteHour,
   type RecevabiliteLevel,
+  type RecevabiliteConfig,
   RECEVABILITE_LABEL,
-  SEUIL_VENT_KMH,
   computeStats,
   parseHourTimestamp,
 } from '../../utils/recevabilite'
@@ -15,6 +15,8 @@ interface Props {
   sources: SourceResult[]
   /** Recevabilité pré-calculée par source pour le point actif. */
   recevabiliteBySource: Record<string, RecevabiliteHour[]>
+  /** Seuils effectifs (pour le surlignage vent/précip). */
+  config: RecevabiliteConfig
 }
 
 type PeriodFilter = 'all' | 'jour' | 'soir' | 'nuit'
@@ -46,7 +48,7 @@ function fmtDateLabel(d: Date): string {
   ).padStart(2, '0')}`
 }
 
-export default function SourceTable({ sources, recevabiliteBySource }: Props) {
+export default function SourceTable({ sources, recevabiliteBySource, config }: Props) {
   const [activeSourceIdx, setActiveSourceIdx] = useState(0)
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('all')
   const [recevableOnly, setRecevableOnly] = useState(false)
@@ -163,8 +165,8 @@ export default function SourceTable({ sources, recevabiliteBySource }: Props) {
           <tbody>
             {filtered.map((h, i) => {
               const d = h.date instanceof Date ? h.date : parseHourTimestamp(h.datetime)
-              const precipBad = h.precipitation != null && h.precipitation > 0
-              const windBad = h.windSpeed != null && h.windSpeed >= SEUIL_VENT_KMH
+              const precipBad = h.precipitation != null && h.precipitation > config.precipMaxMm
+              const windBad = h.windSpeed != null && h.windSpeed >= config.windMaxKmh
               const rowText =
                 h.level === 'ok'
                   ? 'text-gray-200'

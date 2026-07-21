@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import * as XLSX from 'xlsx'
 import {
+  AlertTriangle,
   Cloud,
   Download,
   FileSpreadsheet,
@@ -36,7 +37,9 @@ import {
 import {
   evaluateRecevabilite,
   RECEVABILITE_LABEL,
+  DEFAUT_MELCCFP,
   type RecevabiliteHour,
+  type RecevabiliteConfig,
 } from '../utils/recevabilite'
 import type {
   MeteoModuleState,
@@ -235,10 +238,10 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
     const out: Record<string, RecevabiliteHour[]> = {}
     for (const o of activeResult.outcomes) {
       if (isError(o)) continue
-      out[o.source] = evaluateRecevabilite(o.rows, state.asphalt)
+      out[o.source] = evaluateRecevabilite(o.rows, state.asphalt, state.recevabiliteConfig)
     }
     return out
-  }, [activeResult, state.asphalt])
+  }, [activeResult, state.asphalt, state.recevabiliteConfig])
 
   const activeSources: SourceResult[] = useMemo(() => {
     if (!activeResult) return []
@@ -634,13 +637,20 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
               </span>
             </label>
             <div className="text-[10px] text-gray-500 leading-relaxed">
-              Recevabilité §3.6 : vent <span className="text-gray-300">&lt; 20 km/h</span> ·
-              précipitations <span className="text-gray-300">= 0 mm</span>
+              Recevabilité §3.6 : vent{' '}
+              <span className="text-gray-300">&lt; {state.recevabiliteConfig.windMaxKmh} km/h</span> ·
+              précipitations{' '}
+              <span className="text-gray-300">≤ {state.recevabiliteConfig.precipMaxMm} mm</span>
               {(state.asphalt ?? true)
                 ? ' · chaussée sèche (sinon « à signaler »)'
                 : ' · chaussée non considérée'}
             </div>
           </div>
+
+          <RecevabiliteConfigEditor
+            config={state.recevabiliteConfig}
+            onChange={(recevabiliteConfig) => update({ recevabiliteConfig })}
+          />
 
           <div className="flex flex-wrap gap-2 pt-1">
             <button
@@ -738,6 +748,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
             <SourceTable
               sources={activeSources}
               recevabiliteBySource={recevabiliteBySource}
+              config={state.recevabiliteConfig}
             />
             <div className="flex flex-wrap gap-2 pt-1">
               <button
@@ -931,6 +942,134 @@ function EcccStationBlock({
         La plus proche n'est pas toujours la plus représentative (relief, plan d'eau).
         Le choix alimente la recevabilité §3.6 et est tracé dans les exports.
       </div>
+    </div>
+  )
+}
+
+/**
+ * Éditeur des seuils de recevabilité §3.6. Un seuil modifié CHANGE le verdict →
+ * badge « seuils modifiés — non MELCCFP » (glyphe + texte, Okabe-Ito). Saisie
+ * invalide : refus EXPLICITE sous le champ (jamais de blocage silencieux).
+ */
+function RecevabiliteConfigEditor({
+  config,
+  onChange,
+}: {
+  config: RecevabiliteConfig
+  onChange: (c: RecevabiliteConfig) => void
+}) {
+  const isDefault =
+    config.windMaxKmh === DEFAUT_MELCCFP.windMaxKmh &&
+    config.precipMaxMm === DEFAUT_MELCCFP.precipMaxMm &&
+    config.hrDryPct === DEFAUT_MELCCFP.hrDryPct
+  return (
+    <div className="rounded border border-gray-800 bg-gray-900/40 px-3 py-2 space-y-2">
+      <div className="flex items-center gap-2 flex-wrap">
+        <span className="text-[11px] font-medium text-gray-400">Seuils de recevabilité §3.6</span>
+        {!isDefault && (
+          <span
+            className="inline-flex items-center gap-1 text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider text-[#E69F00] bg-[#E69F00]/10 border border-[#E69F00]/40"
+            title="Au moins un seuil diffère des valeurs MELCCFP par défaut"
+          >
+            <AlertTriangle size={10} aria-hidden="true" /> seuils modifiés — non MELCCFP
+          </span>
+        )}
+        <button
+          type="button"
+          onClick={() => onChange({ ...DEFAUT_MELCCFP })}
+          disabled={isDefault}
+          className="ml-auto text-[10px] text-gray-400 border border-gray-700 rounded px-1.5 py-0.5
+                     hover:text-gray-200 hover:border-gray-500 disabled:opacity-40"
+        >
+          Valeurs MELCCFP
+        </button>
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <NumField
+          label="Vent max (km/h)"
+          value={config.windMaxKmh}
+          min={0}
+          max={100}
+          step={1}
+          onValid={(v) => onChange({ ...config, windMaxKmh: v })}
+        />
+        <NumField
+          label="Précipitation max (mm) — appliquée à la recevabilité et à l'état de chaussée"
+          value={config.precipMaxMm}
+          min={0}
+          max={50}
+          step={0.1}
+          onValid={(v) => onChange({ ...config, precipMaxMm: v })}
+        />
+        <NumField
+          label="HR chaussée sèche (%)"
+          value={config.hrDryPct}
+          min={0}
+          max={100}
+          step={1}
+          onValid={(v) => onChange({ ...config, hrDryPct: v })}
+        />
+      </div>
+    </div>
+  )
+}
+
+/** Champ numérique validé — refus explicite (glyphe ⚠ + texte), pas de vide silencieux. */
+function NumField({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onValid,
+}: {
+  label: string
+  value: number
+  min: number
+  max: number
+  step: number
+  onValid: (v: number) => void
+}) {
+  const [raw, setRaw] = useState(String(value))
+  const [error, setError] = useState<string | null>(null)
+  // Resynchronise l'affichage quand la valeur change de l'extérieur (reset MELCCFP).
+  useEffect(() => {
+    setRaw(String(value))
+    setError(null)
+  }, [value])
+
+  function handle(v: string) {
+    setRaw(v)
+    if (v.trim() === '') return setError('Valeur requise')
+    const n = Number(v)
+    if (!Number.isFinite(n)) return setError('Nombre invalide')
+    if (n < min) return setError(`Minimum ${min}`)
+    if (n > max) return setError(`Maximum ${max}`)
+    setError(null)
+    onValid(n) // n'écrit la config QUE si la saisie est valide
+  }
+
+  return (
+    <div>
+      <label className="block text-[10px] text-gray-500 mb-1 leading-tight">{label}</label>
+      <input
+        type="number"
+        value={raw}
+        min={min}
+        max={max}
+        step={step}
+        aria-invalid={error != null}
+        onChange={(e) => handle(e.target.value)}
+        className={`w-full text-xs bg-gray-800 text-gray-200 border rounded px-2 py-1.5 focus:outline-none focus:ring-1 ${
+          error ? 'border-[#D55E00] focus:ring-[#D55E00]' : 'border-gray-700 focus:ring-emerald-500'
+        }`}
+      />
+      {error && (
+        <div className="mt-1 flex items-center gap-1 text-[10px] text-[#D55E00]">
+          <AlertTriangle size={10} aria-hidden="true" />
+          <span>{error} — saisie refusée</span>
+        </div>
+      )}
     </div>
   )
 }

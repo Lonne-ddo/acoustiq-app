@@ -26,15 +26,7 @@ import type {
   Period,
   Category,
 } from '../types'
-import {
-  laeqAvg,
-  computeL10,
-  computeL50,
-  computeL90,
-  computeLAFmax,
-  computeLAFmin,
-  filterDataByPeriods,
-} from '../utils/acoustics'
+import { computeReportIndices } from '../utils/reportIndices'
 import {
   seuilsUtilisesLine,
   DEFAUT_MELCCFP,
@@ -88,30 +80,11 @@ export default function ReportGenerator({
   const cfg = recevabiliteConfig ?? DEFAUT_MELCCFP
 
   // Calcul des indices pour chaque point
-  const indicesByPoint = useMemo(() => {
-    return Object.fromEntries(
-      assignedPoints.map((pt) => {
-        const values = files
-          .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-          .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories))
-          .map((dp) => dp.laeq)
-
-        if (values.length === 0) return [pt, null]
-
-        return [
-          pt,
-          {
-            laeq: laeqAvg(values),
-            l10: computeL10(values),
-            l50: computeL50(values),
-            l90: computeL90(values),
-            lafmax: computeLAFmax(values),
-            lafmin: computeLAFmin(values),
-          },
-        ]
-      }),
-    )
-  }, [files, pointMap, selectedDate, assignedPoints, periods, categories])
+  // Source UNIQUE des indices : consommée par le tableau TEXTE ET la figure PNG.
+  const indicesByPoint = useMemo(
+    () => computeReportIndices(files, pointMap, selectedDate, assignedPoints, periods, categories),
+    [files, pointMap, selectedDate, assignedPoints, periods, categories],
+  )
 
   // Événements du jour
   const dayEvents = useMemo(
@@ -555,7 +528,12 @@ export default function ReportGenerator({
       }
 
       // Figure 3 — Indices acoustiques
-      const figIdx = drawFigureIndices({ files, pointMap, selectedDate, number: n })
+      const figIdx = drawFigureIndices({
+        points: assignedPoints,
+        indicesByPoint,
+        selectedDate,
+        number: n,
+      })
       zip.file(`figure_${String(n).padStart(2, '0')}_indices.png`, await canvasToPngBlob(figIdx))
       n++
 

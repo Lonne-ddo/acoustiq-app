@@ -10,16 +10,9 @@ import type {
   SourceEvent,
   ConformiteSummary,
   DataPoint,
+  IndicesSnapshot,
 } from '../types'
-import {
-  laeqAvg,
-  computeL10,
-  computeL50,
-  computeL90,
-  computeLAFmax,
-  computeLAFmin,
-  THIRD_OCTAVE_CENTERS,
-} from './acoustics'
+import { THIRD_OCTAVE_CENTERS } from './acoustics'
 
 // ─── Constantes de mise en page (dimensions logiques en px @ 150 DPI) ───────
 const FIG_W = 1200
@@ -382,14 +375,20 @@ export function drawFigureSpectrogramme(opts: FigureSpectroOptions): HTMLCanvasE
 
 // ─── Figure 3 — Indices acoustiques ─────────────────────────────────────────
 export interface FigureIndicesOptions {
-  files: MeasurementFile[]
-  pointMap: Record<string, string>
+  /** Points (ordre des colonnes) — mêmes que le tableau texte du rapport. */
+  points: string[]
+  /**
+   * Indices DÉJÀ CALCULÉS (filtrés) par point — MÊME objet que le tableau texte
+   * (ReportGenerator). La figure ne recalcule rien et n'a AUCUN accès aux
+   * données brutes : impossible de rediverger.
+   */
+  indicesByPoint: Record<string, IndicesSnapshot | null>
   selectedDate: string
   number: number
 }
 
 export function drawFigureIndices(opts: FigureIndicesOptions): HTMLCanvasElement {
-  const { files, pointMap, selectedDate, number } = opts
+  const { points, indicesByPoint, selectedDate, number } = opts
   const canvas = document.createElement('canvas')
   canvas.width = FIG_W
   canvas.height = FIG_H
@@ -397,27 +396,8 @@ export function drawFigureIndices(opts: FigureIndicesOptions): HTMLCanvasElement
   fillBg(ctx, FIG_W, FIG_H)
   drawTitle(ctx, `Figure ${number} — Indices acoustiques — ${selectedDate}`)
 
-  // Calcul des indices par point
-  const points = new Set<string>()
-  for (const f of files) {
-    if (pointMap[f.id] && f.date === selectedDate) points.add(pointMap[f.id])
-  }
-  const pointNames = [...points].sort()
-  const indices = pointNames.map((pt) => {
-    const vals = files
-      .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
-      .flatMap((f) => f.data)
-      .map((d) => d.laeq)
-    if (vals.length === 0) return null
-    return {
-      laeq: laeqAvg(vals),
-      l10: computeL10(vals),
-      l50: computeL50(vals),
-      l90: computeL90(vals),
-      lafmax: computeLAFmax(vals),
-      lafmin: computeLAFmin(vals),
-    }
-  })
+  const pointNames = points
+  const indices = pointNames.map((pt) => indicesByPoint[pt] ?? null)
 
   const rows = ['LAeq', 'L10', 'L50', 'L90', 'LAFmax', 'LAFmin'] as const
   const keys = ['laeq', 'l10', 'l50', 'l90', 'lafmax', 'lafmin'] as const

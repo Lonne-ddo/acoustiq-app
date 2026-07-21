@@ -12,11 +12,13 @@ export default defineConfig({
   define: {
     __APP_VERSION__: JSON.stringify(pkg.version),
   },
-  // Port figé sur 5173 : l'URL Local Play enregistrée dans le harness pointe
-  // toujours là. strictPort échoue franchement si le port est pris, au lieu de
-  // basculer en silence sur 5174 (ce qui casserait le handshake).
+  // Port figé sur 5174 : budget-codeapp occupe 5173 → on déconflicte pour que
+  // les deux Code Apps puissent tourner en Local Play simultanément. L'URL Local
+  // Play d'AcoustiQ dans le harness doit pointer sur 5174. strictPort échoue
+  // franchement si le port est pris, au lieu de basculer en silence (ce qui
+  // casserait le handshake).
   server: {
-    port: 5173,
+    port: 5174,
     strictPort: true,
   },
 })

@@ -1,0 +1,12 @@
+{
+  "version": "1.0",
+  "appId": "3a1ccf37-c4ea-46b2-8d83-030d167547e9",
+  "appDisplayName": "AcoustiQ",
+  "region": "prod",
+  "environmentId": "f1837b74-cc23-e5a7-93c6-626c6f727ef4",
+  "description": "Analyse acoustique environnementale (MELCCFP 2026).",
+  "buildPath": "./dist",
+  "buildEntryPoint": "index.html",
+  "localAppUrl": "http://localhost:3000",
+  "logoPath": "Default"
+}

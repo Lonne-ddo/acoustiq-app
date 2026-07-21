@@ -11,6 +11,7 @@
     "preview": "vite preview"
   },
   "dependencies": {
+    "@microsoft/power-apps": "^1.2.5",
     "@tailwindcss/vite": "^4.2.2",
     "@tensorflow/tfjs": "^4.22.0",
     "@types/html2canvas": "^0.5.35",
@@ -28,6 +29,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^4.20260525.1",
     "@eslint/js": "^9.39.4",
+    "@microsoft/power-apps-vite": "^1.0.2",
     "@types/node": "^24.12.2",
     "@types/qrcode": "^1.5.6",
     "@types/react": "^19.2.14",

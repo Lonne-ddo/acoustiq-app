@@ -118,6 +118,7 @@ import { parseAudioFilename, deriveStartTimesFromSequence } from './utils/audioF
 import Conformite2026 from './components/Conformite2026'
 import SiteMap from './components/SiteMap'
 import Settings from './components/Settings'
+import CspProbePanel from './components/CspProbePanel'
 import { FEATURES } from './config/features'
 import ShortcutsModal from './components/ShortcutsModal'
 import Onboarding, { shouldShowOnboarding, resetOnboarding } from './components/Onboarding'
@@ -237,7 +238,7 @@ function saveRecent(projects: RecentProject[]) {
   localStorage.setItem(RECENT_KEY, JSON.stringify(projects.slice(0, MAX_RECENT)))
 }
 
-type Tab = 'chart' | 'map' | 'lw' | 'isolement' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation' | 'carriere' | 'yamnet' | 'ecme' | 'vue3d' | 'meteo'
+type Tab = 'chart' | 'map' | 'lw' | 'isolement' | 'concordance' | 'report' | 'reafie' | 'history' | 'regulation' | 'carriere' | 'yamnet' | 'ecme' | 'vue3d' | 'meteo' | 'diag'
 
 /**
  * Regroupement des onglets en 4 catégories principales pour réduire le bruit
@@ -262,6 +263,7 @@ const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
   ecme: 'outils',
   vue3d: 'outils',
   meteo: 'outils',
+  diag: 'outils',
 }
 
 // Sous-onglets dérivés des feature flags (src/config/features.ts).
@@ -290,6 +292,7 @@ const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
     ...(FEATURES.carte ? [{ id: 'map' as Tab, label: 'Carte' }] : []),
     { id: 'regulation', label: 'Réglementation' },
     { id: 'history', label: 'Historique' },
+    { id: 'diag', label: 'Diagnostic réseau' },
   ],
 }
 
@@ -2066,6 +2069,12 @@ function MainPanel({
               projectPoints={meteoProjectPoints}
             />
           </Suspense>
+        </div>
+      )}
+
+      {effectiveTab === 'diag' && (
+        <div className="flex-1 min-h-0 overflow-auto animate-[fadeIn_0.15s_ease-out]">
+          <CspProbePanel />
         </div>
       )}
 

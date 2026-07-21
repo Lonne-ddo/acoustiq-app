@@ -17,39 +17,19 @@ import {
   computeLAFmax,
   computeLAFmin,
   detectKt,
-  computeLaftm5,
-  computeKi9801,
-  computeKb9801,
-  analyzeKt9801,
   leqOnRegPeriod,
   REG_PERIODS,
   type RegPeriodLeq,
   leqByClockHour,
   dayEnergyDistribution,
   filterDataByPeriods,
-  type KtAnalysis,
 } from '../utils/acoustics'
 import {
-  classifyCorr9801,
+  computeCorr9801Point,
   corr9801CauseMessage,
   type Corr9801Term,
-  type Corr9801Cause,
-  type Corr9801Facts,
+  type Corr9801TermDetail,
 } from '../utils/corr9801'
-
-/** Détail 98-01 CONSERVÉ par terme et par point (valeurs déjà calculées). */
-interface Corr9801TermDetail {
-  value: number | null
-  cause: Corr9801Cause | null
-  /** LAeq (dBAvg) de la fenêtre ; null si aucune donnée. Commun aux 3 termes. */
-  laeq: number | null
-  /** Kb : LCeq conservé (l'écart LCeq−LAeq et la porte 20 dB se lisent à l'affichage). */
-  lceq?: number | null
-  /** Ki : LAFTM5 conservé (l'écart LAFTM5−LAeq et la porte 2 dBA se lisent à l'affichage). */
-  laftm5?: number | null
-  /** Kt : analyse spectrale complète (bandes, écarts, seuils 15/8/5, bande retenue). */
-  analysis?: KtAnalysis | null
-}
 
 const PERIODS_HELP =
   'Leq par période réglementaire (moyenne énergétique). Bornes communes à la ' +
@@ -216,55 +196,8 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
           .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
           .filter((dp) => dp.t >= startMin && dp.t <= endMin)
-        const hasData = dps.length > 0
-        const laeqWin = hasData ? laeqAvg(dps.map((d) => d.laeq)) : 0
-
-        // Kb = LCeq − LAeq (énergétiques). null si aucun LCeq parsé.
-        const lceqVals = dps.map((d) => d.lceq).filter((v): v is number => typeof v === 'number')
-        const hasLceq = lceqVals.length > 0
-        const lceq = hasLceq ? laeqAvg(lceqVals) : null
-        const kbVal = hasLceq ? computeKb9801(lceq, laeqWin) : null
-
-        // Ki = LAFTM5 − LAeq. null si aucun LAFmax 1 s parsé (ou LAFTM5 null).
-        const lafVals = dps.map((d) => d.lafmax).filter((v): v is number => typeof v === 'number')
-        const hasLafmax = lafVals.length > 0
-        const laftm5 = hasLafmax ? computeLaftm5(lafVals) : null
-        const kiVal = hasLafmax ? computeKi9801(laftm5, laeqWin) : null
-
-        // Kt 98-01 sur le spectre moyen énergétique par bande. On CONSERVE
-        // l'analyse complète (bandes/écarts/seuils/bande retenue), pas seulement .kt.
-        const specs = dps.map((d) => d.spectra).filter((s): s is number[] => !!s)
-        const hasSpectrum = specs.length > 0
-        let ktAnalysis: KtAnalysis | null = null
-        if (hasSpectrum) {
-          const nBands = specs[0].length
-          const avgSpec = new Array(nBands).fill(0).map((_, i) =>
-            laeqAvg(specs.map((s) => s[i]).filter((v) => typeof v === 'number')),
-          )
-          ktAnalysis = analyzeKt9801(avgSpec, laeqWin)
-        }
-        const ktVal: number | null = ktAnalysis ? ktAnalysis.kt : null
-
-        // Cause DIFFÉRENCIÉE (pure) quand un terme est indisponible.
-        const facts: Corr9801Facts = {
-          hasData,
-          hasLceq,
-          hasLafmax,
-          laftm5IsNull: laftm5 === null,
-          hasSpectrum,
-        }
-        const causeOf = (term: Corr9801Term, val: number | null): Corr9801Cause | null =>
-          val === null ? classifyCorr9801(term, facts) : null
-
-        // dBAvg de la fenêtre = LAeq — conservé pour les trois termes.
-        const laeq = hasData ? laeqWin : null
-
-        const detail: Record<Corr9801Term, Corr9801TermDetail> = {
-          kt: { value: ktVal, cause: causeOf('kt', ktVal), laeq, analysis: ktAnalysis },
-          ki: { value: kiVal, cause: causeOf('ki', kiVal), laeq, laftm5 },
-          kb: { value: kbVal, cause: causeOf('kb', kbVal), laeq, lceq },
-        }
-        return [pt, detail]
+        // Brique partagée + testée (filtre Number.isFinite : NaN ⇒ indispo, pas 0).
+        return [pt, computeCorr9801Point(dps)]
       }),
     ) as Record<string, Record<Corr9801Term, Corr9801TermDetail>>
   }, [files, pointMap, selectedDate, pointNames, mode, startTime, endTime, periods, categories, excludedCatIds])

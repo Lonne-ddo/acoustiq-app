@@ -4,7 +4,7 @@
  */
 import { useState, useMemo, useEffect, useRef } from 'react'
 import * as XLSX from 'xlsx'
-import { Download, TrendingDown, ChevronRight, Sun, X, CheckCircle2, XCircle } from 'lucide-react'
+import { Download, TrendingDown, ChevronRight, Sun, X, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
 import HelpTooltip from './HelpTooltip'
 import type { MeasurementFile, MeteoData, Period, Category } from '../types'
 import {
@@ -20,6 +20,7 @@ import {
   leqOnRegPeriod,
   REG_PERIODS,
   type RegPeriodLeq,
+  type RegPeriod,
   leqByClockHour,
   dayEnergyDistribution,
   filterDataByPeriods,
@@ -30,6 +31,21 @@ import {
   type Corr9801Term,
   type Corr9801TermDetail,
 } from '../utils/corr9801'
+import { windowData, isRegPeriodMode, type IndicesMode } from '../utils/indicesWindow'
+
+/** Libellés courts des modes période (toggle + libellé d'export). */
+const REG_PERIOD_LABEL: Record<RegPeriod, string> = { jour: 'Jour', soir: 'Soir', nuit: 'Nuit' }
+const REG_PERIOD_RANGE: Record<RegPeriod, string> = {
+  jour: '07h–19h',
+  soir: '19h–22h',
+  nuit: '22h–07h',
+}
+/** mode période → clé de periodsByPoint (réutilise la couverture déjà calculée). */
+const REG_PERIOD_KEY: Record<RegPeriod, 'ljour' | 'lsoir' | 'lnuit'> = {
+  jour: 'ljour',
+  soir: 'lsoir',
+  nuit: 'lnuit',
+}
 
 const PERIODS_HELP =
   'Leq par période réglementaire (moyenne énergétique). Bornes communes à la ' +
@@ -106,7 +122,7 @@ interface Props {
 }
 
 export default function IndicesPanel({ files, pointMap, selectedDate, meteo, aggregationSeconds = 300, periods, categories }: Props) {
-  const [mode, setMode] = useState<'full' | 'custom'>('full')
+  const [mode, setMode] = useState<IndicesMode>('full')
   // Terme 98-01 sélectionné pour le panneau de détail (clic dans le tableau).
   const [selectedCorr, setSelectedCorr] = useState<{ point: string; term: Corr9801Term } | null>(null)
   const [startTime, setStartTime] = useState('00:00')
@@ -166,10 +182,10 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
     const endMin = mode === 'custom' ? hhmmToMin(endTime) : Infinity
     return Object.fromEntries(
       pointNames.map((pt) => {
-        const dps = files
+        const cat = files
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
           .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
-          .filter((dp) => dp.t >= startMin && dp.t <= endMin)
+        const dps = windowData(cat, mode, startMin, endMin)
         const specs = dps.map((d) => d.spectra).filter((s): s is number[] => !!s)
         if (specs.length === 0) return [pt, null]
         const nBands = specs[0].length
@@ -192,10 +208,10 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
     const endMin = mode === 'custom' ? hhmmToMin(endTime) : Infinity
     return Object.fromEntries(
       pointNames.map((pt) => {
-        const dps = files
+        const cat = files
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
           .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
-          .filter((dp) => dp.t >= startMin && dp.t <= endMin)
+        const dps = windowData(cat, mode, startMin, endMin)
         // Brique partagée + testée (filtre Number.isFinite : NaN ⇒ indispo, pas 0).
         return [pt, computeCorr9801Point(dps)]
       }),
@@ -209,11 +225,10 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
 
     return Object.fromEntries(
       pointNames.map((pt) => {
-        const values = files
+        const cat = files
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
           .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
-          .filter((dp) => dp.t >= startMin && dp.t <= endMin)
-          .map((dp) => dp.laeq)
+        const values = windowData(cat, mode, startMin, endMin).map((dp) => dp.laeq)
 
         if (values.length === 0) return [pt, null]
 
@@ -253,8 +268,14 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
     try {
       const wb = XLSX.utils.book_new()
       const round1 = (n: number) => Math.round(n * 10) / 10
-      const timeRangeLabel =
-        mode === 'custom' ? `${startTime} → ${endTime}` : 'Pleine journée (00:00 → 23:59)'
+      // L'export suit le mode affiché (comme déjà pour « Personnalisé »). Le libellé
+      // reflète donc la période réglementaire pour ne pas étiqueter « Pleine journée »
+      // des indices calculés sur jour/soir/nuit. Aucune colonne/feuille ajoutée.
+      const timeRangeLabel = isRegPeriodMode(mode)
+        ? `Période ${REG_PERIOD_LABEL[mode]} (${REG_PERIOD_RANGE[mode]})`
+        : mode === 'custom'
+          ? `${startTime} → ${endTime}`
+          : 'Pleine journée (00:00 → 23:59)'
 
       // ── Feuille 1 : Indices ───────────────────────────────────────────────
       const sheet1: Array<Array<string | number>> = []
@@ -513,6 +534,22 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
           >
             Pleine journée
           </button>
+          {/* Périodes réglementaires — mêmes bornes que le sous-tableau (REG_PERIODS,
+              wrap-aware pour la nuit). Recalculent indices + correctifs 98-01. */}
+          {(['jour', 'soir', 'nuit'] as const).map((p) => (
+            <button
+              key={p}
+              onClick={() => setMode(p)}
+              title={`Indices sur la période ${REG_PERIOD_LABEL[p]} (${REG_PERIOD_RANGE[p]})`}
+              className={`text-xs px-2 py-1 rounded transition-colors ${
+                mode === p
+                  ? 'bg-emerald-700 text-white'
+                  : 'bg-gray-800 text-gray-400 hover:bg-gray-700'
+              }`}
+            >
+              {REG_PERIOD_LABEL[p]}
+            </button>
+          ))}
           <button
             onClick={() => setMode('custom')}
             className={`text-xs px-2 py-1 rounded transition-colors ${
@@ -546,6 +583,37 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
           )}
         </div>
       </div>
+
+      {/* Couverture de la période sélectionnée — réutilise la couverture déjà
+          calculée (periodsByPoint), même source que le sous-tableau. Ambre + glyphe
+          + libellé « (partielle) » sous 95 % (la couleur ne porte jamais l'info seule). */}
+      {isRegPeriodMode(mode) && (
+        <div className="flex flex-wrap items-center gap-3 px-4 py-1 text-[11px] border-b border-gray-800 bg-gray-900/40">
+          <span className="text-gray-500">
+            Couverture {REG_PERIOD_LABEL[mode]} ({REG_PERIOD_RANGE[mode]}) :
+          </span>
+          {pointNames.map((pt, i) => {
+            const cell = periodsByPoint[pt]?.[REG_PERIOD_KEY[mode]]
+            const cov = cell && cell.periodMin > 0 ? Math.min(1, cell.coveredMin / cell.periodMin) : 0
+            const pct = Math.round(cov * 100)
+            const partial = cov < 0.95
+            return (
+              <span key={pt} className="inline-flex items-center gap-1">
+                <span style={{ color: ptColor(pt, i) }} className="font-medium">{pt}</span>
+                <span
+                  className={`inline-flex items-center gap-0.5 tabular-nums ${
+                    partial ? 'text-amber-400' : 'text-gray-400'
+                  }`}
+                  title={`Couverture temporelle : ${cell?.coveredMin ?? 0} / ${cell?.periodMin ?? 0} min`}
+                >
+                  {partial && <AlertTriangle size={10} aria-hidden="true" />}
+                  {pct}%{partial ? ' (partielle)' : ''}
+                </span>
+              </span>
+            )
+          })}
+        </div>
+      )}
 
       {/* Bandeau récapitulatif de l'exclusion à la volée */}
       {excludedCatIds.size > 0 && (
@@ -817,6 +885,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         pointMap={pointMap}
         selectedDate={selectedDate}
         pointNames={pointNames}
+        mode={mode}
         startMin={mode === 'custom' ? hhmmToMin(startTime) : -Infinity}
         endMin={mode === 'custom' ? hhmmToMin(endTime) : Infinity}
         periods={periods}
@@ -835,12 +904,13 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
 // ────────────────────────────────────────────────────────────────────────────
 
 function DistributionSection({
-  files, pointMap, selectedDate, pointNames, startMin, endMin, periods, categories, excludedCatIds,
+  files, pointMap, selectedDate, pointNames, mode, startMin, endMin, periods, categories, excludedCatIds,
 }: {
   files: MeasurementFile[]
   pointMap: Record<string, string>
   selectedDate: string
   pointNames: string[]
+  mode: IndicesMode
   startMin: number
   endMin: number
   periods?: Period[]
@@ -853,11 +923,10 @@ function DistributionSection({
   const distributions = useMemo(() => {
     const LN_X = Array.from({ length: 99 }, (_, i) => i + 1) // L1..L99
     return pointNames.map((pt) => {
-      const values = files
+      const cat = files
         .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
         .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
-        .filter((dp) => dp.t >= startMin && dp.t <= endMin)
-        .map((dp) => dp.laeq)
+      const values = windowData(cat, mode, startMin, endMin).map((dp) => dp.laeq)
       if (values.length === 0) return { pt, percentiles: null as number[] | null, min: 0, max: 0 }
       // Source unique : computeLnSeries (= computeLn pour chaque x), un seul tri.
       const percentiles = computeLnSeries(values, LN_X)
@@ -865,7 +934,7 @@ function DistributionSection({
       for (const v of values) { if (v < min) min = v; if (v > max) max = v }
       return { pt, percentiles, min, max }
     })
-  }, [files, pointMap, selectedDate, pointNames, startMin, endMin, periods, categories, excludedCatIds])
+  }, [files, pointMap, selectedDate, pointNames, mode, startMin, endMin, periods, categories, excludedCatIds])
 
   if (pointNames.length === 0) return null
 

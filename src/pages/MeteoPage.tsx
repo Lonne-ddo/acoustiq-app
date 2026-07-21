@@ -331,6 +331,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
     const lines: string[][] = [
       // En-tête de traçabilité : seuils EFFECTIVEMENT utilisés (+ « non MELCCFP »).
       [`# ${seuilsUtilisesLine(state.recevabiliteConfig)}`],
+      // Une source ECCC tentée et échouée n'est jamais tue : cause typée exportée.
+      ...(ecccError ? [[`# Env. Canada : indisponible — ${ecccError.error}`]] : []),
       [
         'source',
         'station',
@@ -482,7 +484,9 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
       { Champ: 'Sources', Valeur: sourceIds.map((id) => SOURCES[id].shortLabel).join(', ') },
       ...(ecccResult
         ? [{ Champ: 'Station EC utilisée', Valeur: formatStationTrace(ecccResult.station) }]
-        : []),
+        : ecccError
+          ? [{ Champ: 'Station EC', Valeur: `indisponible — ${ecccError.error}` }]
+          : []),
       { Champ: 'Référentiel', Valeur: 'Lignes directrices MELCCFP — §3.6' },
       { Champ: 'Vent', Valeur: `≥ ${cfg.windMaxKmh} km/h ⇒ non recevable` },
       {
@@ -532,7 +536,11 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
               activeSources.length > 0
                 ? `Sources : ${activeSources.map((s) => SOURCES[s.source].shortLabel).join(', ')}`
                 : null,
-              ecccResult ? `Station EC : ${formatStationTrace(ecccResult.station)}` : null,
+              ecccResult
+                ? `Station EC : ${formatStationTrace(ecccResult.station)}`
+                : ecccError
+                  ? `Station EC : indisponible — ${ecccError.error}`
+                  : null,
               seuilsUtilisesLine(state.recevabiliteConfig),
               `Généré : ${new Date().toLocaleString('fr-CA')}`,
             ]

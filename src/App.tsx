@@ -106,6 +106,7 @@ import {
   serializeMeteoModule,
   deserializeMeteoModule,
   ecccStationsUsed,
+  ecccFailuresUsed,
   type MeteoModuleState,
   type ProjectPointHint,
 } from './utils/meteoModule'
@@ -2010,6 +2011,7 @@ function MainPanel({
               periods={periods}
               categories={categories}
               ecccStations={ecccStationsUsed(meteoModule)}
+              ecccFailures={ecccFailuresUsed(meteoModule)}
               recevabiliteConfig={meteoModule.recevabiliteConfig}
             />
           ) : (

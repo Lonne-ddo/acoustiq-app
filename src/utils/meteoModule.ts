@@ -139,6 +139,21 @@ export function ecccStationsUsed(state: MeteoModuleState): string[] {
   return out
 }
 
+/**
+ * Sources ECCC TENTÉES et ÉCHOUÉES, une ligne « Point : indisponible — cause »
+ * par point. Un rapport ne doit jamais être muet sur une source tentée.
+ */
+export function ecccFailuresUsed(state: MeteoModuleState): string[] {
+  const out: string[] = []
+  for (const r of state.results) {
+    const eccc = r.outcomes.find((o) => o.source === 'eccc')
+    if (!eccc || !isError(eccc)) continue
+    const label = state.points.find((p) => p.id === r.pointId)?.label ?? r.pointId
+    out.push(`${label} : indisponible — ${eccc.error}`)
+  }
+  return out
+}
+
 export function recevabiliteForDate(
   state: MeteoModuleState,
   selectedDate: string,

@@ -55,6 +55,8 @@ interface Props {
   categories?: Category[]
   /** Stations ECCC utilisées (module météo) — traçabilité du verdict §3.6. */
   ecccStations?: string[]
+  /** Sources ECCC tentées et échouées — le rapport n'est jamais muet dessus. */
+  ecccFailures?: string[]
   /** Seuils de recevabilité effectifs — critère de vent unique du rapport. */
   recevabiliteConfig?: RecevabiliteConfig
 }
@@ -78,6 +80,7 @@ export default function ReportGenerator({
   periods,
   categories,
   ecccStations,
+  ecccFailures,
   recevabiliteConfig,
 }: Props) {
   const [projectName, setProjectName] = useState('Étude d\'impact acoustique')
@@ -176,6 +179,11 @@ export default function ReportGenerator({
         lines.push('')
         lines.push('Stations Environnement Canada utilisées (recevabilité §3.6) :')
         for (const s of ecccStations) lines.push(`  • ${s}`)
+      }
+      if (ecccFailures && ecccFailures.length > 0) {
+        lines.push('')
+        lines.push('Stations Environnement Canada tentées — indisponibles :')
+        for (const s of ecccFailures) lines.push(`  • ${s}`)
       }
       return lines.join('\n')
     }
@@ -381,6 +389,7 @@ export default function ReportGenerator({
     conformiteSummary,
     meteo,
     ecccStations,
+    ecccFailures,
     cfg,
   ])
 

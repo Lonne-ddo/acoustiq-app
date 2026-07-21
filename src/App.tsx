@@ -2010,6 +2010,7 @@ function MainPanel({
               periods={periods}
               categories={categories}
               ecccStations={ecccStationsUsed(meteoModule)}
+              recevabiliteConfig={meteoModule.recevabiliteConfig}
             />
           ) : (
             <EmptyState

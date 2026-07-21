@@ -65,6 +65,29 @@ export const DEFAUT_MELCCFP: RecevabiliteConfig = {
   hrDryPct: 90,
 }
 
+/** Vrai si la config est strictement les valeurs MELCCFP par défaut. */
+export function isMelccfpDefault(c: RecevabiliteConfig): boolean {
+  return (
+    c.windMaxKmh === DEFAUT_MELCCFP.windMaxKmh &&
+    c.precipMaxMm === DEFAUT_MELCCFP.precipMaxMm &&
+    c.hrDryPct === DEFAUT_MELCCFP.hrDryPct
+  )
+}
+
+/**
+ * Ligne « seuils utilisés » pour la traçabilité (exports + rapport). Rend le
+ * couplage précip EXPLICITE (recevabilité ET chaussée) et signale « non MELCCFP »
+ * si un seuil diffère du défaut — jamais d'effet caché sur une sortie réglementaire.
+ */
+export function seuilsUtilisesLine(c: RecevabiliteConfig): string {
+  return (
+    `Seuils utilisés — vent ≥ ${c.windMaxKmh} km/h · ` +
+    `précip > ${c.precipMaxMm} mm (recevabilité ET chaussée) · ` +
+    `HR chaussée ≤ ${c.hrDryPct} %` +
+    (isMelccfpDefault(c) ? ' (MELCCFP)' : ' — SEUILS MODIFIÉS (non MELCCFP)')
+  )
+}
+
 /** Libellés d'affichage par niveau. */
 export const RECEVABILITE_LABEL: Record<RecevabiliteLevel, string> = {
   ok: 'recevable',

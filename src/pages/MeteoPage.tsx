@@ -38,6 +38,8 @@ import {
   evaluateRecevabilite,
   RECEVABILITE_LABEL,
   DEFAUT_MELCCFP,
+  seuilsUtilisesLine,
+  isMelccfpDefault,
   type RecevabiliteHour,
   type RecevabiliteConfig,
 } from '../utils/recevabilite'
@@ -327,6 +329,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
   function exportCsvSource() {
     if (!activePoint || activeSources.length === 0) return
     const lines: string[][] = [
+      // En-tête de traçabilité : seuils EFFECTIVEMENT utilisés (+ « non MELCCFP »).
+      [`# ${seuilsUtilisesLine(state.recevabiliteConfig)}`],
       [
         'source',
         'station',
@@ -470,6 +474,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
     )
 
     // Feuille synthèse.
+    const cfg = state.recevabiliteConfig
     const synth: Record<string, string | number>[] = [
       { Champ: 'Point', Valeur: activePoint.label },
       { Champ: 'Coordonnées', Valeur: `${activePoint.lat ?? ''}, ${activePoint.lng ?? ''}` },
@@ -479,8 +484,16 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         ? [{ Champ: 'Station EC utilisée', Valeur: formatStationTrace(ecccResult.station) }]
         : []),
       { Champ: 'Référentiel', Valeur: 'Lignes directrices MELCCFP — §3.6' },
-      { Champ: 'Vent', Valeur: '< 20 km/h sinon non recevable' },
-      { Champ: 'Précipitations', Valeur: '= 0 mm sinon mesures à retirer' },
+      { Champ: 'Vent', Valeur: `≥ ${cfg.windMaxKmh} km/h ⇒ non recevable` },
+      {
+        Champ: 'Précipitations',
+        Valeur: `> ${cfg.precipMaxMm} mm ⇒ non recevable (et chaussée non sèche)`,
+      },
+      { Champ: 'HR chaussée sèche', Valeur: `≤ ${cfg.hrDryPct} %` },
+      {
+        Champ: 'Seuils',
+        Valeur: isMelccfpDefault(cfg) ? 'MELCCFP (défaut)' : 'MODIFIÉS — non MELCCFP',
+      },
       {
         Champ: 'Chaussée',
         Valeur: state.asphalt
@@ -520,6 +533,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
                 ? `Sources : ${activeSources.map((s) => SOURCES[s.source].shortLabel).join(', ')}`
                 : null,
               ecccResult ? `Station EC : ${formatStationTrace(ecccResult.station)}` : null,
+              seuilsUtilisesLine(state.recevabiliteConfig),
               `Généré : ${new Date().toLocaleString('fr-CA')}`,
             ]
               .filter(Boolean)

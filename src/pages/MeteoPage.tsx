@@ -20,6 +20,9 @@ import ComparisonTable from '../components/meteo/ComparisonTable'
 import {
   SOURCES,
   fetchSource,
+  fetchECCCStations,
+  classifyEcccFailure,
+  ecccFailureMessage,
   isError,
   formatStationTrace,
   ecccFailureShort,
@@ -290,6 +293,27 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
       })
       if (isError(outcome)) showToast(outcome.error, 'error')
       else showToast(`Station EC : ${outcome.station.name}`, 'success')
+    } finally {
+      setFetching(false)
+    }
+  }
+
+  /**
+   * Rafraîchit la liste des stations candidates (chemin de sortie : si toutes
+   * ont échoué, on peut ré-obtenir une liste fraîche sans relancer un fetch
+   * complet). N'écrit rien dans results — seulement candidats + purge des échecs.
+   */
+  async function refreshEcccStations() {
+    if (!activePoint || activePointId == null || activePoint.lat == null || activePoint.lng == null)
+      return
+    setFetching(true)
+    try {
+      const cands = await fetchECCCStations(activePoint.lat, activePoint.lng)
+      setEcccCandidatesByPoint((prev) => ({ ...prev, [activePointId]: cands }))
+      setEcccFailedStations((prev) => ({ ...prev, [activePointId]: {} }))
+      showToast(`${cands.length} station(s) ECCC trouvée(s).`, 'success')
+    } catch (e) {
+      showToast(ecccFailureMessage(classifyEcccFailure(e)), 'error')
     } finally {
       setFetching(false)
     }
@@ -708,6 +732,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
                 failures={ecccFailedStations[activePointId] ?? {}}
                 disabled={fetching}
                 onChoose={chooseEcccStation}
+                onRefresh={refreshEcccStations}
               />
             )}
             <SourceTable
@@ -797,6 +822,7 @@ function EcccStationBlock({
   failures,
   disabled,
   onChoose,
+  onRefresh,
 }: {
   ok?: SourceResult
   error?: SourceError
@@ -806,10 +832,11 @@ function EcccStationBlock({
   failures: Record<string, EcccFailure>
   disabled: boolean
   onChoose: (climateId: string) => void
+  onRefresh: () => void
 }) {
   return (
     <div className="rounded border border-gray-800 bg-gray-900/40 px-3 py-2 space-y-2">
-      {/* En-tête : label + badge auto/manuel + puce d'état */}
+      {/* En-tête : label + badge auto/manuel + puce d'état + actualiser */}
       <div className="flex items-center gap-2 flex-wrap">
         <label className="text-[11px] font-medium text-gray-400">Station Env. Canada</label>
         <span
@@ -826,6 +853,17 @@ function EcccStationBlock({
         >
           {isManual ? 'manuel' : 'auto'}
         </span>
+        <button
+          type="button"
+          onClick={onRefresh}
+          disabled={disabled}
+          aria-label="Actualiser la liste des stations Env. Canada"
+          title="Actualiser la liste des stations"
+          className="ml-auto inline-flex items-center gap-1 text-[10px] text-gray-400 border border-gray-700
+                     rounded px-1.5 py-0.5 hover:text-gray-200 hover:border-gray-500 disabled:opacity-50"
+        >
+          <RefreshCw size={11} /> Actualiser
+        </button>
       </div>
 
       {/* Ligne d'état : ✓ station utilisée, ou ✗ cause honnête (jamais la couleur seule) */}

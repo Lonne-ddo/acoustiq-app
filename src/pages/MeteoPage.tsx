@@ -48,7 +48,21 @@ interface Props {
 export default function MeteoPage({ state, onChange, projectPoints }: Props) {
   const [fetching, setFetching] = useState(false)
   const [activePointId, setActivePointId] = useState<string | null>(null)
+  // Candidats ECCC par point, DÉCOUPLÉS du SourceResult : ils survivent à un
+  // échec horaire (obtenus avant la requête) → le sélecteur reste affiché.
+  // Session-only (données réseau volatiles, non persistées avec le projet).
+  const [ecccCandidatesByPoint, setEcccCandidatesByPoint] = useState<
+    Record<string, ECStationCandidate[]>
+  >({})
   const lastFetchKeyRef = useRef<string | null>(null)
+
+  /** Mémorise les candidats ECCC d'un point depuis son issue (succès OU échec). */
+  function recordEcccCandidates(pointId: string, outcome: SourceOutcome) {
+    const cands = outcome.candidates
+    if (cands && cands.length > 0) {
+      setEcccCandidatesByPoint((prev) => ({ ...prev, [pointId]: cands }))
+    }
+  }
 
   const update = (patch: Partial<MeteoModuleState>) => onChange({ ...state, ...patch })
 
@@ -146,6 +160,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
           ),
         )
         allResults.push({ pointId: point.id, outcomes })
+        const ecccOut = outcomes.find((o) => o.source === 'eccc')
+        if (ecccOut) recordEcccCandidates(point.id, ecccOut)
       }
       update({ results: allResults })
       lastFetchKeyRef.current = JSON.stringify({
@@ -235,6 +251,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         if (!replaced) outcomes.push(outcome)
         return { ...r, outcomes }
       })
+      recordEcccCandidates(activePointId, outcome)
       update({
         eccStationByPoint: { ...state.eccStationByPoint, [activePointId]: climateId },
         results,
@@ -645,15 +662,20 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
                 ))}
               </div>
             )}
-            {ecccResult?.candidates && ecccResult.candidates.length > 0 && (
-              <EcccStationPicker
-                candidates={ecccResult.candidates}
-                currentClimateId={ecccResult.station.climateId ?? null}
-                isManual={activePointId != null && activePointId in state.eccStationByPoint}
-                disabled={fetching}
-                onChoose={chooseEcccStation}
-              />
-            )}
+            {activePointId != null &&
+              (ecccCandidatesByPoint[activePointId]?.length ?? 0) > 0 && (
+                <EcccStationPicker
+                  candidates={ecccCandidatesByPoint[activePointId]}
+                  currentClimateId={
+                    state.eccStationByPoint[activePointId] ??
+                    ecccResult?.station.climateId ??
+                    null
+                  }
+                  isManual={activePointId in state.eccStationByPoint}
+                  disabled={fetching}
+                  onChoose={chooseEcccStation}
+                />
+              )}
             <SourceTable
               sources={activeSources}
               recevabiliteBySource={recevabiliteBySource}

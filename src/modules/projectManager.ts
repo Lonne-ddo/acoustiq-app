@@ -11,41 +11,38 @@ import type {
   MeteoData,
   IndicesSnapshot,
   Scene3DData,
+  Period,
+  Category,
 } from '../types'
-import {
-  laeqAvg,
-  computeL10,
-  computeL50,
-  computeL90,
-  computeLAFmax,
-  computeLAFmin,
-} from '../utils/acoustics'
+import { filterDataByPeriods } from '../utils/acoustics'
+import { computeIndexRow } from '../utils/reportIndices'
 
-/** Calcule un snapshot d'indices par (point × date) pour la sauvegarde. */
-function buildIndicesSnapshot(
+/**
+ * Snapshot d'indices par (point × date) — reflète l'état FILTRÉ que l'utilisateur
+ * voyait (mêmes catégories/périodes qu'IndicesPanel/ReportGenerator), pas les
+ * données brutes. Filtrage per-fichier via filterDataByPeriods ; indices via la
+ * brique commune computeIndexRow. Exporté : consommé aussi par la modal
+ * « Comparer projets » (App), pour éviter deux implémentations divergentes.
+ */
+export function buildIndicesSnapshot(
   files: MeasurementFile[],
   pointMap: Record<string, string>,
+  periods?: Period[],
+  categories?: Category[],
 ): Record<string, IndicesSnapshot> {
   const groups = new Map<string, number[]>()
   for (const f of files) {
     const pt = pointMap[f.id]
     if (!pt) continue
     const key = `${pt}|${f.date}`
-    if (!groups.has(key)) groups.set(key, [])
-    const arr = groups.get(key)!
-    for (const dp of f.data) arr.push(dp.laeq)
+    const arr = groups.get(key) ?? []
+    for (const dp of filterDataByPeriods(f.data, f.date, periods, categories)) arr.push(dp.laeq)
+    groups.set(key, arr)
   }
   const out: Record<string, IndicesSnapshot> = {}
   for (const [key, vals] of groups) {
-    if (vals.length === 0) continue
-    out[key] = {
-      laeq: laeqAvg(vals),
-      l10: computeL10(vals),
-      l50: computeL50(vals),
-      l90: computeL90(vals),
-      lafmax: computeLAFmax(vals),
-      lafmin: computeLAFmin(vals),
-    }
+    const row = computeIndexRow(vals)
+    if (row) out[key] = row
   }
   return out
 }
@@ -89,7 +86,7 @@ export function saveProject(
     mapImage,
     mapMarkers: { ...mapMarkers },
     meteo,
-    indicesSnapshot: buildIndicesSnapshot(files, pointMap),
+    indicesSnapshot: buildIndicesSnapshot(files, pointMap, periods, categories),
     projectName,
     checklist,
     scene3D,

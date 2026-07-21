@@ -65,15 +65,7 @@ import { EMPTY_CARRIERE_STATE, type CarrierePageState } from './utils/carrierePa
 import { EMPTY_ECME_STATE, type EcmePageState } from './utils/ecmeParser'
 import WorkflowGuide from './components/WorkflowGuide'
 import type { ClassifiedSegment } from './utils/yamnetProcessor'
-import {
-  detectEmergenceEvents,
-  laeqAvg,
-  computeL10,
-  computeL50,
-  computeL90,
-  computeLAFmax,
-  computeLAFmin,
-} from './utils/acoustics'
+import { detectEmergenceEvents } from './utils/acoustics'
 import {
   BUILTIN_TEMPLATES,
   loadUserTemplates,
@@ -85,7 +77,7 @@ import MeteoSection from './components/MeteoSection'
 import ComparisonModal from './components/ComparisonModal'
 import { parse831C } from './modules/parser831C'
 import { parse821SE, detect821SE } from './modules/parser821SE'
-import { saveProject, loadProject } from './modules/projectManager'
+import { saveProject, loadProject, buildIndicesSnapshot } from './modules/projectManager'
 import { loadSettings, saveSettings } from './modules/settings'
 import { t, setLanguage } from './modules/i18n'
 import TimeSeriesChart from './components/TimeSeriesChart'
@@ -2481,31 +2473,12 @@ export default function App() {
   // Modal de comparaison de projets
   const [showComparison, setShowComparison] = useState(false)
 
-  // Snapshot d'indices courants (utilisé par la modal de comparaison)
-  const currentIndicesSnapshot = useMemo<Record<string, IndicesSnapshot>>(() => {
-    const groups = new Map<string, number[]>()
-    for (const f of files) {
-      const pt = pointMap[f.id]
-      if (!pt) continue
-      const key = `${pt}|${f.date}`
-      if (!groups.has(key)) groups.set(key, [])
-      const arr = groups.get(key)!
-      for (const dp of f.data) arr.push(dp.laeq)
-    }
-    const out: Record<string, IndicesSnapshot> = {}
-    for (const [key, vals] of groups) {
-      if (vals.length === 0) continue
-      out[key] = {
-        laeq: laeqAvg(vals),
-        l10: computeL10(vals),
-        l50: computeL50(vals),
-        l90: computeL90(vals),
-        lafmax: computeLAFmax(vals),
-        lafmin: computeLAFmin(vals),
-      }
-    }
-    return out
-  }, [files, pointMap])
+  // Snapshot d'indices courants (modal « Comparer projets ») — MÊME fonction
+  // filtrée que la sauvegarde, pour refléter l'état vu par l'utilisateur.
+  const currentIndicesSnapshot = useMemo<Record<string, IndicesSnapshot>>(
+    () => buildIndicesSnapshot(files, pointMap, periods, categories),
+    [files, pointMap, periods, categories],
+  )
 
   // Templates utilisateurs
   const [userTemplates, setUserTemplates] = useState<ProjectTemplate[]>(loadUserTemplates)

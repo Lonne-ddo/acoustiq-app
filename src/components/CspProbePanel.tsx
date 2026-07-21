@@ -41,6 +41,17 @@ const TARGETS: Target[] = [
       ),
   },
   {
+    key: 'open-meteo-gem',
+    group: 'Météo',
+    label: 'Open-Meteo GEM (/v1/gem)',
+    usedBy: 'utils/meteoSources.ts (fetchGEM)',
+    run: (signal) =>
+      fetch(
+        'https://api.open-meteo.com/v1/gem?latitude=45.5&longitude=-73.6&hourly=temperature_2m,wind_speed_10m&models=gem_seamless&forecast_days=1&timezone=America/Toronto&wind_speed_unit=kmh',
+        { signal },
+      ),
+  },
+  {
     key: 'open-meteo-archive',
     group: 'Météo',
     label: 'Open-Meteo — archive (archive-api.open-meteo.com)',
@@ -59,6 +70,17 @@ const TARGETS: Target[] = [
     run: (signal) =>
       fetch(
         'https://api.weather.gc.ca/collections/climate-stations/items?limit=1&f=json',
+        { signal },
+      ),
+  },
+  {
+    key: 'eccc-climate-hourly',
+    group: 'Météo',
+    label: 'ECCC climate-hourly',
+    usedBy: 'utils/meteoSources.ts (fetchECCCHourly)',
+    run: (signal) =>
+      fetch(
+        'https://api.weather.gc.ca/collections/climate-hourly/items?CLIMATE_IDENTIFIER=7025250&datetime=2024-01-01T00:00:00Z/2024-01-01T23:59:59Z&limit=10&sortby=LOCAL_DATE&f=json',
         { signal },
       ),
   },

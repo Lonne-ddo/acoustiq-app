@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import { windowData, isRegPeriodMode, type IndicesMode } from './indicesWindow'
 import { dataInRegPeriod } from './regPeriod'
+import { computeCorr9801Point } from './corr9801'
 import type { DataPoint } from '../types'
 
 /** Point minimal : t en minutes ; laeq indicatif (non lu par windowData). */
@@ -61,5 +62,48 @@ describe('windowData — mode période délègue à dataInRegPeriod (wrap-aware)
     const got = windowData(sample, 'nuit', -Infinity, Infinity)
     // 00:00 et 06:59 (< 07h) côté matin ; 22:00 et 23:30 côté soir ; 07h..21h59 exclus.
     expect(ts(got)).toEqual([0, 6 * 60 + 59, 22 * 60, 23 * 60 + 30])
+  })
+})
+
+// ── NON-RÉGRESSION 98-01 (arbitrage 1) : le routage windowData ne doit PAS
+//    altérer les correctifs en mode plein, ET la nuit ne doit PAS produire un
+//    faux « indispo » (no-data) par filtre non-wrap. ─────────────────────────
+describe('windowData × computeCorr9801Point — non-régression + nuit non vide', () => {
+  // Points riches (LCeq/LAFmax/spectre présents) répartis jour + soir + nuit.
+  const rich = (t: number, laeq: number): DataPoint => ({
+    t, laeq, lceq: laeq + 10, lafmax: laeq + 5, spectra: [laeq, laeq - 3, laeq - 6],
+  })
+  const full: DataPoint[] = [
+    rich(12 * 60, 60),      // jour
+    rich(20 * 60, 58),      // soir
+    rich(23 * 60, 55),      // nuit (avant minuit)
+    rich(2 * 60, 50),       // nuit (après minuit)
+    rich(5 * 60, 48),       // nuit (après minuit)
+  ]
+
+  it('mode plein : corr 98-01 STRICTEMENT identique au chemin filtre historique', () => {
+    const viaWindow = computeCorr9801Point(windowData(full, 'full', -Infinity, Infinity))
+    const viaLegacy = computeCorr9801Point(full.filter((d) => d.t >= -Infinity && d.t <= Infinity))
+    // Égalité profonde des 3 termes (valeurs + causes + intermédiaires conservés).
+    expect(viaWindow).toEqual(viaLegacy)
+  })
+
+  it('nuit : sous-ensemble NON vide ⇒ correctifs disponibles (pas de faux « no-data »)', () => {
+    const night = windowData(full, 'nuit', -Infinity, Infinity)
+    expect(night.map((d) => d.t).sort((a, b) => a - b)).toEqual([2 * 60, 5 * 60, 23 * 60])
+    const corr = computeCorr9801Point(night)
+    // Données présentes ⇒ la cause n'est jamais « aucune donnée sur la fenêtre ».
+    expect(corr.kb.cause).not.toBe('no-data')
+    expect(corr.ki.cause).not.toBe('no-data')
+    expect(corr.kt.cause).not.toBe('no-data')
+    expect(corr.kb.value).not.toBeNull() // LCeq présent ⇒ Kb calculable
+  })
+
+  it('DOCUMENTE le piège évité : un filtre non-wrap [22h,7h] donnerait le vide → faux « no-data »', () => {
+    // start(1320) > end(420) ⇒ AUCUN point ne satisfait t>=1320 && t<=420.
+    const naiveNonWrap = full.filter((d) => d.t >= 22 * 60 && d.t <= 7 * 60)
+    expect(naiveNonWrap).toEqual([])
+    // C'est exactement le faux « indispo » que le routage dataInRegPeriod élimine.
+    expect(computeCorr9801Point(naiveNonWrap).kb.cause).toBe('no-data')
   })
 })

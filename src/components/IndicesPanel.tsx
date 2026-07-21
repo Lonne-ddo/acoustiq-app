@@ -4,7 +4,7 @@
  */
 import { useState, useMemo, useEffect, useRef } from 'react'
 import * as XLSX from 'xlsx'
-import { Download, TrendingDown, ChevronRight, Sun, X } from 'lucide-react'
+import { Download, TrendingDown, ChevronRight, Sun, X, CheckCircle2, XCircle } from 'lucide-react'
 import HelpTooltip from './HelpTooltip'
 import type { MeasurementFile, MeteoData, Period, Category } from '../types'
 import {
@@ -127,6 +127,8 @@ interface Props {
 
 export default function IndicesPanel({ files, pointMap, selectedDate, meteo, aggregationSeconds = 300, periods, categories }: Props) {
   const [mode, setMode] = useState<'full' | 'custom'>('full')
+  // Terme 98-01 sélectionné pour le panneau de détail (clic dans le tableau).
+  const [selectedCorr, setSelectedCorr] = useState<{ point: string; term: Corr9801Term } | null>(null)
   const [startTime, setStartTime] = useState('00:00')
   const [endTime, setEndTime] = useState('23:59')
 
@@ -751,26 +753,27 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
                   {pointNames.map((pt) => {
                     const term = corr9801ByPoint[pt]?.[row.key]
                     const v = term?.value ?? null
-                    if (v === null || v === undefined) {
-                      // Cause DIFFÉRENCIÉE (plus de libellé générique unique).
-                      const cause = term?.cause ?? 'unknown'
-                      return (
-                        <td
-                          key={pt}
-                          className="px-2 py-1 text-center text-gray-700"
-                          title={corr9801CauseMessage(row.key, cause)}
-                        >
-                          indispo.
-                        </td>
-                      )
-                    }
-                    const applied = v > 0
+                    const indispo = v === null || v === undefined
+                    const applied = !indispo && v > 0
+                    const isSel = selectedCorr?.point === pt && selectedCorr?.term === row.key
                     return (
-                      <td
-                        key={pt}
-                        className={`px-2 py-1 text-center tabular-nums ${applied ? 'text-orange-400' : 'text-gray-300'}`}
-                      >
-                        {v.toFixed(1)} dB
+                      <td key={pt} className="px-1 py-0.5 text-center">
+                        <button
+                          type="button"
+                          onClick={() => setSelectedCorr({ point: pt, term: row.key })}
+                          aria-label={`Détail ${row.label} — ${pt}`}
+                          aria-pressed={isSel}
+                          title={
+                            indispo
+                              ? corr9801CauseMessage(row.key, term?.cause ?? 'unknown')
+                              : 'Voir le détail du calcul'
+                          }
+                          className={`w-full px-2 py-0.5 rounded tabular-nums transition-colors ${
+                            isSel ? 'ring-1 ring-emerald-500 bg-gray-800' : 'hover:bg-gray-800'
+                          } ${indispo ? 'text-gray-600 italic' : applied ? 'text-orange-400' : 'text-gray-300'}`}
+                        >
+                          {indispo ? 'indispo.' : `${(v as number).toFixed(1)} dB`}
+                        </button>
                       </td>
                     )
                   })}
@@ -779,6 +782,14 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
             </tbody>
           </table>
         </div>
+        {selectedCorr && (
+          <Corr9801DetailPanel
+            point={selectedCorr.point}
+            term={selectedCorr.term}
+            detail={corr9801ByPoint[selectedCorr.point]?.[selectedCorr.term]}
+            onClose={() => setSelectedCorr(null)}
+          />
+        )}
       </div>
 
       {/* Périodes réglementaires — Ljour / Lsoir / Lnuit (bornes 98-01 / 2026) */}
@@ -1298,6 +1309,176 @@ function AmbientNoiseSection({ files, pointMap, selectedDate, pointNames, period
             </table>
           </div>
         </div>
+      )}
+    </div>
+  )
+}
+
+// ── Panneau de détail 98-01 (clic sur un terme du tableau) ──────────────────
+
+const CORR9801_TERM_LABEL: Record<Corr9801Term, string> = {
+  kt: 'Kt — tonal',
+  ki: 'Ki — impulsif',
+  kb: 'Kb — basses fréquences',
+}
+
+function fmtDb(v: number | null | undefined, d = 1): string {
+  return v == null || !Number.isFinite(v) ? '—' : `${v.toFixed(d)} dB`
+}
+
+function Kv({ k, v }: { k: string; v: string }) {
+  return (
+    <div className="flex justify-between">
+      <span className="text-gray-500">{k}</span>
+      <span className="tabular-nums text-gray-200">{v}</span>
+    </div>
+  )
+}
+
+/**
+ * Panneau (pas infobulle) — détail d'un correctif 98-01 : entrées → comparaison
+ * au seuil → résultat. Indisponible ⇒ affiche la CAUSE (jamais vide). Accessibilité :
+ * glyphe + libellé texte, Okabe-Ito, la couleur ne porte jamais l'info seule.
+ */
+function Corr9801DetailPanel({
+  point,
+  term,
+  detail,
+  onClose,
+}: {
+  point: string
+  term: Corr9801Term
+  detail?: Corr9801TermDetail
+  onClose: () => void
+}) {
+  if (!detail) return null
+  const box = 'mx-4 mb-3 rounded border border-gray-800 bg-gray-900/60 p-3 text-xs'
+  const termName = CORR9801_TERM_LABEL[term].split(' ')[0]
+  const header = (
+    <div className="flex items-center justify-between mb-2">
+      <span className="text-xs font-semibold text-gray-200">
+        {CORR9801_TERM_LABEL[term]} · {point}
+      </span>
+      <button onClick={onClose} aria-label="Fermer le détail" className="text-gray-500 hover:text-gray-300">
+        <X size={14} />
+      </button>
+    </div>
+  )
+
+  // Indisponible → CAUSE (jamais un panneau vide).
+  if (detail.value === null) {
+    return (
+      <div className={box}>
+        {header}
+        <div className="flex items-start gap-2 text-[#D55E00]">
+          <XCircle size={13} aria-hidden="true" className="mt-0.5 shrink-0" />
+          <span>
+            {corr9801CauseMessage(term, detail.cause ?? 'unknown')}.{' '}
+            <span className="text-gray-500">Réexportez depuis G4 avec la colonne requise.</span>
+          </span>
+        </div>
+      </div>
+    )
+  }
+
+  const laeq = detail.laeq
+  const value = detail.value // narrowé : non-null (cf. early-return ci-dessus)
+  const applied = value > 0
+  const resultLine = (label: string) => (
+    <div
+      className={`flex items-center gap-2 pt-1.5 mt-1.5 border-t border-gray-800 ${
+        applied ? 'text-[#E69F00]' : 'text-gray-300'
+      }`}
+    >
+      {applied ? <CheckCircle2 size={13} aria-hidden="true" /> : <span aria-hidden="true">○</span>}
+      <span className="font-semibold">
+        {termName} = {value.toFixed(1)} dB — {label}
+      </span>
+    </div>
+  )
+
+  // Kb / Ki : entrées → écart vs porte → résultat.
+  if (term === 'kb' || term === 'ki') {
+    const isKb = term === 'kb'
+    const source = isKb ? detail.lceq : detail.laftm5
+    const sourceLabel = isKb ? 'LCeq' : 'LAFTM5'
+    const ecart = source != null && laeq != null ? source - laeq : null
+    const porte = isKb ? '≥ 20 dB' : '> 2 dBA'
+    return (
+      <div className={box}>
+        {header}
+        <div className="space-y-0.5 text-gray-300">
+          <div className="text-[10px] uppercase tracking-wider text-gray-500">Entrées</div>
+          <Kv k={sourceLabel} v={fmtDb(source)} />
+          <Kv k="LAeq (dBAvg)" v={fmtDb(laeq)} />
+          <div className="text-[10px] uppercase tracking-wider text-gray-500 pt-1">Comparaison</div>
+          <Kv k={`Écart ${sourceLabel} − LAeq`} v={fmtDb(ecart)} />
+          <Kv k="Porte" v={porte} />
+        </div>
+        {resultLine(applied ? 'appliqué (au-dessus de la porte)' : 'sous la porte → 0')}
+      </div>
+    )
+  }
+
+  // Kt : entrées + table des bandes (analyse conservée) → résultat.
+  const a = detail.analysis
+  const trig = a?.triggeringIndex ?? null
+  return (
+    <div className={box}>
+      {header}
+      <div className="space-y-0.5 text-gray-300">
+        <div className="text-[10px] uppercase tracking-wider text-gray-500">Entrées</div>
+        <Kv k="LAeq global" v={fmtDb(laeq)} />
+        <Kv k="Significativité" v="exclue si (LAeq global − bande) > 14,5 dB" />
+        <div className="text-[10px] uppercase tracking-wider text-gray-500 pt-1">
+          Bandes 1/3 d'octave · Δ vs seuil (15/8/5 dB)
+        </div>
+      </div>
+      <div className="overflow-auto max-h-56 border border-gray-800 rounded mt-1">
+        <table className="w-full text-[10px]">
+          <thead className="bg-gray-900 sticky top-0">
+            <tr className="text-gray-500">
+              <th className="text-right px-1 py-0.5">Fréq</th>
+              <th className="text-right px-1 py-0.5">LZeq</th>
+              <th className="text-right px-1 py-0.5">LAeq(A)</th>
+              <th className="text-right px-1 py-0.5">Δ préc</th>
+              <th className="text-right px-1 py-0.5">Δ suiv</th>
+              <th className="text-right px-1 py-0.5">Seuil</th>
+              <th className="text-left px-1 py-0.5">État</th>
+            </tr>
+          </thead>
+          <tbody>
+            {(a?.bands ?? []).map((b, i) => {
+              const st = b.isTonal
+                ? { g: '✓', t: 'tonale', c: 'text-[#E69F00]' }
+                : b.excluded
+                  ? { g: '⊘', t: 'exclue', c: 'text-gray-500' }
+                  : b.isBoundary
+                    ? { g: '·', t: 'bord', c: 'text-gray-600' }
+                    : { g: '·', t: '—', c: 'text-gray-500' }
+              return (
+                <tr key={i} className={`border-t border-gray-800 ${i === trig ? 'bg-[#E69F00]/10' : ''}`}>
+                  <td className="text-right px-1 py-0.5 tabular-nums">{b.freq}</td>
+                  <td className="text-right px-1 py-0.5 tabular-nums">{b.lzeq.toFixed(1)}</td>
+                  <td className="text-right px-1 py-0.5 tabular-nums">{b.laeqBand.toFixed(1)}</td>
+                  <td className="text-right px-1 py-0.5 tabular-nums">
+                    {b.diffPrev == null ? '—' : b.diffPrev.toFixed(1)}
+                  </td>
+                  <td className="text-right px-1 py-0.5 tabular-nums">
+                    {b.diffNext == null ? '—' : b.diffNext.toFixed(1)}
+                  </td>
+                  <td className="text-right px-1 py-0.5 tabular-nums">{b.threshold}</td>
+                  <td className={`px-1 py-0.5 ${st.c}`}>
+                    <span aria-hidden="true">{st.g}</span> {st.t}
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+      {resultLine(
+        applied && trig != null && a ? `bande tonale à ${a.bands[trig].freq} Hz` : 'aucune bande tonale → 0',
       )}
     </div>
   )

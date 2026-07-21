@@ -26,7 +26,7 @@ import {
 import html2canvas from 'html2canvas'
 import { drawQrBadge } from '../utils/qrBadge'
 import { FEATURES } from '../config/features'
-import { Download, Plus, X, AlertTriangle, GitCompare, Layers, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3, Play, ChevronDown, MessageSquare, HelpCircle } from 'lucide-react'
+import { Download, Plus, X, AlertTriangle, GitCompare, Layers, Filter, Maximize, Minimize, Wind, Copy, StickyNote, Flag, Trash2, Edit3, Play, ChevronDown, MessageSquare, HelpCircle } from 'lucide-react'
 import ContextMenu from './ContextMenu'
 import { ReferenceDot } from 'recharts'
 import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEvent, ChartAnnotation, MeteoData, Period, Category } from '../types'
@@ -35,7 +35,8 @@ import type { AudioCoverageRange } from '../hooks/useAudioSync'
 import { findCoveringRange } from '../hooks/useAudioSync'
 import AudioTimelineBar from './audio/AudioTimelineBar'
 import type { ClassifiedSegment } from '../utils/yamnetProcessor'
-import { laeqAvg, computeL90 } from '../utils/acoustics'
+import { laeqAvg } from '../utils/acoustics'
+import { measureSelectionRange } from '../utils/selectionMeasure'
 
 // Palette de couleurs par point de mesure
 const POINT_COLORS: Record<string, string> = {
@@ -399,17 +400,7 @@ export default function TimeSeriesChart({
   // ── Sélection Shift+drag ──────────────────────────────────────────────────
   const [selectionPx, setSelectionPx] = useState<{ startX: number; endX: number } | null>(null)
   const selectionStartRef = useRef<number | null>(null)
-  const [selectionPopup, setSelectionPopup] = useState<
-    | {
-        tStart: number
-        tEnd: number
-        laeq: number | null
-        l90: number | null
-        x: number   // position pixel pour la popup
-        y: number
-      }
-    | null
-  >(null)
+  const [selectionPopup, setSelectionPopup] = useState<SelectionPopupData | null>(null)
 
   // ── Menu contextuel (clic droit) ──────────────────────────────────────────
   const [chartMenu, setChartMenu] = useState<
@@ -1207,22 +1198,20 @@ export default function TimeSeriesChart({
       const tA = xPxToMinutes(Math.min(xA, xB))
       const tB = xPxToMinutes(Math.max(xA, xB))
 
-      // Calcul LAeq / L90 sur les données BRUTES dans la plage
-      const allLaeq: number[] = []
-      for (const fs of filesByPoint.values()) {
-        for (const f of fs) {
-          for (const dp of f.data) {
-            if (dp.t >= tA && dp.t <= tB) allLaeq.push(dp.laeq)
-          }
-        }
-      }
-      const laeq = allLaeq.length > 0 ? laeqAvg(allLaeq) : null
-      const l90 = allLaeq.length > 0 ? computeL90(allLaeq) : null
+      // Deux jeux sur la plage [tA,tB] : brut (inspection) + filtré (exclusions).
+      // Brique partagée measureSelectionRange (via filterDataByPeriods).
+      const { raw, filtered, excludedCount } = measureSelectionRange(
+        [...filesByPoint.values()].flat(),
+        tA,
+        tB,
+        periods,
+        categories,
+      )
 
       // Position popup : milieu de la sélection, juste sous la barre supérieure
       const midX = (xA + xB) / 2
       const popupY = rect ? Math.max(8, e.clientY - rect.top - 4) : 40
-      setSelectionPopup({ tStart: tA, tEnd: tB, laeq, l90, x: midX, y: popupY })
+      setSelectionPopup({ tStart: tA, tEnd: tB, raw, filtered, excludedCount, x: midX, y: popupY })
       bumpShiftHint()
       return
     }
@@ -3396,15 +3385,21 @@ function ComparisonResultCard({
 // SelectionPopup — affichée après un Shift+drag
 // ────────────────────────────────────────────────────────────────────────────
 
+/** LAeq/L90 d'une plage — deux jeux : brut (inspection) et filtré (exclusions). */
+type SelectionMeasure = { laeq: number | null; l90: number | null }
+interface SelectionPopupData {
+  tStart: number
+  tEnd: number
+  raw: SelectionMeasure
+  filtered: SelectionMeasure
+  /** Nb de points bruts tombant dans une période exclue sur la plage (0 = pas de chevauchement). */
+  excludedCount: number
+  x: number
+  y: number
+}
+
 interface SelectionPopupProps {
-  popup: {
-    tStart: number
-    tEnd: number
-    laeq: number | null
-    l90: number | null
-    x: number
-    y: number
-  }
+  popup: SelectionPopupData
   selectedDate: string
   onClose: () => void
   onAddEvent: (label: string) => void
@@ -3413,6 +3408,7 @@ interface SelectionPopupProps {
 function SelectionPopup({ popup, onClose, onAddEvent }: SelectionPopupProps) {
   const [label, setLabel] = useState('')
   const [adding, setAdding] = useState(false)
+  const fmtDb = (v: number | null) => (v !== null ? `${v.toFixed(1)} dB(A)` : '—')
   const durationMin = popup.tEnd - popup.tStart
   const durationStr =
     durationMin < 1
@@ -3455,18 +3451,55 @@ function SelectionPopup({ popup, onClose, onAddEvent }: SelectionPopupProps) {
           <span className="text-gray-500">Durée</span>
           <span className="tabular-nums">{durationStr}</span>
         </div>
-        <div className="flex justify-between border-t border-gray-800 pt-1 mt-1">
-          <span className="text-gray-400">LAeq</span>
-          <span className="font-semibold text-emerald-300 tabular-nums">
-            {popup.laeq !== null ? `${popup.laeq.toFixed(1)} dB(A)` : '—'}
-          </span>
-        </div>
-        <div className="flex justify-between">
-          <span className="text-gray-400">L90</span>
-          <span className="font-semibold text-emerald-300 tabular-nums">
-            {popup.l90 !== null ? `${popup.l90.toFixed(1)} dB(A)` : '—'}
-          </span>
-        </div>
+        {popup.excludedCount === 0 ? (
+          // Aucune période exclue sur la plage → filtré == brut : une seule valeur.
+          <>
+            <div className="flex justify-between border-t border-gray-800 pt-1 mt-1">
+              <span className="text-gray-400">LAeq</span>
+              <span className="font-semibold text-emerald-300 tabular-nums">{fmtDb(popup.raw.laeq)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-400">L90</span>
+              <span className="font-semibold text-emerald-300 tabular-nums">{fmtDb(popup.raw.l90)}</span>
+            </div>
+          </>
+        ) : (
+          // Chevauchement d'au moins une période exclue → deux jeux ÉTIQUETÉS.
+          <>
+            <div className="flex items-center gap-1 border-t border-gray-800 pt-1 mt-1 text-[10px] text-[#E69F00]">
+              <AlertTriangle size={10} aria-hidden="true" />
+              <span>Plage avec exclusions — {popup.excludedCount} point(s) exclu(s)</span>
+            </div>
+            <div className="mt-1">
+              <div className="flex items-center gap-1 text-[10px] text-[#009E73] mb-0.5">
+                <Filter size={10} aria-hidden="true" />
+                <span>Avec exclusions</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500 pl-4">LAeq</span>
+                <span className="font-semibold text-emerald-300 tabular-nums">{fmtDb(popup.filtered.laeq)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500 pl-4">L90</span>
+                <span className="font-semibold text-emerald-300 tabular-nums">{fmtDb(popup.filtered.l90)}</span>
+              </div>
+            </div>
+            <div className="mt-1">
+              <div className="flex items-center gap-1 text-[10px] text-gray-400 mb-0.5">
+                <Layers size={10} aria-hidden="true" />
+                <span>Données brutes</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500 pl-4">LAeq</span>
+                <span className="tabular-nums text-gray-300">{fmtDb(popup.raw.laeq)}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-gray-500 pl-4">L90</span>
+                <span className="tabular-nums text-gray-300">{fmtDb(popup.raw.l90)}</span>
+              </div>
+            </div>
+          </>
+        )}
       </div>
       {!adding ? (
         <button

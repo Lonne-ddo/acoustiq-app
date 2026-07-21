@@ -27,6 +27,7 @@ import {
   leqByClockHour,
   dayEnergyDistribution,
   filterDataByPeriods,
+  type KtAnalysis,
 } from '../utils/acoustics'
 import {
   classifyCorr9801,
@@ -35,6 +36,20 @@ import {
   type Corr9801Cause,
   type Corr9801Facts,
 } from '../utils/corr9801'
+
+/** Détail 98-01 CONSERVÉ par terme et par point (valeurs déjà calculées). */
+interface Corr9801TermDetail {
+  value: number | null
+  cause: Corr9801Cause | null
+  /** LAeq (dBAvg) de la fenêtre ; null si aucune donnée. Commun aux 3 termes. */
+  laeq: number | null
+  /** Kb : LCeq conservé (l'écart LCeq−LAeq et la porte 20 dB se lisent à l'affichage). */
+  lceq?: number | null
+  /** Ki : LAFTM5 conservé (l'écart LAFTM5−LAeq et la porte 2 dBA se lisent à l'affichage). */
+  laftm5?: number | null
+  /** Kt : analyse spectrale complète (bandes, écarts, seuils 15/8/5, bande retenue). */
+  analysis?: KtAnalysis | null
+}
 
 const PERIODS_HELP =
   'Leq par période réglementaire (moyenne énergétique). Bornes communes à la ' +
@@ -214,17 +229,19 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         const laftm5 = hasLafmax ? computeLaftm5(lafVals) : null
         const kiVal = hasLafmax ? computeKi9801(laftm5, laeqWin) : null
 
-        // Kt 98-01 sur le spectre moyen énergétique par bande. null si pas de spectre.
+        // Kt 98-01 sur le spectre moyen énergétique par bande. On CONSERVE
+        // l'analyse complète (bandes/écarts/seuils/bande retenue), pas seulement .kt.
         const specs = dps.map((d) => d.spectra).filter((s): s is number[] => !!s)
         const hasSpectrum = specs.length > 0
-        let ktVal: number | null = null
+        let ktAnalysis: KtAnalysis | null = null
         if (hasSpectrum) {
           const nBands = specs[0].length
           const avgSpec = new Array(nBands).fill(0).map((_, i) =>
             laeqAvg(specs.map((s) => s[i]).filter((v) => typeof v === 'number')),
           )
-          ktVal = analyzeKt9801(avgSpec, laeqWin).kt
+          ktAnalysis = analyzeKt9801(avgSpec, laeqWin)
         }
+        const ktVal: number | null = ktAnalysis ? ktAnalysis.kt : null
 
         // Cause DIFFÉRENCIÉE (pure) quand un terme est indisponible.
         const facts: Corr9801Facts = {
@@ -237,16 +254,17 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
         const causeOf = (term: Corr9801Term, val: number | null): Corr9801Cause | null =>
           val === null ? classifyCorr9801(term, facts) : null
 
-        return [
-          pt,
-          {
-            kt: { value: ktVal, cause: causeOf('kt', ktVal) },
-            ki: { value: kiVal, cause: causeOf('ki', kiVal) },
-            kb: { value: kbVal, cause: causeOf('kb', kbVal) },
-          },
-        ]
+        // dBAvg de la fenêtre = LAeq — conservé pour les trois termes.
+        const laeq = hasData ? laeqWin : null
+
+        const detail: Record<Corr9801Term, Corr9801TermDetail> = {
+          kt: { value: ktVal, cause: causeOf('kt', ktVal), laeq, analysis: ktAnalysis },
+          ki: { value: kiVal, cause: causeOf('ki', kiVal), laeq, laftm5 },
+          kb: { value: kbVal, cause: causeOf('kb', kbVal), laeq, lceq },
+        }
+        return [pt, detail]
       }),
-    ) as Record<string, Record<Corr9801Term, { value: number | null; cause: Corr9801Cause | null }>>
+    ) as Record<string, Record<Corr9801Term, Corr9801TermDetail>>
   }, [files, pointMap, selectedDate, pointNames, mode, startTime, endTime, periods, categories, excludedCatIds])
 
   // Calcul des indices par point

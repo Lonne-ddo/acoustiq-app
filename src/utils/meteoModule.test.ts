@@ -4,10 +4,11 @@ import {
   serializeMeteoModule,
   deserializeMeteoModule,
   ecccStationsUsed,
+  ecccFailuresUsed,
   type MeteoModuleState,
 } from './meteoModule'
 import type { PointMeteoResults } from './meteoModule'
-import type { SourceResult } from './meteoSources'
+import type { SourceResult, SourceError } from './meteoSources'
 
 describe('persistance meteoModule — eccStationByPoint (save/load)', () => {
   function stateWithChoice(): MeteoModuleState {
@@ -86,5 +87,44 @@ describe('ecccStationsUsed — traçabilité rapport', () => {
       results: [{ pointId: pid, outcomes: [{ source: 'eccc', error: 'HTTP 500' }] } as PointMeteoResults],
     }
     expect(ecccStationsUsed(state)).toEqual([])
+  })
+})
+
+describe('ecccFailuresUsed — le rapport n’est jamais muet sur une source tentée', () => {
+  it('produit « label : indisponible — cause » par point ECCC en échec', () => {
+    const base = makeDefaultMeteoState()
+    const pid = base.points[0].id
+    const err: SourceError = {
+      source: 'eccc',
+      error: 'Échec de connexion au service ECCC (réseau ou blocage navigateur).',
+      ecccFailure: { kind: 'network' },
+    }
+    const state: MeteoModuleState = {
+      ...base,
+      points: [{ ...base.points[0], label: 'BV-94' }],
+      results: [{ pointId: pid, outcomes: [err] } as PointMeteoResults],
+    }
+    expect(ecccFailuresUsed(state)).toEqual([
+      'BV-94 : indisponible — Échec de connexion au service ECCC (réseau ou blocage navigateur).',
+    ])
+  })
+
+  it('un succès ECCC n’apparaît pas dans les échecs', () => {
+    const base = makeDefaultMeteoState()
+    const pid = base.points[0].id
+    const ok = {
+      source: 'eccc',
+      rows: [],
+      station: { name: 'Dorval', lat: 0, lng: 0, distanceKm: 3, climateId: '702S006' },
+      sourceUrl: '',
+      sourceLabel: '',
+      isArchive: true,
+      timezone: 'local (LST)',
+    } satisfies SourceResult
+    const state: MeteoModuleState = {
+      ...base,
+      results: [{ pointId: pid, outcomes: [ok] } as PointMeteoResults],
+    }
+    expect(ecccFailuresUsed(state)).toEqual([])
   })
 })

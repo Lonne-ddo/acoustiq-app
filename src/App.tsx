@@ -118,8 +118,6 @@ import { parseAudioFilename, deriveStartTimesFromSequence } from './utils/audioF
 import Conformite2026 from './components/Conformite2026'
 import SiteMap from './components/SiteMap'
 import Settings from './components/Settings'
-import UserMenu from './components/UserMenu'
-import { AUTH_ENABLED } from './config/auth'
 import { FEATURES } from './config/features'
 import ShortcutsModal from './components/ShortcutsModal'
 import Onboarding, { shouldShowOnboarding, resetOnboarding } from './components/Onboarding'
@@ -1625,14 +1623,6 @@ function MainPanel({
           >
             v{APP_VERSION}
           </button>
-          {!AUTH_ENABLED && (
-            <span
-              className="px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-gray-400 bg-gray-800 border border-gray-700 rounded"
-              title="Authentification désactivée (src/config/auth.ts → AUTH_ENABLED)"
-            >
-              Dev mode
-            </span>
-          )}
           {files.length > 0 && (
             <button
               onClick={() => setForceShowWorkflow((v) => !v)}
@@ -1668,7 +1658,6 @@ function MainPanel({
           >
             <SettingsIcon size={14} />
           </button>
-          <UserMenu />
         </div>
       </header>
       )}

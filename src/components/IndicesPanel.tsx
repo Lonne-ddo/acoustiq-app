@@ -6,7 +6,7 @@ import { useState, useMemo, useEffect, useRef } from 'react'
 import * as XLSX from 'xlsx'
 import { Download, TrendingDown, ChevronRight, Sun, X, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react'
 import HelpTooltip from './HelpTooltip'
-import type { MeasurementFile, MeteoData, Period, Category } from '../types'
+import type { MeasurementFile, MeteoData, Period, Category, DataPoint } from '../types'
 import {
   laeqAvg,
   computeLn,
@@ -47,14 +47,18 @@ const REG_PERIOD_KEY: Record<RegPeriod, 'ljour' | 'lsoir' | 'lnuit'> = {
   nuit: 'lnuit',
 }
 
+/** Stats d'une période réglementaire : LAeq + couverture (leqOnRegPeriod) + L50/L90. */
+type RegPeriodStats = RegPeriodLeq & { l50: number | null; l90: number | null }
+
 const PERIODS_HELP =
-  'Leq par période réglementaire (moyenne énergétique). Bornes communes à la ' +
-  'Note 98-01 (EQ-09) et aux Lignes directrices MELCCFP 2026 :\n' +
+  'LAeq (moyenne énergétique), L50 (médian) et L90 (bruit de fond) par période ' +
+  'réglementaire, sur un MÊME sous-ensemble. Bornes communes à la Note 98-01 ' +
+  '(EQ-09) et aux Lignes directrices MELCCFP 2026 :\n' +
   '• Jour : 07h00 – 19h00\n' +
   '• Soir : 19h00 – 22h00\n' +
   '• Nuit : 22h00 – 07h00 (passage minuit inclus)\n\n' +
   'Le % indique la couverture temporelle de l’intervalle par la mesure ' +
-  '(ambre si < 95 % = période partielle).'
+  '(ambre + « partielle » si < 95 %).'
 
 // Palette partagée avec le graphique
 const POINT_COLORS: Record<string, string> = {
@@ -155,9 +159,25 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
     return [...pts].sort()
   }, [files, pointMap, selectedDate])
 
-  // Leq par période réglementaire (jour/soir/nuit) + couverture, par point —
-  // sur la même fenêtre filtrée que les autres indices. Bornes 98-01 / 2026.
+  // Leq + L50 + L90 par période réglementaire (jour/soir/nuit) + couverture, par
+  // point — sur la même fenêtre filtrée que les autres indices. Bornes 98-01 / 2026.
+  //
+  // LAeq + couverture : leqOnRegPeriod (INCHANGÉ, pas de régression). L50/L90 :
+  // MÊMES bornes via windowData(=dataInRegPeriod) + même filtre `Number.isFinite`
+  // que leqOnRegPeriod ⇒ les 3 indices portent sur le MÊME sous-ensemble
+  // (t ∈ [0,1440[ sur une journée sélectionnée ; sémantique [start, end)).
   const periodsByPoint = useMemo(() => {
+    const statsFor = (data: DataPoint[], period: RegPeriod): RegPeriodStats => {
+      const base = leqOnRegPeriod(data, REG_PERIODS[period].startH, REG_PERIODS[period].endH)
+      const laeqVals = windowData(data, period, -Infinity, Infinity)
+        .map((d) => d.laeq)
+        .filter((v) => Number.isFinite(v))
+      return {
+        ...base,
+        l50: laeqVals.length > 0 ? computeL50(laeqVals) : null,
+        l90: laeqVals.length > 0 ? computeL90(laeqVals) : null,
+      }
+    }
     return Object.fromEntries(
       pointNames.map((pt) => {
         const data = files
@@ -165,14 +185,10 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
           .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
         return [
           pt,
-          {
-            ljour: leqOnRegPeriod(data, REG_PERIODS.jour.startH, REG_PERIODS.jour.endH),
-            lsoir: leqOnRegPeriod(data, REG_PERIODS.soir.startH, REG_PERIODS.soir.endH),
-            lnuit: leqOnRegPeriod(data, REG_PERIODS.nuit.startH, REG_PERIODS.nuit.endH),
-          },
+          { ljour: statsFor(data, 'jour'), lsoir: statsFor(data, 'soir'), lnuit: statsFor(data, 'nuit') },
         ]
       }),
-    ) as Record<string, { ljour: RegPeriodLeq; lsoir: RegPeriodLeq; lnuit: RegPeriodLeq }>
+    ) as Record<string, { ljour: RegPeriodStats; lsoir: RegPeriodStats; lnuit: RegPeriodStats }>
   }, [files, pointMap, selectedDate, pointNames, periods, categories, excludedCatIds])
 
   // Caractéristiques du bruit (composante tonale par point) — basées sur la
@@ -832,6 +848,8 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
                     const cell = periodsByPoint[pt]?.[row.key]
                     const leq = cell?.leq ?? null
                     const hasData = leq !== null && leq !== undefined
+                    const l50 = cell?.l50 ?? null
+                    const l90 = cell?.l90 ?? null
                     const coverage = cell && cell.periodMin > 0
                       ? Math.min(1, cell.coveredMin / cell.periodMin)
                       : 0
@@ -840,21 +858,34 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
                     return (
                       <td
                         key={pt}
-                        className={`px-4 py-1 text-center tabular-nums ${
+                        className={`px-4 py-1 text-center tabular-nums align-top ${
                           hasData ? 'text-gray-200' : 'text-gray-700'
                         }`}
                       >
                         {hasData ? (
-                          <>
-                            {fmt(leq)}
-                            <span className="text-gray-600 ml-0.5">dB(A)</span>
-                            <span
-                              className={`ml-1 text-[10px] ${partial ? 'text-amber-400' : 'text-gray-600'}`}
-                              title={`Couverture temporelle : ${cell!.coveredMin} / ${cell!.periodMin} min`}
-                            >
-                              · {pct}%
+                          <div className="flex flex-col items-center leading-tight">
+                            {/* LAeq (indice principal) + couverture */}
+                            <span>
+                              <span className="text-[9px] text-gray-500 mr-0.5">LAeq</span>
+                              {fmt(leq)}
+                              <span className="text-gray-600 ml-0.5">dB(A)</span>
+                              <span
+                                className={`ml-1 text-[10px] ${partial ? 'text-amber-400' : 'text-gray-600'}`}
+                                title={`Couverture temporelle : ${cell!.coveredMin} / ${cell!.periodMin} min`}
+                              >
+                                {partial && <AlertTriangle size={9} className="inline mb-px mr-0.5" aria-hidden="true" />}
+                                · {pct}%{partial ? ' partielle' : ''}
+                              </span>
                             </span>
-                          </>
+                            {/* L50 (médian) + L90 (bruit de fond) — mêmes bornes/sous-ensemble */}
+                            <span className="text-[10px] text-gray-400">
+                              <span className="text-gray-600 mr-0.5">L50</span>
+                              {l50 !== null ? fmt(l50) : '—'}
+                              <span className="text-gray-700 mx-1">·</span>
+                              <span className="text-gray-600 mr-0.5">L90</span>
+                              {l90 !== null ? fmt(l90) : '—'}
+                            </span>
+                          </div>
                         ) : (
                           '−'
                         )}

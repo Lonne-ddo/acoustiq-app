@@ -48,6 +48,8 @@ interface Props {
   meteo?: MeteoData
   periods?: Period[]
   categories?: Category[]
+  /** Stations ECCC utilisées (module météo) — traçabilité du verdict §3.6. */
+  ecccStations?: string[]
 }
 
 function fmt(n: number): string {
@@ -68,6 +70,7 @@ export default function ReportGenerator({
   meteo,
   periods,
   categories,
+  ecccStations,
 }: Props) {
   const [projectName, setProjectName] = useState('Étude d\'impact acoustique')
   const [copied, setCopied] = useState(false)
@@ -139,20 +142,26 @@ export default function ReportGenerator({
     }
 
     function meteoSection(): string {
-      if (!meteo) return 'Aucune donnée météorologique saisie.'
       const lines: string[] = []
-      if (meteo.windSpeed !== null) {
-        const valid = meteo.windSpeed < 20
-        lines.push(
-          `Vent : ${meteo.windSpeed} km/h${meteo.windDirection ? ` (${meteo.windDirection})` : ''}` +
-            (valid
-              ? ' — ✓ Valide (critère MELCCFP 2026 : < 20 km/h)'
-              : ' — ✗ Invalide (≥ 20 km/h — mesures potentiellement invalides selon les Lignes directrices MELCCFP 2026)'),
-        )
+      if (meteo) {
+        if (meteo.windSpeed !== null) {
+          const valid = meteo.windSpeed < 20
+          lines.push(
+            `Vent : ${meteo.windSpeed} km/h${meteo.windDirection ? ` (${meteo.windDirection})` : ''}` +
+              (valid
+                ? ' — ✓ Valide (critère MELCCFP 2026 : < 20 km/h)'
+                : ' — ✗ Invalide (≥ 20 km/h — mesures potentiellement invalides selon les Lignes directrices MELCCFP 2026)'),
+          )
+        }
+        if (meteo.temperature !== null) lines.push(`Température : ${meteo.temperature} °C`)
+        if (meteo.conditions) lines.push(`Conditions : ${meteo.conditions}`)
+        if (meteo.note.trim()) lines.push(`Note : ${meteo.note.trim()}`)
       }
-      if (meteo.temperature !== null) lines.push(`Température : ${meteo.temperature} °C`)
-      if (meteo.conditions) lines.push(`Conditions : ${meteo.conditions}`)
-      if (meteo.note.trim()) lines.push(`Note : ${meteo.note.trim()}`)
+      if (ecccStations && ecccStations.length > 0) {
+        if (lines.length > 0) lines.push('')
+        lines.push('Stations Environnement Canada utilisées (recevabilité §3.6) :')
+        for (const s of ecccStations) lines.push(`  • ${s}`)
+      }
       if (lines.length === 0) return 'Aucune donnée météorologique saisie.'
       return lines.join('\n')
     }
@@ -357,6 +366,7 @@ export default function ReportGenerator({
     concordance,
     conformiteSummary,
     meteo,
+    ecccStations,
   ])
 
   // Sections éditables + suivi de la "salissure" (édition manuelle)

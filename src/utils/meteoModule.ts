@@ -6,6 +6,7 @@
 import { makeMeteoPoint, type MeteoPoint } from '../components/meteo/PointsList'
 import {
   isError,
+  formatStationTrace,
   type SourceId,
   type SourceOutcome,
   type SourceResult,
@@ -110,6 +111,23 @@ export function deserializeMeteoModule(p: PersistedMeteoModule): MeteoModuleStat
  * Heures de recevabilité du premier point / première source non-erreur,
  * filtrées sur `selectedDate` (YYYY-MM-DD).
  */
+/**
+ * Stations ECCC effectivement utilisées, une ligne « Point : trace » par point
+ * ayant un résultat Env. Canada. Pour la traçabilité du rapport (verdict §3.6).
+ */
+export function ecccStationsUsed(state: MeteoModuleState): string[] {
+  const out: string[] = []
+  for (const r of state.results) {
+    const eccc = r.outcomes.find(
+      (o): o is SourceResult => !isError(o) && o.source === 'eccc',
+    )
+    if (!eccc) continue
+    const label = state.points.find((p) => p.id === r.pointId)?.label ?? r.pointId
+    out.push(`${label} : ${formatStationTrace(eccc.station)}`)
+  }
+  return out
+}
+
 export function recevabiliteForDate(
   state: MeteoModuleState,
   selectedDate: string,

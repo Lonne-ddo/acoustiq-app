@@ -3,9 +3,11 @@ import {
   makeDefaultMeteoState,
   serializeMeteoModule,
   deserializeMeteoModule,
+  ecccStationsUsed,
   type MeteoModuleState,
 } from './meteoModule'
 import type { PointMeteoResults } from './meteoModule'
+import type { SourceResult } from './meteoSources'
 
 describe('persistance meteoModule — eccStationByPoint (save/load)', () => {
   function stateWithChoice(): MeteoModuleState {
@@ -52,5 +54,37 @@ describe('persistance meteoModule — eccStationByPoint (save/load)', () => {
     expect(restored.points.length).toBeGreaterThan(0) // retombe sur le défaut
     expect(restored.results).toEqual([])
     expect(restored.eccStationByPoint).toEqual({})
+  })
+})
+
+describe('ecccStationsUsed — traçabilité rapport', () => {
+  it('produit une ligne « label : trace » par point avec résultat ECCC', () => {
+    const base = makeDefaultMeteoState()
+    const pid = base.points[0].id
+    const ecccResult = {
+      source: 'eccc',
+      rows: [],
+      station: { name: 'Dorval (QC)', lat: 0, lng: 0, distanceKm: 3.2, climateId: '702S006', elevation: 36 },
+      sourceUrl: '',
+      sourceLabel: '',
+      isArchive: true,
+      timezone: 'local (LST)',
+    } satisfies SourceResult
+    const state: MeteoModuleState = {
+      ...base,
+      points: [{ ...base.points[0], label: 'BV-94' }],
+      results: [{ pointId: pid, outcomes: [ecccResult] } as PointMeteoResults],
+    }
+    expect(ecccStationsUsed(state)).toEqual(['BV-94 : Dorval (QC) · id 702S006 · 3.2 km · 36 m'])
+  })
+
+  it('ignore les points sans résultat ECCC', () => {
+    const base = makeDefaultMeteoState()
+    const pid = base.points[0].id
+    const state: MeteoModuleState = {
+      ...base,
+      results: [{ pointId: pid, outcomes: [{ source: 'eccc', error: 'HTTP 500' }] } as PointMeteoResults],
+    }
+    expect(ecccStationsUsed(state)).toEqual([])
   })
 })

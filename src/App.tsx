@@ -105,6 +105,7 @@ import {
   recevabiliteForDate,
   serializeMeteoModule,
   deserializeMeteoModule,
+  ecccStationsUsed,
   type MeteoModuleState,
   type ProjectPointHint,
 } from './utils/meteoModule'
@@ -2016,6 +2017,7 @@ function MainPanel({
               meteo={meteo}
               periods={periods}
               categories={categories}
+              ecccStations={ecccStationsUsed(meteoModule)}
             />
           ) : (
             <EmptyState

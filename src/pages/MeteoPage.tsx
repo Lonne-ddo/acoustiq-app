@@ -22,10 +22,13 @@ import {
   fetchSource,
   isError,
   formatStationTrace,
+  ecccFailureShort,
   type SourceId,
   type SourceOutcome,
   type SourceResult,
+  type SourceError,
   type ECStationCandidate,
+  type EcccFailure,
 } from '../utils/meteoSources'
 import {
   evaluateRecevabilite,
@@ -54,13 +57,39 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
   const [ecccCandidatesByPoint, setEcccCandidatesByPoint] = useState<
     Record<string, ECStationCandidate[]>
   >({})
+  // Stations ECCC tentées et échouées, par point → climateId → cause typée.
+  // Marque les candidats déjà essayés dans le sélecteur (glyphe ✗ + cause).
+  const [ecccFailedStations, setEcccFailedStations] = useState<
+    Record<string, Record<string, EcccFailure>>
+  >({})
   const lastFetchKeyRef = useRef<string | null>(null)
 
-  /** Mémorise les candidats ECCC d'un point depuis son issue (succès OU échec). */
-  function recordEcccCandidates(pointId: string, outcome: SourceOutcome) {
+  /**
+   * Mémorise l'issue ECCC d'un point : candidats (survivent au succès OU à
+   * l'échec) + marquage de la station essayée (échec → cause ; succès → efface).
+   */
+  function recordEcccOutcome(
+    pointId: string,
+    outcome: SourceOutcome,
+    chosenClimateId?: string,
+  ) {
     const cands = outcome.candidates
     if (cands && cands.length > 0) {
       setEcccCandidatesByPoint((prev) => ({ ...prev, [pointId]: cands }))
+    }
+    if (!chosenClimateId) return
+    if (isError(outcome) && outcome.ecccFailure) {
+      const fail = outcome.ecccFailure
+      setEcccFailedStations((prev) => ({
+        ...prev,
+        [pointId]: { ...(prev[pointId] ?? {}), [chosenClimateId]: fail },
+      }))
+    } else if (!isError(outcome)) {
+      setEcccFailedStations((prev) => {
+        const pf = { ...(prev[pointId] ?? {}) }
+        delete pf[chosenClimateId]
+        return { ...prev, [pointId]: pf }
+      })
     }
   }
 
@@ -161,7 +190,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         )
         allResults.push({ pointId: point.id, outcomes })
         const ecccOut = outcomes.find((o) => o.source === 'eccc')
-        if (ecccOut) recordEcccCandidates(point.id, ecccOut)
+        if (ecccOut) recordEcccOutcome(point.id, ecccOut, state.eccStationByPoint[point.id])
       }
       update({ results: allResults })
       lastFetchKeyRef.current = JSON.stringify({
@@ -217,8 +246,11 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
     ? activeResult.outcomes.filter(isError)
     : []
 
-  // Résultat ECCC du point actif (porte la station utilisée + les candidats).
+  // Issue ECCC du point actif : succès (SourceResult) OU échec (SourceError).
   const ecccResult = activeSources.find((s) => s.source === 'eccc')
+  const ecccOutcome = activeResult?.outcomes.find((o) => o.source === 'eccc')
+  const ecccError: SourceError | undefined =
+    ecccOutcome && isError(ecccOutcome) ? ecccOutcome : undefined
 
   /**
    * Sélection MANUELLE d'une station ECCC pour le point actif : persistée dans
@@ -251,7 +283,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         if (!replaced) outcomes.push(outcome)
         return { ...r, outcomes }
       })
-      recordEcccCandidates(activePointId, outcome)
+      recordEcccOutcome(activePointId, outcome, climateId)
       update({
         eccStationByPoint: { ...state.eccStationByPoint, [activePointId]: climateId },
         results,
@@ -662,20 +694,22 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
                 ))}
               </div>
             )}
-            {activePointId != null &&
-              (ecccCandidatesByPoint[activePointId]?.length ?? 0) > 0 && (
-                <EcccStationPicker
-                  candidates={ecccCandidatesByPoint[activePointId]}
-                  currentClimateId={
-                    state.eccStationByPoint[activePointId] ??
-                    ecccResult?.station.climateId ??
-                    null
-                  }
-                  isManual={activePointId in state.eccStationByPoint}
-                  disabled={fetching}
-                  onChoose={chooseEcccStation}
-                />
-              )}
+            {activePointId != null && ecccOutcome && (
+              <EcccStationBlock
+                ok={ecccResult}
+                error={ecccError}
+                candidates={ecccCandidatesByPoint[activePointId] ?? []}
+                currentClimateId={
+                  state.eccStationByPoint[activePointId] ??
+                  ecccResult?.station.climateId ??
+                  null
+                }
+                isManual={activePointId in state.eccStationByPoint}
+                failures={ecccFailedStations[activePointId] ?? {}}
+                disabled={fetching}
+                onChoose={chooseEcccStation}
+              />
+            )}
             <SourceTable
               sources={activeSources}
               recevabiliteBySource={recevabiliteBySource}
@@ -735,36 +769,49 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
  * §3.6 → le choix est explicite (et persisté). Chaque candidat affiche de quoi
  * juger sa représentativité (distance, altitude, période de données).
  */
-function EcccStationPicker({
+function fmtCandidate(c: ECStationCandidate): string {
+  return [
+    c.name,
+    c.province ? `(${c.province})` : null,
+    `${c.distance.toFixed(1)} km`,
+    c.elevation != null ? `${c.elevation} m` : null,
+    c.firstYear && c.lastYear ? `${c.firstYear}–${c.lastYear}` : null,
+    'horaire',
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/**
+ * Bloc « État Env. Canada » : TOUJOURS rendu quand ECCC est demandée (succès OU
+ * échec), au-dessus de SourceTable → la station n'est jamais invisible. Statut
+ * ✓/✗ (glyphe + texte, Okabe-Ito, couleur jamais seule) + sélecteur en liste qui
+ * marque les stations déjà tentées et échouées avec leur cause.
+ */
+function EcccStationBlock({
+  ok,
+  error,
   candidates,
   currentClimateId,
   isManual,
+  failures,
   disabled,
   onChoose,
 }: {
+  ok?: SourceResult
+  error?: SourceError
   candidates: ECStationCandidate[]
   currentClimateId: string | null
   isManual: boolean
+  failures: Record<string, EcccFailure>
   disabled: boolean
   onChoose: (climateId: string) => void
 }) {
-  const fmtCand = (c: ECStationCandidate) => {
-    const bits = [
-      c.name,
-      c.province ? `(${c.province})` : null,
-      `${c.distance.toFixed(1)} km`,
-      c.elevation != null ? `${c.elevation} m` : null,
-      c.firstYear && c.lastYear ? `${c.firstYear}–${c.lastYear}` : null,
-      'horaire',
-    ].filter(Boolean)
-    return bits.join(' · ')
-  }
   return (
-    <div className="rounded border border-gray-800 bg-gray-900/40 px-3 py-2 space-y-1.5">
+    <div className="rounded border border-gray-800 bg-gray-900/40 px-3 py-2 space-y-2">
+      {/* En-tête : label + badge auto/manuel + puce d'état */}
       <div className="flex items-center gap-2 flex-wrap">
-        <label className="text-[11px] font-medium text-gray-400">
-          Station Env. Canada
-        </label>
+        <label className="text-[11px] font-medium text-gray-400">Station Env. Canada</label>
         <span
           className={`text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider ${
             isManual
@@ -780,21 +827,68 @@ function EcccStationPicker({
           {isManual ? 'manuel' : 'auto'}
         </span>
       </div>
-      <select
-        value={currentClimateId ?? ''}
-        disabled={disabled}
-        onChange={(e) => {
-          if (e.target.value) onChoose(e.target.value)
-        }}
-        className="w-full text-xs bg-gray-800 text-gray-200 border border-gray-700 rounded
-                   px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
-      >
-        {candidates.map((c) => (
-          <option key={c.climateId ?? c.name} value={c.climateId ?? ''}>
-            {fmtCand(c)}
-          </option>
-        ))}
-      </select>
+
+      {/* Ligne d'état : ✓ station utilisée, ou ✗ cause honnête (jamais la couleur seule) */}
+      {ok ? (
+        <div className="text-[11px] text-[#009E73] flex items-start gap-1.5">
+          <span aria-hidden="true">✓</span>
+          <span>Station : {formatStationTrace(ok.station)}</span>
+        </div>
+      ) : error ? (
+        <div className="text-[11px] text-[#D55E00] flex items-start gap-1.5">
+          <span aria-hidden="true">✗</span>
+          <span>Env. Canada indisponible — {error.error}</span>
+        </div>
+      ) : null}
+
+      {/* Sélecteur en liste : chaque candidat marqué (✓ utilisée / ✗ cause / ○ non tenté) */}
+      {candidates.length > 0 ? (
+        <div className="space-y-1" role="listbox" aria-label="Stations Env. Canada candidates">
+          {candidates.map((c) => {
+            const id = c.climateId ?? ''
+            const fail = failures[id]
+            const isCurrent = id !== '' && id === currentClimateId
+            const glyph = fail ? '✗' : isCurrent ? '✓' : '○'
+            const glyphClass = fail
+              ? 'text-[#D55E00]'
+              : isCurrent
+                ? 'text-[#009E73]'
+                : 'text-gray-600'
+            const suffix = fail ? ecccFailureShort(fail) : isCurrent ? 'utilisée' : null
+            const ariaLabel =
+              c.name +
+              (fail ? ` — échec : ${ecccFailureShort(fail)}` : isCurrent ? ' — station utilisée' : '')
+            return (
+              <button
+                key={id || c.name}
+                type="button"
+                disabled={disabled || id === ''}
+                onClick={() => id && onChoose(id)}
+                aria-label={ariaLabel}
+                aria-selected={isCurrent}
+                className={`w-full text-left flex items-center gap-2 px-2 py-1.5 rounded text-xs border transition-colors disabled:opacity-50 ${
+                  isCurrent
+                    ? 'border-[#009E73]/50 bg-[#009E73]/10'
+                    : 'border-gray-700 hover:bg-gray-800'
+                }`}
+              >
+                <span className={`shrink-0 ${glyphClass}`} aria-hidden="true">
+                  {glyph}
+                </span>
+                <span className="flex-1 text-gray-200">{fmtCandidate(c)}</span>
+                {suffix && (
+                  <span className={`shrink-0 text-[10px] ${fail ? 'text-[#D55E00]' : 'text-[#009E73]'}`}>
+                    {suffix}
+                  </span>
+                )}
+              </button>
+            )
+          })}
+        </div>
+      ) : (
+        <div className="text-[10px] text-gray-500 italic">Aucune station à proposer.</div>
+      )}
+
       <div className="text-[10px] text-gray-500 leading-relaxed">
         La plus proche n'est pas toujours la plus représentative (relief, plan d'eau).
         Le choix alimente la recevabilité §3.6 et est tracé dans les exports.

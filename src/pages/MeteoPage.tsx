@@ -21,9 +21,11 @@ import {
   SOURCES,
   fetchSource,
   isError,
+  formatStationTrace,
   type SourceId,
   type SourceOutcome,
   type SourceResult,
+  type ECStationCandidate,
 } from '../utils/meteoSources'
 import {
   evaluateRecevabilite,
@@ -133,7 +135,14 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
       for (const point of ready) {
         const outcomes: SourceOutcome[] = await Promise.all(
           sources.map((s) =>
-            fetchSource(s, point.lat!, point.lng!, state.startDate, state.endDate),
+            fetchSource(
+              s,
+              point.lat!,
+              point.lng!,
+              state.startDate,
+              state.endDate,
+              s === 'eccc' ? state.eccStationByPoint[point.id] : undefined,
+            ),
           ),
         )
         allResults.push({ pointId: point.id, outcomes })
@@ -192,6 +201,51 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
     ? activeResult.outcomes.filter(isError)
     : []
 
+  // Résultat ECCC du point actif (porte la station utilisée + les candidats).
+  const ecccResult = activeSources.find((s) => s.source === 'eccc')
+
+  /**
+   * Sélection MANUELLE d'une station ECCC pour le point actif : persistée dans
+   * eccStationByPoint, re-fetch de la seule source ECCC (pas de repli), et
+   * remplacement en place de l'outcome ECCC du point.
+   */
+  async function chooseEcccStation(climateId: string) {
+    if (!activePoint || activePointId == null || activePoint.lat == null || activePoint.lng == null)
+      return
+    setFetching(true)
+    try {
+      const outcome = await fetchSource(
+        'eccc',
+        activePoint.lat,
+        activePoint.lng,
+        state.startDate,
+        state.endDate,
+        climateId,
+      )
+      const results = state.results.map((r) => {
+        if (r.pointId !== activePointId) return r
+        let replaced = false
+        const outcomes = r.outcomes.map((o) => {
+          if (o.source === 'eccc') {
+            replaced = true
+            return outcome
+          }
+          return o
+        })
+        if (!replaced) outcomes.push(outcome)
+        return { ...r, outcomes }
+      })
+      update({
+        eccStationByPoint: { ...state.eccStationByPoint, [activePointId]: climateId },
+        results,
+      })
+      if (isError(outcome)) showToast(outcome.error, 'error')
+      else showToast(`Station EC : ${outcome.station.name}`, 'success')
+    } finally {
+      setFetching(false)
+    }
+  }
+
   // ───────── EXPORTS ─────────
 
   function exportCsvSource() {
@@ -199,6 +253,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
     const lines: string[][] = [
       [
         'source',
+        'station',
         'datetime',
         'periode',
         'temperature_c',
@@ -213,9 +268,11 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
     ]
     for (const s of activeSources) {
       const ev = recevabiliteBySource[s.source] ?? []
+      const stationTrace = formatStationTrace(s.station)
       for (const h of ev) {
         lines.push([
           SOURCES[s.source].shortLabel,
+          stationTrace,
           h.datetime,
           h.period,
           fmtCsv(h.temperature, 1),
@@ -342,6 +399,9 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
       { Champ: 'Coordonnées', Valeur: `${activePoint.lat ?? ''}, ${activePoint.lng ?? ''}` },
       { Champ: 'Plage', Valeur: `${state.startDate} → ${state.endDate}` },
       { Champ: 'Sources', Valeur: sourceIds.map((id) => SOURCES[id].shortLabel).join(', ') },
+      ...(ecccResult
+        ? [{ Champ: 'Station EC utilisée', Valeur: formatStationTrace(ecccResult.station) }]
+        : []),
       { Champ: 'Référentiel', Valeur: 'Lignes directrices MELCCFP — §3.6' },
       { Champ: 'Vent', Valeur: '< 20 km/h sinon non recevable' },
       { Champ: 'Précipitations', Valeur: '= 0 mm sinon mesures à retirer' },
@@ -383,6 +443,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
               activeSources.length > 0
                 ? `Sources : ${activeSources.map((s) => SOURCES[s.source].shortLabel).join(', ')}`
                 : null,
+              ecccResult ? `Station EC : ${formatStationTrace(ecccResult.station)}` : null,
               `Généré : ${new Date().toLocaleString('fr-CA')}`,
             ]
               .filter(Boolean)
@@ -584,6 +645,15 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
                 ))}
               </div>
             )}
+            {ecccResult?.candidates && ecccResult.candidates.length > 0 && (
+              <EcccStationPicker
+                candidates={ecccResult.candidates}
+                currentClimateId={ecccResult.station.climateId ?? null}
+                isManual={activePointId != null && activePointId in state.eccStationByPoint}
+                disabled={fetching}
+                onChoose={chooseEcccStation}
+              />
+            )}
             <SourceTable
               sources={activeSources}
               recevabiliteBySource={recevabiliteBySource}
@@ -633,6 +703,79 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
             <ComparisonTable sources={activeSources} />
           </section>
         )}
+      </div>
+    </div>
+  )
+}
+
+/**
+ * Sélecteur manuel de station ECCC. La station retenue alimente la recevabilité
+ * §3.6 → le choix est explicite (et persisté). Chaque candidat affiche de quoi
+ * juger sa représentativité (distance, altitude, période de données).
+ */
+function EcccStationPicker({
+  candidates,
+  currentClimateId,
+  isManual,
+  disabled,
+  onChoose,
+}: {
+  candidates: ECStationCandidate[]
+  currentClimateId: string | null
+  isManual: boolean
+  disabled: boolean
+  onChoose: (climateId: string) => void
+}) {
+  const fmtCand = (c: ECStationCandidate) => {
+    const bits = [
+      c.name,
+      c.province ? `(${c.province})` : null,
+      `${c.distance.toFixed(1)} km`,
+      c.elevation != null ? `${c.elevation} m` : null,
+      c.firstYear && c.lastYear ? `${c.firstYear}–${c.lastYear}` : null,
+      'horaire',
+    ].filter(Boolean)
+    return bits.join(' · ')
+  }
+  return (
+    <div className="rounded border border-gray-800 bg-gray-900/40 px-3 py-2 space-y-1.5">
+      <div className="flex items-center gap-2 flex-wrap">
+        <label className="text-[11px] font-medium text-gray-400">
+          Station Env. Canada
+        </label>
+        <span
+          className={`text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider ${
+            isManual
+              ? 'bg-amber-900/40 text-amber-300 border border-amber-800/50'
+              : 'bg-gray-800 text-gray-500 border border-gray-700'
+          }`}
+          title={
+            isManual
+              ? 'Station choisie manuellement (persistée avec le projet)'
+              : 'Station retenue automatiquement (la plus proche exploitable)'
+          }
+        >
+          {isManual ? 'manuel' : 'auto'}
+        </span>
+      </div>
+      <select
+        value={currentClimateId ?? ''}
+        disabled={disabled}
+        onChange={(e) => {
+          if (e.target.value) onChoose(e.target.value)
+        }}
+        className="w-full text-xs bg-gray-800 text-gray-200 border border-gray-700 rounded
+                   px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-emerald-500 disabled:opacity-50"
+      >
+        {candidates.map((c) => (
+          <option key={c.climateId ?? c.name} value={c.climateId ?? ''}>
+            {fmtCand(c)}
+          </option>
+        ))}
+      </select>
+      <div className="text-[10px] text-gray-500 leading-relaxed">
+        La plus proche n'est pas toujours la plus représentative (relief, plan d'eau).
+        Le choix alimente la recevabilité §3.6 et est tracé dans les exports.
       </div>
     </div>
   )

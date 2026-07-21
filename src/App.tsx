@@ -103,6 +103,8 @@ const MeteoPage = lazy(() => import('./pages/MeteoPage'))
 import {
   makeDefaultMeteoState,
   recevabiliteForDate,
+  serializeMeteoModule,
+  deserializeMeteoModule,
   type MeteoModuleState,
   type ProjectPointHint,
 } from './utils/meteoModule'
@@ -2897,12 +2899,13 @@ export default function App() {
     return JSON.stringify({
       files: files.map((f) => ({ id: f.id, name: f.name, model: f.model, serial: f.serial, date: f.date, startTime: f.startTime, stopTime: f.stopTime, rowCount: f.rowCount })),
       pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods,
+      meteoModule: serializeMeteoModule(meteoModule),
     })
-  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods])
+  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods, meteoModule])
 
   // ---- Handlers projet ----
   const handleSaveProject = useCallback(() => {
-    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D, categories, periods)
+    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D, categories, periods, serializeMeteoModule(meteoModule))
     // Sauvegarder dans les projets récents
     const state = serializeCurrentState()
     const entry: RecentProject = { id: projectId, name: projectName, savedAt: new Date().toISOString(), state }
@@ -2912,7 +2915,7 @@ export default function App() {
       saveRecent(updated)
       return updated
     })
-  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectId, projectName, checklist, scene3D, categories, periods, serializeCurrentState])
+  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectId, projectName, checklist, scene3D, categories, periods, meteoModule, serializeCurrentState])
 
   const handleLoadProject = useCallback((json: string) => {
     try {
@@ -2929,6 +2932,7 @@ export default function App() {
       if (project.mapImage !== undefined) setMapImage(project.mapImage ?? null)
       if (project.mapMarkers) setMapMarkers(project.mapMarkers)
       if (project.meteo) setMeteo(project.meteo)
+      if (project.meteoModule) setMeteoModule(deserializeMeteoModule(project.meteoModule))
       if (project.checklist) setChecklist(project.checklist)
       if (project.scene3D) setScene3D(project.scene3D)
       // Catégories + périodes (migration douce de l'ancien format status)
@@ -3003,6 +3007,7 @@ export default function App() {
         setPeriods(norm.periods)
       }
       setMeteo(parsed.meteo ?? DEFAULT_METEO)
+      setMeteoModule(parsed.meteoModule ? deserializeMeteoModule(parsed.meteoModule) : makeDefaultMeteoState())
       setChecklist(parsed.checklist ?? DEFAULT_CHECKLIST)
       if (parsed.files?.length > 0) {
         setErrors([`${t('project.missingFiles')} : ${parsed.files.map((f: { name: string }) => f.name).join(', ')}`])

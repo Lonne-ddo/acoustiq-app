@@ -68,6 +68,7 @@ export function saveProject(
   scene3D?: Scene3DData,
   categories?: import('../types').Category[],
   periods?: import('../types').Period[],
+  meteoModule?: import('../utils/meteoModule').PersistedMeteoModule,
 ): void {
   const project: ProjectData = {
     version: PROJECT_VERSION,
@@ -94,6 +95,7 @@ export function saveProject(
     scene3D,
     categories,
     periods,
+    meteoModule,
   }
 
   const json = JSON.stringify(project, null, 2)

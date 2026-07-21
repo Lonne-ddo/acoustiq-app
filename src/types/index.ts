@@ -480,4 +480,9 @@ export interface ProjectData {
   categories?: Category[]
   /** Périodes nommées définies sur le graphique */
   periods?: Period[]
+  /**
+   * Config reproductible du module météo (points, plage, sources, asphalte, et
+   * choix manuel de station ECCC par point). Les `results` ne sont PAS persistés.
+   */
+  meteoModule?: import('../utils/meteoModule').PersistedMeteoModule
 }

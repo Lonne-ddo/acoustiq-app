@@ -25,6 +25,12 @@ export interface MeteoModuleState {
   results: PointMeteoResults[]
   /** « Asphalte à proximité » (§3.6) — active le critère de chaussée sèche. */
   asphalt: boolean
+  /**
+   * Choix MANUEL de station ECCC par point (id du point → CLIMATE_IDENTIFIER).
+   * Absent = auto (station la plus proche exploitable). Ce choix influence le
+   * verdict §3.6 → il est persisté avec le projet (cf. serializeMeteoModule).
+   */
+  eccStationByPoint: Record<string, string>
 }
 
 export interface ProjectPointHint {
@@ -56,6 +62,47 @@ export function makeDefaultMeteoState(): MeteoModuleState {
     selectedSources: new Set<SourceId>(['openmeteo', 'gem', 'eccc']),
     results: [],
     asphalt: true,
+    eccStationByPoint: {},
+  }
+}
+
+/**
+ * Forme persistée du module météo (dans ProjectData). On sauvegarde la config
+ * REPRODUCTIBLE — points, plage, sources, asphalte, et surtout le choix de
+ * station ECCC par point — mais PAS les `results` (données lourdes, re-fetchées
+ * à la réouverture). Le choix de station devient ainsi défendable/reproductible.
+ */
+export interface PersistedMeteoModule {
+  points: MeteoPoint[]
+  startDate: string
+  endDate: string
+  selectedSources: SourceId[]
+  asphalt: boolean
+  eccStationByPoint: Record<string, string>
+}
+
+export function serializeMeteoModule(state: MeteoModuleState): PersistedMeteoModule {
+  return {
+    points: state.points,
+    startDate: state.startDate,
+    endDate: state.endDate,
+    selectedSources: Array.from(state.selectedSources),
+    asphalt: state.asphalt,
+    eccStationByPoint: { ...state.eccStationByPoint },
+  }
+}
+
+/** Reconstruit un MeteoModuleState depuis la forme persistée (results vidés). */
+export function deserializeMeteoModule(p: PersistedMeteoModule): MeteoModuleState {
+  const base = makeDefaultMeteoState()
+  return {
+    points: p.points?.length ? p.points : base.points,
+    startDate: p.startDate ?? base.startDate,
+    endDate: p.endDate ?? base.endDate,
+    selectedSources: new Set<SourceId>(p.selectedSources ?? Array.from(base.selectedSources)),
+    results: [],
+    asphalt: p.asphalt ?? base.asphalt,
+    eccStationByPoint: p.eccStationByPoint ?? {},
   }
 }
 

@@ -46,7 +46,27 @@ export interface StationInfo {
   lng: number
   distanceKm: number
   climateId?: string
-  elevation?: number
+  elevation?: number | null
+}
+
+/**
+ * Station ECCC candidate exposée à l'UI pour la sélection manuelle. Toutes les
+ * métadonnées proviennent de la MÊME réponse `climate-stations` (aucune requête
+ * supplémentaire) — permet à l'ingénieur de juger la représentativité.
+ */
+export interface ECStationCandidate {
+  climateId: string | null
+  stnId: number | string | null
+  name: string
+  province: string | null
+  lat: number
+  lng: number
+  distance: number
+  hasHourly: boolean
+  elevation: number | null
+  /** Première / dernière année de données horaires (si disponible). */
+  firstYear: number | null
+  lastYear: number | null
 }
 
 export interface SourceResult {
@@ -57,6 +77,11 @@ export interface SourceResult {
   sourceLabel: string
   isArchive: boolean
   timezone: string
+  /**
+   * ECCC uniquement : stations candidates classées par distance (top 8), pour
+   * le sélecteur manuel. Absent pour les autres sources.
+   */
+  candidates?: ECStationCandidate[]
 }
 
 export interface SourceError {
@@ -251,30 +276,54 @@ export async function fetchGEM(
 //   Environnement Canada — station officielle la plus proche
 // ─────────────────────────────────────────────────────────────────────
 
-interface ECStationCandidate {
-  climateId: string | null
-  stnId: number | string | null
-  name: string
-  province: string | null
-  lat: number
-  lng: number
-  distance: number
-  hasHourly: boolean
+/** Nombre de candidats ECCC exposés au sélecteur manuel. */
+export const ECCC_CANDIDATE_LIMIT = 8
+
+/** Extrait l'année (4 chiffres) d'une date ISO/texte ; null si absente. */
+function yearOf(s: unknown): number | null {
+  const m = String(s ?? '').match(/(\d{4})/)
+  return m ? Number(m[1]) : null
 }
 
-export async function fetchECCC(
+/**
+ * Ligne de traçabilité station (exports XLSX/CSV, rapport) : nom, id climato,
+ * distance, altitude. Une donnée de recevabilité doit toujours nommer sa station.
+ */
+export function formatStationTrace(st: StationInfo): string {
+  return [
+    st.name,
+    st.climateId ? `id ${st.climateId}` : null,
+    Number.isFinite(st.distanceKm) ? `${st.distanceKm.toFixed(1)} km` : null,
+    st.elevation != null ? `${st.elevation} m` : null,
+  ]
+    .filter(Boolean)
+    .join(' · ')
+}
+
+/**
+ * Décide l'ordre d'essai des stations (PURE, testable). Choix manuel :
+ * uniquement la station choisie (jamais écrasée par la plus proche) ; si elle
+ * n'est pas dans les candidats → aucune tentative (l'appelant lève une erreur
+ * explicite, pas de repli silencieux). Auto : top-3 par distance.
+ */
+export function orderEcccAttempts(
+  candidates: ECStationCandidate[],
+  chosenClimateId?: string | null,
+): { attempts: ECStationCandidate[]; manual: boolean; chosen: ECStationCandidate | null } {
+  if (chosenClimateId) {
+    const chosen = candidates.find((c) => c.climateId === chosenClimateId) ?? null
+    return { attempts: chosen ? [chosen] : [], manual: true, chosen }
+  }
+  return { attempts: candidates.slice(0, 3), manual: false, chosen: null }
+}
+
+/** Étape 1 : liste des stations candidates classées par distance (réutilisée). */
+export async function fetchECCCStations(
   lat: number,
   lng: number,
-  startDate: string,
-  endDate: string,
-): Promise<SourceResult> {
+): Promise<ECStationCandidate[]> {
   const radiusDeg = 0.6
-  const bbox = [
-    lng - radiusDeg,
-    lat - radiusDeg,
-    lng + radiusDeg,
-    lat + radiusDeg,
-  ].join(',')
+  const bbox = [lng - radiusDeg, lat - radiusDeg, lng + radiusDeg, lat + radiusDeg].join(',')
   const stationsUrl =
     `https://api.weather.gc.ca/collections/climate-stations/items` +
     `?bbox=${bbox}&limit=100&f=json`
@@ -302,6 +351,10 @@ export async function fetchECCC(
           p.HAS_HOURLY_DATA === 'Y' ||
           p.HAS_HOURLY_DATA === true ||
           p.HAS_HOURLY_DATA == null,
+        elevation: num(p.ELEVATION),
+        // Période de données horaires (champs variables selon la collection).
+        firstYear: yearOf(p.HLY_FIRST_DATE ?? p.FIRST_DATE ?? p.DLY_FIRST_DATE),
+        lastYear: yearOf(p.HLY_LAST_DATE ?? p.LAST_DATE ?? p.DLY_LAST_DATE),
       } satisfies ECStationCandidate
     })
     .filter((s: ECStationCandidate) => s.hasHourly && s.climateId)
@@ -310,74 +363,107 @@ export async function fetchECCC(
   if (candidates.length === 0) {
     throw new Error('Aucune station EC avec données horaires à proximité.')
   }
+  return candidates
+}
 
+/** Étape 2 : données horaires d'UNE station (pas de repli — lève si vide). */
+export async function fetchECCCHourly(
+  stn: ECStationCandidate,
+  startDate: string,
+  endDate: string,
+  candidates: ECStationCandidate[],
+): Promise<SourceResult> {
+  if (!stn.climateId) throw new Error(`${stn.name} : identifiant climatologique manquant.`)
   const startIso = startDate + 'T00:00:00Z'
   const endIso = endDate + 'T23:59:59Z'
-  let lastErr: string | null = null
+  const hourlyUrl =
+    `https://api.weather.gc.ca/collections/climate-hourly/items` +
+    `?CLIMATE_IDENTIFIER=${encodeURIComponent(stn.climateId)}` +
+    `&datetime=${startIso}/${endIso}&limit=10000&sortby=LOCAL_DATE&f=json`
 
-  // Spec : limiter à 1 station par point pour éviter les timeouts.
-  // En pratique on essaie au plus 3 candidates pour gérer les stations vides.
-  for (const stn of candidates.slice(0, 3)) {
-    if (!stn.climateId) continue
-    const hourlyUrl =
-      `https://api.weather.gc.ca/collections/climate-hourly/items` +
-      `?CLIMATE_IDENTIFIER=${encodeURIComponent(stn.climateId)}` +
-      `&datetime=${startIso}/${endIso}&limit=10000&sortby=LOCAL_DATE&f=json`
-    try {
-      const rr = await fetch(hourlyUrl)
-      if (!rr.ok) {
-        lastErr = `${stn.name}: HTTP ${rr.status}`
-        continue
-      }
-      const j = await rr.json()
-      if (!j?.features?.length) {
-        lastErr = `${stn.name}: aucune observation`
-        continue
-      }
-      const rows: MeteoHourRow[] = j.features
-        .map((f: any) => {
-          const p = f.properties || {}
-          const windDir10 = num(p.WIND_DIRECTION ?? p.WIND_DIR)
-          return {
-            datetime: (p.LOCAL_DATE as string) || (p.UTC_DATE as string),
-            temperature: num(p.TEMP),
-            humidity: num(p.REL_HUM ?? p.RELATIVE_HUMIDITY),
-            precipitation: num(p.PRECIP_AMOUNT ?? p.PRECIPITATION),
-            windSpeed: num(p.WIND_SPEED),
-            windDirection: windDir10 != null ? windDir10 * 10 : null,
-            weatherCode: null,
-            weatherText: (p.WEATHER as string) || null,
-          } as MeteoHourRow
-        })
-        .sort((a: MeteoHourRow, b: MeteoHourRow) =>
-          String(a.datetime).localeCompare(String(b.datetime)),
-        )
-      if (rows.length === 0) {
-        lastErr = `${stn.name}: aucune ligne valide`
-        continue
-      }
+  const rr = await fetch(hourlyUrl)
+  if (!rr.ok) throw new Error(`${stn.name} : HTTP ${rr.status}`)
+  const j = await rr.json()
+  if (!j?.features?.length) throw new Error(`${stn.name} : aucune observation`)
+
+  const rows: MeteoHourRow[] = j.features
+    .map((f: any) => {
+      const p = f.properties || {}
+      const windDir10 = num(p.WIND_DIRECTION ?? p.WIND_DIR)
       return {
-        source: 'eccc',
-        rows,
-        station: {
-          name: stn.name + (stn.province ? ` (${stn.province})` : ''),
-          climateId: stn.climateId,
-          lat: stn.lat,
-          lng: stn.lng,
-          distanceKm: stn.distance,
-        },
-        sourceUrl: hourlyUrl,
-        sourceLabel: `Env. Canada · ${stn.name} (id ${stn.climateId})`,
-        isArchive: true,
-        timezone: 'local (LST)',
-      }
+        datetime: (p.LOCAL_DATE as string) || (p.UTC_DATE as string),
+        temperature: num(p.TEMP),
+        humidity: num(p.REL_HUM ?? p.RELATIVE_HUMIDITY),
+        precipitation: num(p.PRECIP_AMOUNT ?? p.PRECIPITATION),
+        windSpeed: num(p.WIND_SPEED),
+        windDirection: windDir10 != null ? windDir10 * 10 : null,
+        weatherCode: null,
+        weatherText: (p.WEATHER as string) || null,
+      } as MeteoHourRow
+    })
+    .sort((a: MeteoHourRow, b: MeteoHourRow) =>
+      String(a.datetime).localeCompare(String(b.datetime)),
+    )
+  if (rows.length === 0) throw new Error(`${stn.name} : aucune ligne valide`)
+
+  return {
+    source: 'eccc',
+    rows,
+    station: {
+      name: stn.name + (stn.province ? ` (${stn.province})` : ''),
+      climateId: stn.climateId,
+      lat: stn.lat,
+      lng: stn.lng,
+      distanceKm: stn.distance,
+      elevation: stn.elevation,
+    },
+    sourceUrl: hourlyUrl,
+    sourceLabel: `Env. Canada · ${stn.name} (id ${stn.climateId})`,
+    isArchive: true,
+    timezone: 'local (LST)',
+    candidates: candidates.slice(0, ECCC_CANDIDATE_LIMIT),
+  }
+}
+
+/**
+ * ECCC : liste → station (choisie ou auto top-3) → horaire.
+ * - `chosenClimateId` fourni : SEULE cette station est essayée. Si elle est
+ *   introuvable ou sans données → erreur explicite, JAMAIS de repli silencieux.
+ * - sinon (auto) : essaie le top-3 par distance jusqu'à en trouver une exploitable.
+ */
+export async function fetchECCC(
+  lat: number,
+  lng: number,
+  startDate: string,
+  endDate: string,
+  chosenClimateId?: string | null,
+): Promise<SourceResult> {
+  const candidates = await fetchECCCStations(lat, lng)
+  const { attempts, manual, chosen } = orderEcccAttempts(candidates, chosenClimateId)
+
+  if (manual && attempts.length === 0) {
+    throw new Error(
+      `Station choisie (id ${chosenClimateId}) introuvable parmi les candidats — choisissez-en une autre.`,
+    )
+  }
+
+  let lastErr: string | null = null
+  for (const stn of attempts) {
+    try {
+      return await fetchECCCHourly(stn, startDate, endDate, candidates)
     } catch (e) {
-      lastErr = `${stn.name}: ${(e as Error).message}`
+      lastErr = (e as Error).message
+      // Choix manuel : on ne bascule PAS sur une autre station.
+      if (manual) break
     }
   }
-  throw new Error(
-    `Aucune station EC exploitable. ${lastErr ? '(' + lastErr + ')' : ''}`,
-  )
+
+  if (manual) {
+    throw new Error(
+      `Station ${chosen?.name ?? chosenClimateId} : aucune donnée sur la période — choisissez-en une autre.`,
+    )
+  }
+  throw new Error(`Aucune station EC exploitable. ${lastErr ? '(' + lastErr + ')' : ''}`)
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -392,8 +478,10 @@ function cacheKey(
   lng: number,
   startDate: string,
   endDate: string,
+  chosenClimateId?: string | null,
 ): string {
-  return `${source}|${lat.toFixed(4)}|${lng.toFixed(4)}|${startDate}|${endDate}`
+  const stn = source === 'eccc' && chosenClimateId ? `|${chosenClimateId}` : ''
+  return `${source}|${lat.toFixed(4)}|${lng.toFixed(4)}|${startDate}|${endDate}${stn}`
 }
 
 export function fetchSource(
@@ -402,15 +490,16 @@ export function fetchSource(
   lng: number,
   startDate: string,
   endDate: string,
+  chosenClimateId?: string | null,
 ): Promise<SourceOutcome> {
-  const key = cacheKey(source, lat, lng, startDate, endDate)
+  const key = cacheKey(source, lat, lng, startDate, endDate, chosenClimateId)
   const cached = cache.get(key)
   if (cached) return cached
 
   const fetcher = (): Promise<SourceResult> => {
     if (source === 'openmeteo') return fetchOpenMeteo(lat, lng, startDate, endDate)
     if (source === 'gem') return fetchGEM(lat, lng, startDate, endDate)
-    return fetchECCC(lat, lng, startDate, endDate)
+    return fetchECCC(lat, lng, startDate, endDate, chosenClimateId)
   }
 
   const promise: Promise<SourceOutcome> = fetcher()

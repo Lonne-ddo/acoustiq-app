@@ -3,6 +3,9 @@ import {
   orderEcccAttempts,
   formatStationTrace,
   fetchECCC,
+  classifyEcccFailure,
+  ecccFailureMessage,
+  EcccError,
   type ECStationCandidate,
 } from './meteoSources'
 
@@ -45,6 +48,36 @@ describe('orderEcccAttempts — choix manuel vs auto (PUR)', () => {
     expect(attempts).toEqual([])
     expect(chosen).toBeNull()
   })
+})
+
+describe('classifyEcccFailure — cause typée (PURE, garantie anti-message-trompeur)', () => {
+  it('empty', () => expect(classifyEcccFailure(new EcccError('empty')).kind).toBe('empty'))
+  it('network (TypeError de fetch)', () =>
+    expect(classifyEcccFailure(new TypeError('Failed to fetch')).kind).toBe('network'))
+  it('http conserve le code', () => {
+    const f = classifyEcccFailure(new EcccError('http', { httpStatus: 503 }))
+    expect(f.kind).toBe('http')
+    expect(f.httpStatus).toBe(503)
+  })
+  it('no-stations', () =>
+    expect(classifyEcccFailure(new EcccError('no-stations')).kind).toBe('no-stations'))
+  it('not-found', () =>
+    expect(classifyEcccFailure(new EcccError('not-found')).kind).toBe('not-found'))
+  it('exception INATTENDUE → unknown, JAMAIS empty', () => {
+    expect(classifyEcccFailure(new Error('bug interne')).kind).toBe('unknown')
+    expect(classifyEcccFailure('chaîne brute').kind).toBe('unknown')
+    expect(classifyEcccFailure(null).kind).toBe('unknown')
+    expect(classifyEcccFailure(new Error('bug interne')).kind).not.toBe('empty')
+  })
+})
+
+describe('ecccFailureMessage — libellés acousticien', () => {
+  it('http substitue le code HTTP', () =>
+    expect(ecccFailureMessage({ kind: 'http', httpStatus: 500 })).toContain('HTTP 500'))
+  it('empty = fait sur les données, pas un code technique', () =>
+    expect(ecccFailureMessage({ kind: 'empty' })).toBe(
+      'Aucune donnée pour cette station sur la période.',
+    ))
 })
 
 describe('formatStationTrace — traçabilité exports', () => {
@@ -134,9 +167,13 @@ describe('fetchECCC — repli auto vs choix manuel', () => {
     expect(hourlyCalls.some((u) => u.includes('CLIMATE_IDENTIFIER=B'))).toBe(true)
   })
 
-  it('manuel : station choisie sans données → message explicite, AUCUN repli', async () => {
+  it('manuel : station vide → EcccError(empty) + candidats survivants, AUCUN repli', async () => {
     hourlyData = { A: validHourly, B: [] } // B choisie mais vide ; A a des données
-    await expect(fetchECCC(45.5, -73.6, D, D, 'B')).rejects.toThrow(/aucune donnée sur la période/i)
+    const err = (await fetchECCC(45.5, -73.6, D, D, 'B').catch((e) => e)) as EcccError
+    expect(err).toBeInstanceOf(EcccError)
+    expect(err.kind).toBe('empty') // cause typée, plus de message figé « aucune donnée »
+    // les candidats survivent à l'échec (pour garder le sélecteur affiché)
+    expect(err.candidates?.map((c) => c.climateId)).toEqual(['A', 'B'])
     // n'a essayé QUE B (pas de bascule silencieuse vers A)
     expect(hourlyCalls.every((u) => u.includes('CLIMATE_IDENTIFIER=B'))).toBe(true)
     expect(hourlyCalls.some((u) => u.includes('CLIMATE_IDENTIFIER=A'))).toBe(false)

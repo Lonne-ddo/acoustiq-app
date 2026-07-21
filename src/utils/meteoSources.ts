@@ -87,12 +87,107 @@ export interface SourceResult {
 export interface SourceError {
   source: SourceId
   error: string
+  /** ECCC : cause d'échec typée (message honnête ≠ « aucune donnée » systématique). */
+  ecccFailure?: EcccFailure
+  /**
+   * ECCC : candidats qui SURVIVENT à l'échec horaire (la liste est obtenue avant
+   * la requête horaire). Permet de garder le sélecteur affiché malgré l'erreur.
+   */
+  candidates?: ECStationCandidate[]
 }
 
 export type SourceOutcome = SourceResult | SourceError
 
 export function isError(o: SourceOutcome): o is SourceError {
   return 'error' in o
+}
+
+// ─────────────────────────────────────────────────────────────────────
+//   ECCC — classification des causes d'échec (traçabilité réglementaire)
+// ─────────────────────────────────────────────────────────────────────
+
+/**
+ * Cause d'un échec ECCC. Distinguer ces cas est réglementaire : présenter un
+ * échec technique (réseau/HTTP) comme un fait sur les données (« aucune donnée »)
+ * est un défaut de traçabilité. `unknown` = filet de sécurité pour une exception
+ * inattendue — elle ne doit JAMAIS retomber sur `empty`.
+ */
+export type EcccFailureKind =
+  | 'empty'
+  | 'network'
+  | 'http'
+  | 'no-stations'
+  | 'not-found'
+  | 'unknown'
+
+export interface EcccFailure {
+  kind: EcccFailureKind
+  httpStatus?: number
+}
+
+/** Erreur ECCC typée, transportant la cause + les candidats survivants. */
+export class EcccError extends Error {
+  kind: EcccFailureKind
+  httpStatus?: number
+  candidates?: ECStationCandidate[]
+  constructor(
+    kind: EcccFailureKind,
+    opts?: { httpStatus?: number; candidates?: ECStationCandidate[]; detail?: string },
+  ) {
+    super(opts?.detail ?? kind)
+    this.name = 'EcccError'
+    this.kind = kind
+    this.httpStatus = opts?.httpStatus
+    this.candidates = opts?.candidates
+  }
+}
+
+/**
+ * Classe une erreur ECCC en cause typée (PURE, testée). Un `EcccError` porte sa
+ * cause ; un `TypeError` (fetch rejeté) = réseau/CSP ; tout le reste = `unknown`
+ * — surtout PAS `empty` (garantie de non-retour du message trompeur).
+ */
+export function classifyEcccFailure(error: unknown): EcccFailure {
+  if (error instanceof EcccError) return { kind: error.kind, httpStatus: error.httpStatus }
+  if (error instanceof TypeError) return { kind: 'network' }
+  return { kind: 'unknown' }
+}
+
+/** Libellés complets, compréhensibles par un acousticien (pas de code brut). */
+export const ECCC_FAILURE_LABEL: Record<EcccFailureKind, string> = {
+  empty: 'Aucune donnée pour cette station sur la période.',
+  network: 'Échec de connexion au service ECCC (réseau ou blocage navigateur).',
+  http: 'Le service ECCC a répondu (HTTP {code}).',
+  'no-stations': 'Aucune station ECCC accessible à proximité.',
+  'not-found': 'Station introuvable parmi les candidats.',
+  unknown: 'Échec inattendu du service ECCC.',
+}
+
+/** Libellés courts pour le marquage par candidat dans le sélecteur. */
+export const ECCC_FAILURE_SHORT: Record<EcccFailureKind, string> = {
+  empty: 'aucune donnée',
+  network: 'connexion échouée',
+  http: 'HTTP {code}',
+  'no-stations': 'aucune station',
+  'not-found': 'introuvable',
+  unknown: 'échec',
+}
+
+export function ecccFailureMessage(f: EcccFailure): string {
+  const base = ECCC_FAILURE_LABEL[f.kind]
+  if (f.kind === 'http') {
+    return f.httpStatus != null
+      ? base.replace('{code}', String(f.httpStatus))
+      : 'Le service ECCC a répondu avec une erreur.'
+  }
+  return base
+}
+
+export function ecccFailureShort(f: EcccFailure): string {
+  const base = ECCC_FAILURE_SHORT[f.kind]
+  return f.kind === 'http' && f.httpStatus != null
+    ? base.replace('{code}', String(f.httpStatus))
+    : base.replace(' {code}', '')
 }
 
 const DAY_MS = 86_400_000
@@ -329,10 +424,10 @@ export async function fetchECCCStations(
     `?bbox=${bbox}&limit=100&f=json`
 
   const r = await fetch(stationsUrl)
-  if (!r.ok) throw new Error(`Stations EC : HTTP ${r.status}`)
+  if (!r.ok) throw new EcccError('no-stations', { httpStatus: r.status })
   const stationsJson = await r.json()
   if (!stationsJson?.features?.length) {
-    throw new Error('Aucune station EC dans un rayon de ~60 km.')
+    throw new EcccError('no-stations', { detail: 'Aucune station EC dans un rayon de ~60 km.' })
   }
 
   const candidates: ECStationCandidate[] = stationsJson.features
@@ -361,7 +456,9 @@ export async function fetchECCCStations(
     .sort((a: ECStationCandidate, b: ECStationCandidate) => a.distance - b.distance)
 
   if (candidates.length === 0) {
-    throw new Error('Aucune station EC avec données horaires à proximité.')
+    throw new EcccError('no-stations', {
+      detail: 'Aucune station EC avec données horaires à proximité.',
+    })
   }
   return candidates
 }
@@ -373,7 +470,7 @@ export async function fetchECCCHourly(
   endDate: string,
   candidates: ECStationCandidate[],
 ): Promise<SourceResult> {
-  if (!stn.climateId) throw new Error(`${stn.name} : identifiant climatologique manquant.`)
+  if (!stn.climateId) throw new EcccError('unknown', { detail: `${stn.name} : identifiant climatologique manquant.` })
   const startIso = startDate + 'T00:00:00Z'
   const endIso = endDate + 'T23:59:59Z'
   const hourlyUrl =
@@ -382,9 +479,9 @@ export async function fetchECCCHourly(
     `&datetime=${startIso}/${endIso}&limit=10000&sortby=LOCAL_DATE&f=json`
 
   const rr = await fetch(hourlyUrl)
-  if (!rr.ok) throw new Error(`${stn.name} : HTTP ${rr.status}`)
+  if (!rr.ok) throw new EcccError('http', { httpStatus: rr.status })
   const j = await rr.json()
-  if (!j?.features?.length) throw new Error(`${stn.name} : aucune observation`)
+  if (!j?.features?.length) throw new EcccError('empty')
 
   const rows: MeteoHourRow[] = j.features
     .map((f: any) => {
@@ -404,7 +501,7 @@ export async function fetchECCCHourly(
     .sort((a: MeteoHourRow, b: MeteoHourRow) =>
       String(a.datetime).localeCompare(String(b.datetime)),
     )
-  if (rows.length === 0) throw new Error(`${stn.name} : aucune ligne valide`)
+  if (rows.length === 0) throw new EcccError('empty')
 
   return {
     source: 'eccc',
@@ -438,32 +535,29 @@ export async function fetchECCC(
   endDate: string,
   chosenClimateId?: string | null,
 ): Promise<SourceResult> {
+  // La liste des candidats est obtenue AVANT toute requête horaire : elle survit
+  // donc à un échec horaire (attachée à l'EcccError levée plus bas).
   const candidates = await fetchECCCStations(lat, lng)
-  const { attempts, manual, chosen } = orderEcccAttempts(candidates, chosenClimateId)
+  const { attempts, manual } = orderEcccAttempts(candidates, chosenClimateId)
 
   if (manual && attempts.length === 0) {
-    throw new Error(
-      `Station choisie (id ${chosenClimateId}) introuvable parmi les candidats — choisissez-en une autre.`,
-    )
+    throw new EcccError('not-found', { candidates })
   }
 
-  let lastErr: string | null = null
+  let lastErr: unknown = null
   for (const stn of attempts) {
     try {
       return await fetchECCCHourly(stn, startDate, endDate, candidates)
     } catch (e) {
-      lastErr = (e as Error).message
+      lastErr = e
       // Choix manuel : on ne bascule PAS sur une autre station.
       if (manual) break
     }
   }
 
-  if (manual) {
-    throw new Error(
-      `Station ${chosen?.name ?? chosenClimateId} : aucune donnée sur la période — choisissez-en une autre.`,
-    )
-  }
-  throw new Error(`Aucune station EC exploitable. ${lastErr ? '(' + lastErr + ')' : ''}`)
+  // Cause réelle classée (jamais « aucune donnée » par défaut), + candidats.
+  const f = classifyEcccFailure(lastErr)
+  throw new EcccError(f.kind, { httpStatus: f.httpStatus, candidates })
 }
 
 // ─────────────────────────────────────────────────────────────────────
@@ -504,10 +598,19 @@ export function fetchSource(
 
   const promise: Promise<SourceOutcome> = fetcher()
     .then((r) => r as SourceOutcome)
-    .catch((e: Error): SourceOutcome => ({
-      source,
-      error: e.message || 'Erreur inconnue',
-    }))
+    .catch((e: unknown): SourceOutcome => {
+      // ECCC : cause typée + candidats survivants (message honnête, pas figé).
+      if (source === 'eccc') {
+        const f = classifyEcccFailure(e)
+        return {
+          source,
+          error: ecccFailureMessage(f),
+          ecccFailure: f,
+          candidates: e instanceof EcccError ? e.candidates : undefined,
+        }
+      }
+      return { source, error: e instanceof Error ? e.message || 'Erreur inconnue' : 'Erreur inconnue' }
+    })
 
   // On cache les erreurs aussi mais brièvement (5 min).
   cache.set(key, promise)

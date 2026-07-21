@@ -11,7 +11,10 @@ export default defineConfig({
   },
   // Port de dev fixé à 5174 pour éviter la collision avec l'autre projet
   // Vite (5173). N'affecte que `npm run dev` — aucun impact build/déploiement.
+  // strictPort : échoue franchement si 5174 est pris, au lieu de basculer en
+  // silence sur un autre port.
   server: {
     port: 5174,
+    strictPort: true,
   },
 })

@@ -28,6 +28,13 @@ import {
   dayEnergyDistribution,
   filterDataByPeriods,
 } from '../utils/acoustics'
+import {
+  classifyCorr9801,
+  corr9801CauseMessage,
+  type Corr9801Term,
+  type Corr9801Cause,
+  type Corr9801Facts,
+} from '../utils/corr9801'
 
 const PERIODS_HELP =
   'Leq par période réglementaire (moyenne énergétique). Bornes communes à la ' +
@@ -192,31 +199,54 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
           .filter((f) => pointMap[f.id] === pt && f.date === selectedDate)
           .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
           .filter((dp) => dp.t >= startMin && dp.t <= endMin)
-        if (dps.length === 0) return [pt, null]
-        const laeqWin = laeqAvg(dps.map((d) => d.laeq))
+        const hasData = dps.length > 0
+        const laeqWin = hasData ? laeqAvg(dps.map((d) => d.laeq)) : 0
 
         // Kb = LCeq − LAeq (énergétiques). null si aucun LCeq parsé.
         const lceqVals = dps.map((d) => d.lceq).filter((v): v is number => typeof v === 'number')
-        const kb = lceqVals.length > 0 ? computeKb9801(laeqAvg(lceqVals), laeqWin) : null
+        const hasLceq = lceqVals.length > 0
+        const lceq = hasLceq ? laeqAvg(lceqVals) : null
+        const kbVal = hasLceq ? computeKb9801(lceq, laeqWin) : null
 
-        // Ki = LAFTM5 − LAeq. null si aucun LAFmax 1 s parsé.
+        // Ki = LAFTM5 − LAeq. null si aucun LAFmax 1 s parsé (ou LAFTM5 null).
         const lafVals = dps.map((d) => d.lafmax).filter((v): v is number => typeof v === 'number')
-        const ki = lafVals.length > 0 ? computeKi9801(computeLaftm5(lafVals), laeqWin) : null
+        const hasLafmax = lafVals.length > 0
+        const laftm5 = hasLafmax ? computeLaftm5(lafVals) : null
+        const kiVal = hasLafmax ? computeKi9801(laftm5, laeqWin) : null
 
         // Kt 98-01 sur le spectre moyen énergétique par bande. null si pas de spectre.
         const specs = dps.map((d) => d.spectra).filter((s): s is number[] => !!s)
-        let kt: number | null = null
-        if (specs.length > 0) {
+        const hasSpectrum = specs.length > 0
+        let ktVal: number | null = null
+        if (hasSpectrum) {
           const nBands = specs[0].length
           const avgSpec = new Array(nBands).fill(0).map((_, i) =>
             laeqAvg(specs.map((s) => s[i]).filter((v) => typeof v === 'number')),
           )
-          kt = analyzeKt9801(avgSpec, laeqWin).kt
+          ktVal = analyzeKt9801(avgSpec, laeqWin).kt
         }
 
-        return [pt, { kt, ki, kb }]
+        // Cause DIFFÉRENCIÉE (pure) quand un terme est indisponible.
+        const facts: Corr9801Facts = {
+          hasData,
+          hasLceq,
+          hasLafmax,
+          laftm5IsNull: laftm5 === null,
+          hasSpectrum,
+        }
+        const causeOf = (term: Corr9801Term, val: number | null): Corr9801Cause | null =>
+          val === null ? classifyCorr9801(term, facts) : null
+
+        return [
+          pt,
+          {
+            kt: { value: ktVal, cause: causeOf('kt', ktVal) },
+            ki: { value: kiVal, cause: causeOf('ki', kiVal) },
+            kb: { value: kbVal, cause: causeOf('kb', kbVal) },
+          },
+        ]
       }),
-    ) as Record<string, { kt: number | null; ki: number | null; kb: number | null } | null>
+    ) as Record<string, Record<Corr9801Term, { value: number | null; cause: Corr9801Cause | null }>>
   }, [files, pointMap, selectedDate, pointNames, mode, startTime, endTime, periods, categories, excludedCatIds])
 
   // Calcul des indices par point
@@ -701,14 +731,16 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
                 <tr key={row.key} className={ri % 2 === 0 ? 'bg-gray-900' : 'bg-gray-850'}>
                   <td className="px-2 py-1 text-gray-400 font-medium">{row.label}</td>
                   {pointNames.map((pt) => {
-                    const c = corr9801ByPoint[pt]
-                    const v = c ? c[row.key] : null
+                    const term = corr9801ByPoint[pt]?.[row.key]
+                    const v = term?.value ?? null
                     if (v === null || v === undefined) {
+                      // Cause DIFFÉRENCIÉE (plus de libellé générique unique).
+                      const cause = term?.cause ?? 'unknown'
                       return (
                         <td
                           key={pt}
                           className="px-2 py-1 text-center text-gray-700"
-                          title="Donnée source absente — Ki : LAFmax 1 s ; Kb : LCeq ; Kt : spectre 1/3 d'octave"
+                          title={corr9801CauseMessage(row.key, cause)}
                         >
                           indispo.
                         </td>

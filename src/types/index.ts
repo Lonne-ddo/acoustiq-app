@@ -458,6 +458,8 @@ export interface ProjectData {
     startTime: string
     stopTime: string
     rowCount: number
+    // optionnel : données brutes, persistées uniquement via la voie Dataverse (blob Fichier). Omises des voies JSON/localStorage.
+    data?: DataPoint[]
   }>
   pointAssignments: Record<string, string>
   events: SourceEvent[]

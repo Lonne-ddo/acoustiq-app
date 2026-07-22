@@ -26,6 +26,13 @@ import {
   ClipboardCheck,
   Volume2,
   Play,
+  Box,
+  Mountain,
+  Warehouse,
+  CloudSun,
+  Map as MapIcon,
+  Scale,
+  History,
 } from 'lucide-react'
 import type {
   MeasurementFile,
@@ -220,24 +227,30 @@ type Tab = 'chart' | 'map' | 'lw' | 'isolement' | 'concordance' | 'report' | 're
  * (l'ancien onglet « spectrogram » a été retiré — le composant Spectrogram
  * reste utilisé en mode compact dans l'onglet « Analyse »).
  */
-type PrimaryTab = 'analyse' | 'conformite' | 'rapport' | 'outils'
+// Groupe primaire d'un onglet. « Analyse » conserve ses sous-onglets ; tous les
+// anciens onglets d'« Outils » sont désormais des primaires À PLAT (chacun se
+// mappe sur lui-même — un seul sous-onglet = lui-même, donc pas de 2ᵉ rangée).
+type PrimaryTab =
+  | 'analyse' | 'conformite' | 'rapport'
+  | 'vue3d' | 'carriere' | 'yamnet' | 'ecme' | 'meteo' | 'map' | 'regulation' | 'history' | 'diag'
 
 const PRIMARY_TAB_OF: Record<Tab, PrimaryTab> = {
   chart: 'analyse',
-  reafie: 'conformite',
-  report: 'rapport',
   lw: 'analyse',
   isolement: 'analyse',
   concordance: 'analyse',
-  map: 'outils',
-  regulation: 'outils',
-  history: 'outils',
-  carriere: 'outils',
-  yamnet: 'outils',
-  ecme: 'outils',
-  vue3d: 'outils',
-  meteo: 'outils',
-  diag: 'outils',
+  reafie: 'conformite',
+  report: 'rapport',
+  // Anciens onglets « Outils » → chacun son propre primaire (à plat).
+  vue3d: 'vue3d',
+  carriere: 'carriere',
+  yamnet: 'yamnet',
+  ecme: 'ecme',
+  meteo: 'meteo',
+  map: 'map',
+  regulation: 'regulation',
+  history: 'history',
+  diag: 'diag',
 }
 
 // Sous-onglets dérivés des feature flags (src/config/features.ts).
@@ -257,18 +270,40 @@ const SUBTABS: Record<PrimaryTab, Array<{ id: Tab; label: string }>> = {
   rapport: [
     ...(FEATURES.rapport ? [{ id: 'report' as Tab, label: 'Rapport' }] : []),
   ],
-  outils: [
-    { id: 'vue3d', label: 'Vue 3D' },
-    ...(FEATURES.carriere ? [{ id: 'carriere' as Tab, label: 'Carrière / Sablière' }] : []),
-    { id: 'yamnet', label: 'Audio IA' },
-    ...(FEATURES.parcEcme ? [{ id: 'ecme' as Tab, label: 'Parc ECME' }] : []),
-    { id: 'meteo', label: 'Météo' },
-    ...(FEATURES.carte ? [{ id: 'map' as Tab, label: 'Carte' }] : []),
-    { id: 'regulation', label: 'Réglementation' },
-    { id: 'history', label: 'Historique' },
-    { id: 'diag', label: 'Diagnostic réseau' },
-  ],
+  // Primaires à plat (anciens « Outils ») : chacun un seul sous-onglet = lui-même
+  // ⇒ aucune 2ᵉ rangée. Les onglets sous flag ne s'affichent que si le flag est actif.
+  vue3d: [{ id: 'vue3d', label: 'Vue 3D' }],
+  carriere: FEATURES.carriere ? [{ id: 'carriere', label: 'Carrière / Sablière' }] : [],
+  yamnet: [{ id: 'yamnet', label: 'Audio IA' }],
+  ecme: FEATURES.parcEcme ? [{ id: 'ecme', label: 'Parc ECME' }] : [],
+  meteo: [{ id: 'meteo', label: 'Météo' }],
+  map: FEATURES.carte ? [{ id: 'map', label: 'Carte' }] : [],
+  regulation: [{ id: 'regulation', label: 'Réglementation' }],
+  history: [{ id: 'history', label: 'Historique' }],
+  diag: [{ id: 'diag', label: 'Diagnostic réseau' }],
 }
+
+/**
+ * Ordre des onglets primaires (arbitrage : usage quotidien à gauche, diagnostic
+ * à droite). `diag: true` marque la sonde de diagnostic, rendue après un
+ * séparateur en fin de barre (elle bascule en premier dans « Plus » si la place
+ * manque). Label COURT ici (le nom long reste en aria-label). Le filtrage par
+ * flag est fait à l'affichage via `SUBTABS[id].length > 0`.
+ */
+const PRIMARY_TABS: Array<{ id: PrimaryTab; icon: React.ReactNode; label: string; ariaLabel?: string; diag?: boolean }> = [
+  { id: 'analyse',    icon: <BarChart2 size={13} />, label: 'Analyse' },
+  { id: 'conformite', icon: <Shield size={13} />,    label: 'Conformité' },
+  { id: 'rapport',    icon: <FileText size={13} />,  label: 'Rapport' },
+  { id: 'vue3d',      icon: <Box size={13} />,       label: 'Vue 3D' },
+  { id: 'carriere',   icon: <Mountain size={13} />,  label: 'Carrière' },
+  { id: 'yamnet',     icon: <Volume2 size={13} />,   label: 'Audio IA' },
+  { id: 'ecme',       icon: <Warehouse size={13} />, label: 'Parc ECME' },
+  { id: 'meteo',      icon: <CloudSun size={13} />,  label: 'Météo' },
+  { id: 'map',        icon: <MapIcon size={13} />,   label: 'Carte' },
+  { id: 'regulation', icon: <Scale size={13} />,     label: 'Réglementation' },
+  { id: 'history',    icon: <History size={13} />,   label: 'Historique' },
+  { id: 'diag',       icon: <Activity size={13} />,  label: 'Diagnostic', ariaLabel: 'Diagnostic réseau', diag: true },
+]
 
 
 /** Liste de fichiers groupée par date, avec bordure couleur du point */
@@ -1562,28 +1597,21 @@ function MainPanel({
           </div>
         </div>
 
-        {/* Onglets primaires (4) — sous-onglets affichés en dessous si > 1 */}
-        <nav className="flex gap-1 ml-4">
-          {([
-            ['analyse',    <BarChart2 size={13} key="a" />,  'Analyse'],
-            ['conformite', <Shield size={13} key="c" />,     'Conformité'],
-            ['rapport',    <FileText size={13} key="r" />,   'Rapport'],
-            ['outils',     <Layers size={13} key="o" />,     'Outils'],
-          ] as [PrimaryTab, React.ReactNode, string][])
-            .filter(([pid]) => SUBTABS[pid].length > 0)
-            .map(([pid, icon, label]) => {
-            const isActive = PRIMARY_TAB_OF[activeTab] === pid
-            return (
+        {/* Onglets primaires à plat — sous-onglets affichés en dessous si > 1
+            (seul « Analyse » en a). Barre filtrée par flag via SUBTABS[id]. */}
+        <nav className="flex gap-1 ml-4 items-center">
+          {PRIMARY_TABS
+            .filter(({ id }) => SUBTABS[id].length > 0)
+            .map(({ id, icon, label, ariaLabel }) => (
               <TabButton
-                key={pid}
-                active={isActive}
-                onClick={() => onTabChange(SUBTABS[pid][0].id)}
+                key={id}
+                active={PRIMARY_TAB_OF[activeTab] === id}
+                onClick={() => onTabChange(SUBTABS[id][0].id)}
                 icon={icon}
                 label={label}
-                aria-label={label}
+                aria-label={ariaLabel ?? label}
               />
-            )
-          })}
+            ))}
         </nav>
 
         {/* Actions header */}
@@ -2184,7 +2212,7 @@ export default function App() {
   // Segments audio classifiés par YAMNet (overlay sur le graphique principal)
   const [audioSegments, setAudioSegments] = useState<ClassifiedSegment[]>([])
 
-  // États persistants des sous-onglets de Outils — préservent les uploads
+  // États persistants des onglets Carrière / Parc ECME — préservent les uploads
   // et résultats quand l'utilisateur change d'onglet et revient.
   const [carriereState, setCarriereState] = useState<CarrierePageState>(EMPTY_CARRIERE_STATE)
   const [ecmeState, setEcmeState] = useState<EcmePageState>(EMPTY_ECME_STATE)

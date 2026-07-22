@@ -47,8 +47,23 @@ const STEPWISE_MAX_SEC = 300
 // Helpers de lecture cellule / feuille
 // ───────────────────────────────────────────────────────────────────────────
 
-function sheetToRows(sheet: XLSX.WorkSheet): unknown[][] {
-  return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null }) as unknown[][]
+/**
+ * Lit une feuille en tableau de lignes. `maxRows` borne la lecture aux N
+ * premières lignes (en-tête + échantillon) — essentiel pour la DÉTECTION : on
+ * n'analyse jamais tout un « Historique temporel » de 28 000 lignes juste pour
+ * lire ses en-têtes et mesurer son pas. Le parse complet (sans borne) n'a lieu
+ * qu'une seule fois, sur la feuille finalement retenue.
+ */
+function sheetToRows(sheet: XLSX.WorkSheet, maxRows?: number): unknown[][] {
+  const opts: XLSX.Sheet2JSONOpts = { header: 1, defval: null }
+  if (maxRows != null && sheet['!ref']) {
+    const r = XLSX.utils.decode_range(sheet['!ref'])
+    opts.range = XLSX.utils.encode_range({
+      s: r.s,
+      e: { r: Math.min(r.e.r, r.s.r + maxRows - 1), c: r.e.c },
+    })
+  }
+  return XLSX.utils.sheet_to_json(sheet, opts) as unknown[][]
 }
 
 function headerStrings(rows: unknown[][]): string[] {
@@ -319,7 +334,8 @@ function makeDetector(cfg: {
     scan(wb) {
       const candidates: Array<{ name: string; cm: ColumnMap; stepSec: number }> = []
       for (const name of wb.SheetNames) {
-        const rows = sheetToRows(wb.Sheets[name])
+        // Détection : en-tête + échantillon seulement (jamais toute la feuille).
+        const rows = sheetToRows(wb.Sheets[name], 60)
         if (rows.length < 2) continue
         const headers = headerStrings(rows)
         if (!cfg.belongs(headers)) continue
@@ -376,10 +392,36 @@ const g4EnDetector: FormatDetector = makeDetector({
 })
 
 /**
+ * G4 FRANÇAIS — signature : feuille avec en-têtes FR « LAeq » + « Temps » +
+ * « Date » (Date et Temps en DEUX colonnes séparées). C'est ce qui débloque le
+ * fichier de référence : `combine` recompose l'horodatage (jour entier de
+ * « Date » + fraction de « Temps »), là où l'ancien parseur cherchait un
+ * datetime combiné anglais et retombait sur la mauvaise colonne.
+ *
+ * NB : les bandes spectrales du G4-FR sont libellées à décimale VIRGULE
+ * (« 1/3 LZeq 6,3 ») ; `detectFreqColumns` ne reconnaît aujourd'hui que les
+ * libellés à point/entiers → les bandes basses (6,3–80 Hz) sont absentes du
+ * spectre (limitation connue, suivi séparé — pas un « faux » : les fréquences
+ * retenues restent correctement alignées).
+ */
+const g4FrDetector: FormatDetector = makeDetector({
+  id: 'g4-fr',
+  label: 'G4 français (Historique temporel)',
+  spec: {
+    recordTypeAliases: ["Type d'enregistrement"],
+    timeStrategy: { kind: 'combine', dateAlias: 'Date', timeAlias: 'Temps' },
+  },
+  // Français : présence des colonnes « LAeq » ET « Temps » ET « Date ».
+  belongs: (h) => hasExactHeader(h, 'LAeq') && hasExactHeader(h, 'Temps') && hasExactHeader(h, 'Date'),
+  dateStrategy: 'data-first',
+  reasonFor: (name, step) => `onglet « ${name} » : en-têtes FR (LAeq, Date, Temps, Type d'enregistrement), pas temporel ~${step < 2 ? '1' : Math.round(step)} s`,
+})
+
+/**
  * Table des détecteurs. Ajouter un format = ajouter une entrée ici, sans
  * modifier les autres.
  */
-export const DETECTORS: FormatDetector[] = [g4EnDetector]
+export const DETECTORS: FormatDetector[] = [g4EnDetector, g4FrDetector]
 
 // ───────────────────────────────────────────────────────────────────────────
 // Sélection
@@ -414,7 +456,7 @@ export function selectFormat(wb: XLSX.WorkBook): SelectOutcome {
   const seenSheets = wb.SheetNames.slice()
   let sampleHeaders: string[] = []
   for (const name of wb.SheetNames) {
-    const rows = sheetToRows(wb.Sheets[name])
+    const rows = sheetToRows(wb.Sheets[name], 2)
     if (rows.length >= 2) {
       const hs = headerStrings(rows).filter((h) => h.trim() !== '')
       if (hs.length > sampleHeaders.length) sampleHeaders = hs

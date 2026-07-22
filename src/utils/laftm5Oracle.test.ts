@@ -10,7 +10,13 @@ import { computeLaftm5 } from './acoustics'
  * d'arrondi près. C'est la preuve que le calcul est juste sans dépendre d'EQ-09.
  *
  * Fichier réel NON committé (données de mesure, gouvernance) → test gardé par
- * fs.existsSync ; ignoré en CI, joué localement avant validation.
+ * fs.existsSync ; ABSENCE du fichier = skip propre (jamais un échec), donc
+ * ignoré en CI, joué localement avant validation.
+ *
+ * LENT et ASSUMÉ : parse un XLSX RÉEL de ~8 Mo (XLSX.read ~27–60 s selon la
+ * charge, surtout en parallèle avec l'autre test fichier-réel) → timeout 180 s.
+ * Ça vaut son coût : c'est le seul garde-fou qui prouve le LAFTM5 reconstruit
+ * contre la valeur du sonomètre (col 33), sans dépendre d'un calcul EQ-09.
  */
 const REAL = 'C:/Users/oganes/OneDrive - Englobe Corp/Bureau/Projets/En cours/DDA/Test acoustiq/831C_12782-20260707 070000-26070700.LD0.xlsx'
 
@@ -66,7 +72,7 @@ describe('ORACLE — LAFTM5 reconstruit (pas-à-pas) ≡ LAFTM5 G4 (col 33), heu
     expect(compared).toBeGreaterThanOrEqual(5) // au moins 5 heures recoupées
     // Trace (visible avec --reporter=verbose) : écart max effectif ~0,05 dB.
     expect(maxDelta).toBeLessThan(0.1)
-  }, 60000)
+  }, 180000) // XLSX.read d'un fichier réel de 8 Mo — cf. en-tête
 })
 
 describe('GARDE PERMANENTE — successif ≠ glissant (empêche un retour à la fenêtre glissante)', () => {

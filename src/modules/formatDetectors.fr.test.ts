@@ -109,6 +109,13 @@ describe('AMBIGUÏTÉ — deux détecteurs reconnaissent → signalée, pas de d
 })
 
 // ── Test d'intégration RÉEL (gardé) — ne committe pas le fichier de mesure ───
+//
+// LENT et ASSUMÉ : parse un XLSX RÉEL de ~8 Mo (XLSX.read ~27–60 s selon la
+// charge, surtout en parallèle avec l'oracle LAFTM5) → timeout 180 s. Gardé par
+// fs.existsSync : ABSENCE du fichier = skip propre (jamais un échec) → ignoré en
+// CI, joué localement avant validation. Ça vaut son coût : c'est le garde-fou
+// qui prouve que le parser G4-FR débloque bien le fichier de référence
+// (28 060 points, t=420, feuille pas-à-pas retenue) contre le fichier réel.
 const REAL_FR = 'C:/Users/oganes/OneDrive - Englobe Corp/Bureau/Projets/En cours/DDA/Test acoustiq/831C_12782-20260707 070000-26070700.LD0.xlsx'
 
 describe('G4-FR — fichier de référence réel (si présent localement)', () => {
@@ -124,5 +131,5 @@ describe('G4-FR — fichier de référence réel (si présent localement)', () =
     const f = parseWorkbookFromWb(wb, 'real-fr.xlsx')
     expect(f.data.length).toBe(28060)
     expect(f.data[0].t).toBeCloseTo(420, 2)
-  }, 60000)
+  }, 180000) // XLSX.read d'un fichier réel de 8 Mo — cf. en-tête
 })

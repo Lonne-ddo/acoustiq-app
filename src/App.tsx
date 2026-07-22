@@ -27,7 +27,6 @@ import {
   Volume2,
   Play,
 } from 'lucide-react'
-import * as XLSX from 'xlsx'
 import type {
   MeasurementFile,
   SourceEvent,
@@ -75,8 +74,7 @@ import {
 import TemplatesSection from './components/TemplatesSection'
 import MeteoSection from './components/MeteoSection'
 import ComparisonModal from './components/ComparisonModal'
-import { parse831C } from './modules/parser831C'
-import { parse821SE, detect821SE } from './modules/parser821SE'
+import { parseWorkbook } from './modules/formatDetectors'
 import { saveProject, loadProject, buildIndicesSnapshot } from './modules/projectManager'
 import { loadSettings, saveSettings } from './modules/settings'
 import { t, setLanguage } from './modules/i18n'
@@ -139,27 +137,10 @@ interface RejectedFile {
 // Utilitaires
 // ---------------------------------------------------------------------------
 function parseFile(buffer: ArrayBuffer, fileName: string): MeasurementFile {
-  const workbook = XLSX.read(buffer, { type: 'array', cellDates: false })
-
-  // Détection automatique du modèle 821SE
-  if (detect821SE(workbook)) {
-    return parse821SE(buffer, fileName)
-  }
-
-  // Essayer 831C en priorité, puis fallback 821SE avec le détail des erreurs
-  let err831C: string | null = null
-  try {
-    return parse831C(buffer, fileName)
-  } catch (e) {
-    err831C = e instanceof Error ? e.message : String(e)
-  }
-
-  try {
-    return parse821SE(buffer, fileName)
-  } catch (e) {
-    const err821SE = e instanceof Error ? e.message : String(e)
-    throw new Error(`Échec de lecture de "${fileName}" :\n  Format A : ${err831C}\n  Format B : ${err821SE}`)
-  }
+  // Détection par table de détecteurs de format (main-thread ET worker partagent
+  // ce chemin). Reconnaissance positive de la structure ; message explicite si
+  // format non reconnu / agrégats seuls / ambigu — jamais un rejet muet.
+  return parseWorkbook(buffer, fileName)
 }
 
 function extractDateFromName(name: string): string | null {

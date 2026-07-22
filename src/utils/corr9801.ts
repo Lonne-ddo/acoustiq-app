@@ -128,10 +128,14 @@ export function computeCorr9801Point(
   const kbVal = hasFiniteLceq ? computeKb9801(lceq, laeqWin) : null
 
   // ── Ki = LAFTM5 − LAeq ────────────────────────────────────────────────────
-  const lafNums = dps.map((d) => d.lafmax).filter((v): v is number => typeof v === 'number')
-  const lafmaxPresent = lafNums.length > 0
+  // Échantillons LAFmax HORODATÉS (t en minutes → secondes) : les blocs de 5 s
+  // sont alignés sur la grille temporelle absolue, indépendamment du pas.
+  const lafSamples = dps
+    .filter((d): d is DataPoint & { lafmax: number } => typeof d.lafmax === 'number')
+    .map((d) => ({ tSec: d.t * 60, lafmax: d.lafmax }))
+  const lafmaxPresent = lafSamples.length > 0
   // computeLaftm5 filtre déjà Number.isFinite en interne (null si aucune finie).
-  const laftm5 = lafmaxPresent ? computeLaftm5(lafNums) : null
+  const laftm5 = lafmaxPresent ? computeLaftm5(lafSamples) : null
   const kiVal = lafmaxPresent && laftm5 !== null ? computeKi9801(laftm5, laeqWin) : null
 
   // ── Kt tonal ──────────────────────────────────────────────────────────────

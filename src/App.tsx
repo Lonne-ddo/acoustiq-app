@@ -2,7 +2,7 @@
  * Composant racine d'AcoustiQ
  * Multi-projet, paramètres, raccourcis clavier, sidebar rétractable, états de chargement
  */
-import { useState, useMemo, useRef, useCallback, useEffect, lazy, Suspense } from 'react'
+import { useState, useMemo, useRef, useCallback, useEffect, useLayoutEffect, Fragment, lazy, Suspense } from 'react'
 import {
   FileAudio,
   BarChart2,
@@ -33,6 +33,7 @@ import {
   Map as MapIcon,
   Scale,
   History,
+  MoreHorizontal,
 } from 'lucide-react'
 import type {
   MeasurementFile,
@@ -67,6 +68,7 @@ import RegulationTab from './components/RegulationTab'
 const CarrierePage = lazy(() => import('./pages/CarrierePage'))
 const EcmePage = lazy(() => import('./pages/EcmePage'))
 const YamnetClassifier = lazy(() => import('./components/audio/YamnetClassifier'))
+import { computeVisibleCount } from './utils/navOverflow'
 import { EMPTY_CARRIERE_STATE, type CarrierePageState } from './utils/carriereParser'
 import { EMPTY_ECME_STATE, type EcmePageState } from './utils/ecmeParser'
 import WorkflowGuide from './components/WorkflowGuide'
@@ -1597,22 +1599,13 @@ function MainPanel({
           </div>
         </div>
 
-        {/* Onglets primaires à plat — sous-onglets affichés en dessous si > 1
-            (seul « Analyse » en a). Barre filtrée par flag via SUBTABS[id]. */}
-        <nav className="flex gap-1 ml-4 items-center">
-          {PRIMARY_TABS
-            .filter(({ id }) => SUBTABS[id].length > 0)
-            .map(({ id, icon, label, ariaLabel }) => (
-              <TabButton
-                key={id}
-                active={PRIMARY_TAB_OF[activeTab] === id}
-                onClick={() => onTabChange(SUBTABS[id][0].id)}
-                icon={icon}
-                label={label}
-                aria-label={ariaLabel ?? label}
-              />
-            ))}
-        </nav>
+        {/* Onglets primaires à plat + repli « Plus ». Sous-onglets affichés en
+            dessous si > 1 (seul « Analyse » en a). Barre filtrée par flag. */}
+        <PrimaryNav
+          items={PRIMARY_TABS.filter(({ id }) => SUBTABS[id].length > 0)}
+          activeId={PRIMARY_TAB_OF[activeTab]}
+          onSelect={(id) => onTabChange(SUBTABS[id][0].id)}
+        />
 
         {/* Actions header */}
         <div className="flex items-center gap-1 ml-auto">
@@ -2156,6 +2149,126 @@ function TabButton({ active, onClick, icon, label, ...rest }: {
       {icon}
       {label}
     </button>
+  )
+}
+
+type PrimaryNavItem = { id: PrimaryTab; icon: React.ReactNode; label: string; ariaLabel?: string; diag?: boolean }
+
+/**
+ * Barre d'onglets primaires à plat avec repli « Plus ».
+ *
+ * - Mesure la largeur réelle (rangée de mesure hors écran + ResizeObserver) et
+ *   ne garde inline que les onglets qui tiennent ; le reste passe dans « ⋯ Plus ».
+ * - Priorité = ordre de la liste (gauche = prioritaire) : « Analyse » (index 0)
+ *   reste toujours visible ; « Diagnostic réseau » (dernier) bascule dans « Plus »
+ *   en premier si la place manque.
+ * - Le Diagnostic réseau (sonde de test) est rendu après un SÉPARATEUR léger en
+ *   fin de barre — jamais au même rang trompeur que les modes de travail.
+ * - Menu « Plus » accessible clavier : aria-haspopup/expanded, role menu/menuitem,
+ *   fermeture Échap (retour focus) + clic extérieur, focus visible.
+ */
+function PrimaryNav({ items, activeId, onSelect }: {
+  items: PrimaryNavItem[]
+  activeId: PrimaryTab
+  onSelect: (id: PrimaryTab) => void
+}) {
+  const containerRef = useRef<HTMLDivElement>(null)
+  const measureRef = useRef<HTMLDivElement>(null)
+  const plusBtnRef = useRef<HTMLButtonElement>(null)
+  const [visibleCount, setVisibleCount] = useState(items.length)
+  const [open, setOpen] = useState(false)
+
+  // Calcul du nombre d'onglets qui tiennent (mesure réelle, recalcul au resize).
+  useLayoutEffect(() => {
+    const container = containerRef.current
+    const measure = measureRef.current
+    if (!container || !measure) return
+    const hasDiag = items.some((it) => it.diag)
+    const compute = () => {
+      const avail = container.clientWidth
+      const itemEls = Array.from(measure.querySelectorAll('[data-mitem]')) as HTMLElement[]
+      const plusEl = measure.querySelector('[data-mplus]') as HTMLElement | null
+      if (itemEls.length === 0 || avail === 0) return
+      const widths = itemEls.map((el) => el.offsetWidth)
+      setVisibleCount(computeVisibleCount({ widths, availPx: avail, plusPx: plusEl?.offsetWidth ?? 48, hasDiag }))
+    }
+    compute()
+    const ro = new ResizeObserver(compute)
+    ro.observe(container)
+    return () => ro.disconnect()
+  }, [items])
+
+  // Fermeture du menu : Échap (retour focus) + clic extérieur.
+  useEffect(() => {
+    if (!open) return
+    const onDoc = (e: MouseEvent) => {
+      if (!containerRef.current?.contains(e.target as Node)) setOpen(false)
+    }
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') { setOpen(false); plusBtnRef.current?.focus() }
+    }
+    document.addEventListener('mousedown', onDoc)
+    document.addEventListener('keydown', onKey)
+    return () => { document.removeEventListener('mousedown', onDoc); document.removeEventListener('keydown', onKey) }
+  }, [open])
+
+  const visible = items.slice(0, visibleCount)
+  const overflow = items.slice(visibleCount)
+  const overflowActive = overflow.some((it) => it.id === activeId)
+  const btn = (it: PrimaryNavItem) => (
+    <TabButton active={activeId === it.id} onClick={() => onSelect(it.id)} icon={it.icon} label={it.label} aria-label={it.ariaLabel ?? it.label} />
+  )
+  const plusClasses = 'flex items-center gap-1 px-3 py-1.5 rounded text-xs font-medium border transition-colors focus:outline-none focus:ring-2 focus:ring-emerald-500'
+
+  return (
+    <div ref={containerRef} className="relative flex gap-1 ml-4 items-center flex-1 min-w-0">
+      {/* Rangée de MESURE (hors écran) — largeurs réelles pour le calcul du repli. */}
+      <div ref={measureRef} aria-hidden className="absolute -left-[9999px] top-0 flex gap-1 items-center pointer-events-none">
+        {items.map((it) => (<span data-mitem key={it.id}>{btn(it)}</span>))}
+        <span data-mplus><span className={`${plusClasses} border-transparent`}><MoreHorizontal size={13} />Plus</span></span>
+      </div>
+
+      {/* Rangée VISIBLE */}
+      {visible.map((it) => (
+        <Fragment key={it.id}>
+          {it.diag && <span className="w-px h-5 bg-gray-700 mx-1 shrink-0" aria-hidden />}
+          {btn(it)}
+        </Fragment>
+      ))}
+
+      {overflow.length > 0 && (
+        <div className="relative shrink-0">
+          <button
+            ref={plusBtnRef}
+            onClick={() => setOpen((v) => !v)}
+            aria-haspopup="menu"
+            aria-expanded={open}
+            aria-label="Plus d'onglets"
+            className={`${plusClasses} ${overflowActive ? 'bg-gray-800 text-gray-100 border-gray-600' : 'text-gray-500 hover:text-gray-300 hover:bg-gray-900 border-transparent'}`}
+          >
+            <MoreHorizontal size={13} />
+            Plus
+          </button>
+          {open && (
+            <div role="menu" className="absolute right-0 top-full mt-1 z-50 min-w-[190px] bg-gray-900 border border-gray-700 rounded-md shadow-xl py-1">
+              {overflow.map((it) => (
+                <button
+                  key={it.id}
+                  role="menuitem"
+                  onClick={() => { onSelect(it.id); setOpen(false) }}
+                  className={`w-full flex items-center gap-2 px-3 py-1.5 text-xs text-left transition-colors focus:outline-none focus:bg-gray-800 focus:text-gray-100 ${
+                    it.diag ? 'border-t border-gray-800 mt-0.5 pt-1.5' : ''
+                  } ${activeId === it.id ? 'text-emerald-300 bg-gray-800/50' : 'text-gray-300 hover:bg-gray-800'}`}
+                >
+                  {it.icon}
+                  {it.ariaLabel ?? it.label}
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 

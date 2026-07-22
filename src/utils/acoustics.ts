@@ -778,34 +778,46 @@ export function computeKi(laftEq: number, laeq: number): number {
  *  confondre avec analyzeKt / computeKb / computeKi (cadre 2026).
  * ========================================================================== */
 
+/** Échantillon LAFmax 1 s horodaté (pour le découpage LAFTM5 par blocs de 5 s). */
+export interface Laftm5Sample {
+  /** Temps de l'échantillon en SECONDES depuis minuit. */
+  tSec: number
+  /** LAFmax 1 s (dB(A)). */
+  lafmax: number
+}
+
 /**
  * LAFTM5 — Note 98-01 annexe III. Taktmaximal par INTERVALLES SUCCESSIFS de 5 s
- * (blocs juxtaposés, NON chevauchants) : pour chaque bloc de 5 secondes,
- * Taktmaximal = MAX des LAFmax 1 s du bloc ; LAFTM5 = moyenne ÉNERGÉTIQUE
- * (laeqAvg) de ces maxima.
+ * (blocs juxtaposés, NON chevauchants) : Taktmaximal = MAX des LAFmax du bloc ;
+ * LAFTM5 = moyenne ÉNERGÉTIQUE (laeqAvg) de ces maxima.
  *
- * Remplace l'ancienne fenêtre GLISSANTE (1 max par seconde, fenêtres
- * chevauchantes) qui comptait chaque pic dans jusqu'à 5 fenêtres et
- * SURESTIMAIT le LAFTM5 — non conforme à la Note. L'agrégation énergétique est
- * INCHANGÉE (validée par recoupement avec le LAFTM5 pré-calculé du sonomètre).
+ * Découpage aligné sur la GRILLE TEMPORELLE ABSOLUE (depuis minuit) : le bloc
+ * k = [5k, 5k+5) secondes — borne basse INCLUSIVE, haute EXCLUSIVE. Chaque
+ * échantillon appartient à EXACTEMENT un bloc via `floor(tSec/5)` → aucun
+ * double-comptage de frontière (une seconde-frontière n'est jamais dans deux
+ * blocs). Indépendant du PAS d'échantillonnage : les échantillons se rangent
+ * par le TEMPS, pas par leur position — pas 1 s ⇒ 5 lignes/bloc ; autre pas ou
+ * trous de mesure ⇒ bloc correct en durée (blocs vides simplement absents).
  *
- * NB : découpage par ÉLÉMENTS (5 lignes = 1 bloc), aligné sur le début de la
- * série. L'alignement sur une grille temporelle absolue et la prise en compte
- * du pas d'échantillonnage réel sont traités séparément.
+ * Remplace la fenêtre GLISSANTE historique (1 max/seconde, chevauchante) qui
+ * surestimait le LAFTM5. Agrégation énergétique INCHANGÉE (validée par
+ * recoupement avec le LAFTM5 pré-calculé du sonomètre, à < 0,05 dB).
  *
- * @returns null si la série est vide / sans valeur finie (⇒ Ki indisponible).
+ * @returns null si aucun échantillon fini (⇒ Ki indisponible).
  */
-export function computeLaftm5(lafmaxSeries: number[]): number | null {
-  const v = lafmaxSeries.filter((x) => Number.isFinite(x))
-  if (v.length === 0) return null
-  const blockMax: number[] = []
-  for (let i = 0; i < v.length; i += 5) {
-    let m = -Infinity
-    const end = Math.min(v.length, i + 5)
-    for (let j = i; j < end; j++) if (v[j] > m) m = v[j]
-    blockMax.push(m)
+export function computeLaftm5(samples: Laftm5Sample[]): number | null {
+  // ε anti-artefact flottant : une frontière exacte (ex. tSec=25205 issu de
+  // t·60) peut valoir 25204.9999996 → floor la placerait dans le bloc précédent.
+  const EPS = 1e-6
+  const blockMax = new Map<number, number>()
+  for (const s of samples) {
+    if (!Number.isFinite(s.tSec) || !Number.isFinite(s.lafmax)) continue
+    const k = Math.floor(s.tSec / 5 + EPS)
+    const cur = blockMax.get(k)
+    if (cur === undefined || s.lafmax > cur) blockMax.set(k, s.lafmax)
   }
-  return laeqAvg(blockMax)
+  if (blockMax.size === 0) return null
+  return laeqAvg([...blockMax.values()])
 }
 
 /**

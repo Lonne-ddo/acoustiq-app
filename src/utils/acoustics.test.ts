@@ -228,34 +228,71 @@ describe('filterDataByPeriods — exclusion ad-hoc (opts.excludeCategoryIds)', (
 // ─────────────────────────────────────────────────────────────────────────
 // Correctifs Note 98-01 — Ki (LAFTM5), Kb, Kt 98-01
 // ─────────────────────────────────────────────────────────────────────────
+// Échantillons LAFmax horodatés (pas 1 s par défaut) à partir de tSec = startSec.
+const s1 = (arr: number[], startSec = 0) => arr.map((lafmax, i) => ({ tSec: startSec + i, lafmax }))
+
 describe('computeLaftm5 — intervalles SUCCESSIFS de 5 s (Note 98-01 annexe III), énergétique', () => {
   it('série constante → LAFTM5 = la constante', () => {
-    expect(computeLaftm5([70, 70, 70, 70, 70])).toBe(70)
+    expect(computeLaftm5(s1([70, 70, 70, 70, 70]))).toBe(70)
   })
 
   it('un bloc de 5 s : Taktmaximal = max du bloc (position du pic indifférente)', () => {
-    expect(computeLaftm5([50, 50, 50, 50, 80])).toBe(80)
+    expect(computeLaftm5(s1([50, 50, 50, 50, 80]))).toBe(80)
     // ↓ DISTINGUE successif de glissant : le glissant historique donnait ~73.0
     //   (le pic en tête ne remplissait qu'une fenêtre) ; le successif donne 80.
-    expect(computeLaftm5([80, 50, 50, 50, 50])).toBe(80)
+    expect(computeLaftm5(s1([80, 50, 50, 50, 50]))).toBe(80)
   })
 
   it('SUCCESSIF ≠ GLISSANT : deux blocs juxtaposés, un pic par bloc', () => {
     // Bloc [0-4] max=80, bloc [5-9] max=90 → moyenne énergétique de {80,90}.
-    // Le glissant aurait étalé chaque pic sur 5 s (série de maxima différente).
-    const succ = computeLaftm5([80, 50, 50, 50, 50, 90, 50, 50, 50, 50]) as number
+    const succ = computeLaftm5(s1([80, 50, 50, 50, 50, 90, 50, 50, 50, 50])) as number
     expect(succ).toBeCloseTo(10 * Math.log10((1e8 + 1e9) / 2), 6) // ≈ 90.41
   })
 
   it('dernier bloc partiel (< 5 échantillons) pris en compte', () => {
-    // [50×5, 80] : bloc0 max=50, bloc1 (partiel, 1 échantillon) max=80.
-    const v = computeLaftm5([50, 50, 50, 50, 50, 80]) as number
+    const v = computeLaftm5(s1([50, 50, 50, 50, 50, 80])) as number
     expect(v).toBeCloseTo(10 * Math.log10((1e5 + 1e8) / 2), 6) // ≈ 77.0
   })
 
   it('série vide / sans valeur finie → null (Ki indisponible)', () => {
     expect(computeLaftm5([])).toBeNull()
-    expect(computeLaftm5([NaN, Infinity])).toBeNull()
+    expect(computeLaftm5(s1([NaN, Infinity]))).toBeNull()
+  })
+})
+
+describe('computeLaftm5 — alignement sur la GRILLE ABSOLUE 5 s (pas de double-comptage)', () => {
+  it('frontière borne basse INCLUSIVE : tSec=5 démarre un nouveau bloc', () => {
+    // tSec 4 → bloc 0 ; tSec 5 → bloc 1 (et non l'inverse).
+    const v = computeLaftm5([{ tSec: 4, lafmax: 80 }, { tSec: 5, lafmax: 90 }]) as number
+    expect(v).toBeCloseTo(10 * Math.log10((1e8 + 1e9) / 2), 6) // {80,90} ≈ 90.41
+  })
+
+  it('grille absolue ≠ découpage par éléments : un pic collé à la frontière ne fuit pas', () => {
+    // Échantillons tSec 3,4,5,6 : bloc0={3,4} max=80, bloc1={5,6} max=50.
+    // Un découpage par éléments (chunk de 5) aurait mis les 4 dans un seul bloc → 80.
+    const v = computeLaftm5([
+      { tSec: 3, lafmax: 50 }, { tSec: 4, lafmax: 80 },
+      { tSec: 5, lafmax: 50 }, { tSec: 6, lafmax: 50 },
+    ]) as number
+    expect(v).toBeCloseTo(10 * Math.log10((1e8 + 1e5) / 2), 6) // {80,50} ≈ 77.0, PAS 80
+  })
+
+  it('indépendant du PAS : bloc défini en secondes, pas en nombre de lignes', () => {
+    // Pas 2 s : bloc0 = {tSec 0,2,4} max=80 ; bloc1 = {tSec 6,8} max=90.
+    const v = computeLaftm5([
+      { tSec: 0, lafmax: 80 }, { tSec: 2, lafmax: 50 }, { tSec: 4, lafmax: 50 },
+      { tSec: 6, lafmax: 90 }, { tSec: 8, lafmax: 50 },
+    ]) as number
+    expect(v).toBeCloseTo(10 * Math.log10((1e8 + 1e9) / 2), 6) // {80,90} ≈ 90.41
+  })
+
+  it('trou de mesure : les blocs vides sont absents (pas comptés)', () => {
+    // tSec 0..4 (bloc0) puis 10..14 (bloc2) — bloc1 (5..9) sans donnée.
+    const v = computeLaftm5([
+      ...s1([80, 50, 50, 50, 50], 0),
+      ...s1([90, 50, 50, 50, 50], 10),
+    ]) as number
+    expect(v).toBeCloseTo(10 * Math.log10((1e8 + 1e9) / 2), 6) // {80,90}, bloc1 ignoré
   })
 })
 
@@ -271,7 +308,7 @@ describe('computeKi9801 — Ki = LAFTM5 − LAeq, gate > 2', () => {
     expect(computeKi9801(null, 65)).toBeNull()
   })
   it('chaîne complète depuis le LAFmax 1 s', () => {
-    const laftm5 = computeLaftm5([50, 50, 50, 50, 80]) // forward : = 80
+    const laftm5 = computeLaftm5(s1([50, 50, 50, 50, 80])) // 1 bloc, max = 80
     expect(computeKi9801(laftm5, 60)).toBe(20)
   })
 })

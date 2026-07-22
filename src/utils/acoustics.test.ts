@@ -228,33 +228,32 @@ describe('filterDataByPeriods — exclusion ad-hoc (opts.excludeCategoryIds)', (
 // ─────────────────────────────────────────────────────────────────────────
 // Correctifs Note 98-01 — Ki (LAFTM5), Kb, Kt 98-01
 // ─────────────────────────────────────────────────────────────────────────
-describe('computeLaftm5 — max glissant 5 s FORWARD (EQ-09 : MAX(J5:J9)) → moyenne énergétique', () => {
+describe('computeLaftm5 — intervalles SUCCESSIFS de 5 s (Note 98-01 annexe III), énergétique', () => {
   it('série constante → LAFTM5 = la constante', () => {
     expect(computeLaftm5([70, 70, 70, 70, 70])).toBe(70)
   })
 
-  it('fenêtre FORWARD : un pic en fin remplit les fenêtres des 5 s précédentes', () => {
-    // Pic à l’index 4 : pour i ∈ [0..4], la fenêtre [i..i+4] contient l’index 4
-    // → tous les maxima = 80.
+  it('un bloc de 5 s : Taktmaximal = max du bloc (position du pic indifférente)', () => {
     expect(computeLaftm5([50, 50, 50, 50, 80])).toBe(80)
+    // ↓ DISTINGUE successif de glissant : le glissant historique donnait ~73.0
+    //   (le pic en tête ne remplissait qu'une fenêtre) ; le successif donne 80.
+    expect(computeLaftm5([80, 50, 50, 50, 50])).toBe(80)
   })
 
-  it('direction forward (pas trailing) : un pic en TÊTE ne remplit pas tout', () => {
-    // En trailing on obtiendrait 80 ; en forward seul i=0 voit le pic → < 80.
-    const v = computeLaftm5([80, 50, 50, 50, 50]) as number
-    expect(v).toBeLessThan(80)
-    expect(v).toBeGreaterThan(50)
+  it('SUCCESSIF ≠ GLISSANT : deux blocs juxtaposés, un pic par bloc', () => {
+    // Bloc [0-4] max=80, bloc [5-9] max=90 → moyenne énergétique de {80,90}.
+    // Le glissant aurait étalé chaque pic sur 5 s (série de maxima différente).
+    const succ = computeLaftm5([80, 50, 50, 50, 50, 90, 50, 50, 50, 50]) as number
+    expect(succ).toBeCloseTo(10 * Math.log10((1e8 + 1e9) / 2), 6) // ≈ 90.41
   })
 
-  it('fenêtre bornée à 5 s (forward)', () => {
-    // 6 échantillons, pic à l’index 5 : i=0 (fenêtre [0..4]) ne l’atteint pas
-    // → LAFTM5 < 80 (fenêtre bien limitée à 5 s).
+  it('dernier bloc partiel (< 5 échantillons) pris en compte', () => {
+    // [50×5, 80] : bloc0 max=50, bloc1 (partiel, 1 échantillon) max=80.
     const v = computeLaftm5([50, 50, 50, 50, 50, 80]) as number
-    expect(v).toBeLessThan(80)
-    expect(v).toBeGreaterThan(50)
+    expect(v).toBeCloseTo(10 * Math.log10((1e5 + 1e8) / 2), 6) // ≈ 77.0
   })
 
-  it('série vide → null (Ki indisponible)', () => {
+  it('série vide / sans valeur finie → null (Ki indisponible)', () => {
     expect(computeLaftm5([])).toBeNull()
     expect(computeLaftm5([NaN, Infinity])).toBeNull()
   })

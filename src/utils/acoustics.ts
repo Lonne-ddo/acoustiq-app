@@ -779,25 +779,33 @@ export function computeKi(laftEq: number, laeq: number): number {
  * ========================================================================== */
 
 /**
- * LAFTM5 — moyenne énergétique (dBAvg) du MAX GLISSANT sur 5 s du LAFmax 1 s.
+ * LAFTM5 — Note 98-01 annexe III. Taktmaximal par INTERVALLES SUCCESSIFS de 5 s
+ * (blocs juxtaposés, NON chevauchants) : pour chaque bloc de 5 secondes,
+ * Taktmaximal = MAX des LAFmax 1 s du bloc ; LAFTM5 = moyenne ÉNERGÉTIQUE
+ * (laeqAvg) de ces maxima.
  *
- * Conforme à EQ-09 : pour chaque seconde i, K = MAX(LAFmax sur i … i+4),
- * soit la seconde courante + les 4 SUIVANTES (fenêtre FORWARD, tronquée à la
- * fin), puis agrégation énergétique (laeqAvg) de toute la série des maxima.
+ * Remplace l'ancienne fenêtre GLISSANTE (1 max par seconde, fenêtres
+ * chevauchantes) qui comptait chaque pic dans jusqu'à 5 fenêtres et
+ * SURESTIMAIT le LAFTM5 — non conforme à la Note. L'agrégation énergétique est
+ * INCHANGÉE (validée par recoupement avec le LAFTM5 pré-calculé du sonomètre).
+ *
+ * NB : découpage par ÉLÉMENTS (5 lignes = 1 bloc), aligné sur le début de la
+ * série. L'alignement sur une grille temporelle absolue et la prise en compte
+ * du pas d'échantillonnage réel sont traités séparément.
  *
  * @returns null si la série est vide / sans valeur finie (⇒ Ki indisponible).
  */
 export function computeLaftm5(lafmaxSeries: number[]): number | null {
   const v = lafmaxSeries.filter((x) => Number.isFinite(x))
   if (v.length === 0) return null
-  const rollingMax: number[] = []
-  for (let i = 0; i < v.length; i++) {
+  const blockMax: number[] = []
+  for (let i = 0; i < v.length; i += 5) {
     let m = -Infinity
-    const end = Math.min(v.length - 1, i + 4)
-    for (let j = i; j <= end; j++) if (v[j] > m) m = v[j]
-    rollingMax.push(m)
+    const end = Math.min(v.length, i + 5)
+    for (let j = i; j < end; j++) if (v[j] > m) m = v[j]
+    blockMax.push(m)
   }
-  return laeqAvg(rollingMax)
+  return laeqAvg(blockMax)
 }
 
 /**

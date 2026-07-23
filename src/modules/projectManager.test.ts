@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildIndicesSnapshot } from './projectManager'
+import { buildIndicesSnapshot, buildFullProjectData } from './projectManager'
 import { laeqAvg, dpTimestampMs, filterDataByPeriods } from '../utils/acoustics'
 import type { MeasurementFile, Period, Category, DataPoint } from '../types'
 
@@ -52,5 +52,59 @@ describe('buildIndicesSnapshot — snapshot FILTRÉ (état vu par l’utilisateu
   it('sans période exclue → brut (contrôle)', () => {
     const snap = buildIndicesSnapshot(files, pointMap, [], [])
     expect(snap[key]?.laeq).toBeCloseTo(laeqAvg([50, 90, 50]), 6)
+  })
+})
+
+describe('buildFullProjectData — ProjectData COMPLET (voie Dataverse)', () => {
+  const data = [dp(0, 50), dp(60, 90), dp(120, 50)]
+  const files = [file(data)]
+  const pointMap = { f1: 'BV-1' }
+
+  it('embarque les données brutes files[].data (contrairement à saveProject)', () => {
+    const pd = buildFullProjectData({ files, pointMap, events: [], concordance: {}, savedAt: 'X' })
+    expect(pd.files).toHaveLength(1)
+    expect(pd.files[0].data).toEqual(data) // présent + intact
+    // métadonnées standard aussi présentes
+    expect(pd.files[0]).toMatchObject({ id: 'f1', name: 'f1', model: '831C', rowCount: 3 })
+  })
+
+  it('inclut projectName + projectNumber (vide autorisé)', () => {
+    const withNum = buildFullProjectData({
+      files, pointMap, events: [], concordance: {},
+      projectName: 'Chantier X', projectNumber: '24-01234', savedAt: 'X',
+    })
+    expect(withNum.projectName).toBe('Chantier X')
+    expect(withNum.projectNumber).toBe('24-01234')
+
+    const empty = buildFullProjectData({ files, pointMap, events: [], concordance: {}, savedAt: 'X' })
+    expect(empty.projectNumber).toBeUndefined() // non fourni → non bloquant
+  })
+
+  it('reprend les autres champs de ProjectData + savedAt injectable', () => {
+    const cats: Category[] = [catExcl]
+    const pers: Period[] = [periodExcl]
+    const pd = buildFullProjectData({
+      files, pointMap,
+      events: [], concordance: { 'e1|BV-1': 'confirmed' },
+      mapImage: 'data:img', mapMarkers: { 'BV-1': { x: 0.5, y: 0.5 } },
+      categories: cats, periods: pers, savedAt: '2026-07-22T00:00:00.000Z',
+    })
+    expect(pd.version).toBe('1.1')
+    expect(pd.savedAt).toBe('2026-07-22T00:00:00.000Z')
+    expect(pd.pointAssignments).toEqual(pointMap)
+    expect(pd.concordance).toEqual({ 'e1|BV-1': 'confirmed' })
+    expect(pd.mapImage).toBe('data:img')
+    expect(pd.categories).toEqual(cats)
+    expect(pd.periods).toEqual(pers)
+    // PAS de snapshot d'indices : voie Dataverse sources-only, recalcul au load.
+    expect(pd.indicesSnapshot).toBeUndefined()
+  })
+
+  it('est PURE : ne mute pas les entrées', () => {
+    const pm = { f1: 'BV-1' }
+    const evs: never[] = []
+    const pd = buildFullProjectData({ files, pointMap: pm, events: evs, concordance: {}, savedAt: 'X' })
+    expect(pd.pointAssignments).not.toBe(pm) // copie défensive
+    expect(pm).toEqual({ f1: 'BV-1' }) // entrée intacte
   })
 })

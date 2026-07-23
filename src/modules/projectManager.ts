@@ -13,7 +13,9 @@ import type {
   Scene3DData,
   Period,
   Category,
+  ChecklistState,
 } from '../types'
+import type { PersistedMeteoModule } from '../utils/meteoModule'
 import { filterDataByPeriods } from '../utils/acoustics'
 import { computeIndexRow } from '../utils/reportIndices'
 
@@ -61,11 +63,12 @@ export function saveProject(
   mapMarkers: Record<string, MarkerPos> = {},
   meteo?: MeteoData,
   projectName?: string,
-  checklist?: import('../types').ChecklistState,
+  checklist?: ChecklistState,
   scene3D?: Scene3DData,
-  categories?: import('../types').Category[],
-  periods?: import('../types').Period[],
-  meteoModule?: import('../utils/meteoModule').PersistedMeteoModule,
+  categories?: Category[],
+  periods?: Period[],
+  meteoModule?: PersistedMeteoModule,
+  projectNumber?: string,
 ): void {
   const project: ProjectData = {
     version: PROJECT_VERSION,
@@ -88,6 +91,7 @@ export function saveProject(
     meteo,
     indicesSnapshot: buildIndicesSnapshot(files, pointMap, periods, categories),
     projectName,
+    projectNumber,
     checklist,
     scene3D,
     categories,
@@ -130,4 +134,78 @@ export function loadProject(
     .map((f) => f.name)
 
   return { project, missingFiles }
+}
+
+/**
+ * État applicatif nécessaire pour construire un ProjectData COMPLET (voie
+ * Dataverse). Volontairement en objet (et non liste positionnelle comme
+ * saveProject) : plus lisible et extensible côté appelant.
+ */
+export interface FullProjectInput {
+  files: MeasurementFile[]
+  pointMap: Record<string, string>
+  events: SourceEvent[]
+  concordance: Record<string, ConcordanceState>
+  mapImage?: string | null
+  mapMarkers?: Record<string, MarkerPos>
+  meteo?: MeteoData
+  projectName?: string
+  projectNumber?: string
+  checklist?: ChecklistState
+  scene3D?: Scene3DData
+  categories?: Category[]
+  periods?: Period[]
+  meteoModule?: PersistedMeteoModule
+  /** Injectable pour la testabilité (sinon horodatage courant). */
+  savedAt?: string
+}
+
+/**
+ * Construit le ProjectData COMPLET destiné au blob Dataverse.
+ *
+ * Différence essentielle avec `saveProject` (voie JSON/localStorage) : les
+ * fichiers portent leurs DONNÉES BRUTES (`files[].data`), ce qui permet la
+ * restauration par recalcul sans réimport. Reprend par ailleurs l'intégralité
+ * des champs de ProjectData (assignations, événements, concordance, carte,
+ * météo, catégories, périodes, checklist, scène 3D, module météo, nom + numéro
+ * de projet).
+ *
+ * VOLONTAIREMENT SANS `indicesSnapshot` : la voie Dataverse est sources-only,
+ * tout est recalculé au load par les useMemo. Figer un snapshot d'indices
+ * réglementaires les rendrait faux si la logique de calcul évolue. (À l'inverse,
+ * `saveProject` — export JSON instantané — conserve son snapshot, qui y a du sens.)
+ *
+ * Fonction PURE : aucune I/O, aucun accès à l'état React — tout via l'argument.
+ */
+export function buildFullProjectData(input: FullProjectInput): ProjectData {
+  const { files, pointMap, events, concordance } = input
+  return {
+    version: PROJECT_VERSION,
+    savedAt: input.savedAt ?? new Date().toISOString(),
+    files: files.map((f) => ({
+      id: f.id,
+      name: f.name,
+      model: f.model,
+      serial: f.serial,
+      date: f.date,
+      startTime: f.startTime,
+      stopTime: f.stopTime,
+      rowCount: f.rowCount,
+      // ← LA différence : on embarque les données brutes (omises par saveProject).
+      data: f.data,
+    })),
+    pointAssignments: { ...pointMap },
+    events: events.map((ev) => ({ ...ev })),
+    concordance: { ...concordance },
+    mapImage: input.mapImage ?? null,
+    mapMarkers: { ...(input.mapMarkers ?? {}) },
+    meteo: input.meteo,
+    projectName: input.projectName,
+    projectNumber: input.projectNumber,
+    checklist: input.checklist,
+    scene3D: input.scene3D,
+    categories: input.categories,
+    periods: input.periods,
+    meteoModule: input.meteoModule,
+  }
 }

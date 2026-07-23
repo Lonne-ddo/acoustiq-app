@@ -1298,6 +1298,7 @@ interface MainPanelProps {
   assignedPoints: string[]
   zoomRange: ZoomRange | null
   projectName: string
+  projectNumber: string
   recentProjects: RecentProject[]
   settings: AppSettings
   conformiteSummary: ConformiteSummary | null
@@ -1362,6 +1363,7 @@ interface MainPanelProps {
   onCellChange: (eventId: string, point: string, state: ConcordanceState) => void
   onZoomChange: (range: ZoomRange | null) => void
   onProjectNameChange: (name: string) => void
+  onProjectNumberChange: (num: string) => void
   onNewProject: () => void
   onSwitchProject: (project: RecentProject) => void
   onOpenSettings: () => void
@@ -1378,7 +1380,7 @@ interface MainPanelProps {
 function MainPanel({
   files, pointMap, pointLabels, events, concordance,
   selectedDate, availableDates, activeTab, assignedPoints, zoomRange,
-  projectName, recentProjects, settings,
+  projectName, projectNumber, recentProjects, settings,
   conformiteSummary, onConformiteSummaryChange,
   aggregationSeconds, onAggregationChange,
   spectroTab, onSpectroTabChange, onAddEvent,
@@ -1401,7 +1403,7 @@ function MainPanel({
   chartRangePickArmed, onChartRangePicked, chartHighlightRange,
   onOpenAudioCalage, onAudioCalageApply,
   onDateChange, onTabChange, onCellChange, onZoomChange,
-  onProjectNameChange, onNewProject, onSwitchProject,
+  onProjectNameChange, onProjectNumberChange, onNewProject, onSwitchProject,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
   meteoModule, onMeteoModuleChange, meteoProjectPoints,
   recevabiliteOverlay, showMeteoRecevabilite,
@@ -1555,6 +1557,17 @@ function MainPanel({
                        focus:outline-none focus:ring-0 w-40 truncate
                        hover:text-emerald-400 transition-colors"
             title={projectName}
+          />
+          {/* N° de projet Englobe (optionnel, vide autorisé) */}
+          <input
+            type="text"
+            value={projectNumber}
+            onChange={(e) => onProjectNumberChange(e.target.value)}
+            placeholder="N° projet Englobe"
+            className="text-xs text-gray-400 bg-transparent border-none
+                       focus:outline-none focus:ring-0 w-28 truncate tabular-nums
+                       hover:text-emerald-400 transition-colors placeholder:text-gray-600"
+            title={projectNumber || 'N° projet Englobe'}
           />
           {/* Sélecteur de projet */}
           <div className="relative">
@@ -2611,6 +2624,7 @@ export default function App() {
 
   // Multi-projet
   const [projectName, setProjectName] = useState(t('project.untitled'))
+  const [projectNumber, setProjectNumber] = useState('')
   const [projectId, setProjectId] = useState<string>(() => crypto.randomUUID())
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>(loadRecent)
 
@@ -2998,12 +3012,13 @@ export default function App() {
       files: files.map((f) => ({ id: f.id, name: f.name, model: f.model, serial: f.serial, date: f.date, startTime: f.startTime, stopTime: f.stopTime, rowCount: f.rowCount })),
       pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods,
       meteoModule: serializeMeteoModule(meteoModule),
+      projectNumber,
     })
-  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods, meteoModule])
+  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods, meteoModule, projectNumber])
 
   // ---- Handlers projet ----
   const handleSaveProject = useCallback(() => {
-    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D, categories, periods, serializeMeteoModule(meteoModule))
+    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D, categories, periods, serializeMeteoModule(meteoModule), projectNumber)
     // Sauvegarder dans les projets récents
     const state = serializeCurrentState()
     const entry: RecentProject = { id: projectId, name: projectName, savedAt: new Date().toISOString(), state }
@@ -3013,7 +3028,7 @@ export default function App() {
       saveRecent(updated)
       return updated
     })
-  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectId, projectName, checklist, scene3D, categories, periods, meteoModule, serializeCurrentState])
+  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectId, projectName, projectNumber, checklist, scene3D, categories, periods, meteoModule, serializeCurrentState])
 
   const handleLoadProject = useCallback((json: string) => {
     try {
@@ -3033,6 +3048,7 @@ export default function App() {
       if (project.meteoModule) setMeteoModule(deserializeMeteoModule(project.meteoModule))
       if (project.checklist) setChecklist(project.checklist)
       if (project.scene3D) setScene3D(project.scene3D)
+      setProjectNumber(project.projectNumber ?? '')
       // Catégories + périodes (migration douce de l'ancien format status)
       {
         const norm = normalizeProjectPeriods(project.categories, project.periods)
@@ -3070,7 +3086,7 @@ export default function App() {
     setPeriods([]); setCategories(makeDefaultCategories())
     setMeteo(DEFAULT_METEO)
     setChecklist(DEFAULT_CHECKLIST)
-    setProjectId(crypto.randomUUID()); setProjectName(t('project.untitled'))
+    setProjectId(crypto.randomUUID()); setProjectName(t('project.untitled')); setProjectNumber('')
   }, [files, projectId, projectName, serializeCurrentState])
 
   // Restaurer un projet récent
@@ -3091,6 +3107,7 @@ export default function App() {
       const parsed = JSON.parse(rp.state)
       setProjectId(rp.id)
       setProjectName(rp.name)
+      setProjectNumber(parsed.projectNumber ?? '')
       setEvents(parsed.events ?? [])
       setConcordance(parsed.concordance ?? {})
       setMapImage(parsed.mapImage ?? null)
@@ -3389,6 +3406,7 @@ export default function App() {
         assignedPoints={assignedPoints}
         zoomRange={zoomRange}
         projectName={projectName}
+        projectNumber={projectNumber}
         recentProjects={recentProjects}
         settings={settings}
         conformiteSummary={conformiteSummary}
@@ -3453,6 +3471,7 @@ export default function App() {
         onCellChange={handleCellChange}
         onZoomChange={setZoomRange}
         onProjectNameChange={setProjectName}
+        onProjectNumberChange={setProjectNumber}
         onNewProject={handleNewProject}
         onSwitchProject={handleSwitchProject}
         onOpenSettings={() => setShowSettings(true)}

@@ -476,6 +476,8 @@ export interface ProjectData {
   indicesSnapshot?: Record<string, IndicesSnapshot>
   /** Nom du projet (purement informatif, utilisé par la comparaison) */
   projectName?: string
+  /** N° de projet Englobe/Vantagepoint (optionnel, saisi par l'utilisateur ; vide autorisé) */
+  projectNumber?: string
   /** État de la scène 3D (bâtiment + positions des sources) */
   scene3D?: Scene3DData
   /** Catégories de périodes (incluses/exclues/annotations) */

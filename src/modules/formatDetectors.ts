@@ -115,7 +115,7 @@ function serialDaysToMin(days: number): number {
 }
 
 /** jours-sériels → date ISO YYYY-MM-DD (via SSF). '' si impossible. */
-function serialDaysToISO(days: number): string {
+export function serialDaysToISO(days: number): string {
   if (!Number.isFinite(days)) return ''
   const d = XLSX.SSF.parse_date_code(days)
   if (!d) return ''

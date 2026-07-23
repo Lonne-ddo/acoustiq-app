@@ -81,6 +81,98 @@ export async function readCsvSampleRows(blob: Blob, maxLines: number = DETECT_LI
 }
 
 // ───────────────────────────────────────────────────────────────────────────
+// Métadonnées (Résumé.csv) — petit fichier lu EN ENTIER, recherche PAR CLÉ
+// ───────────────────────────────────────────────────────────────────────────
+
+export interface CsvMeta {
+  model: string
+  serial: string
+  startTime: string // HH:MM
+  stopTime: string // HH:MM
+}
+
+/** Défauts si Résumé absent/illisible — jamais bloquant (cf. readMeta xlsx). */
+export const DEFAULT_CSV_META: CsvMeta = { model: 'Sonomètre', serial: '', startTime: '00:00', stopTime: '00:00' }
+
+/** Retire les octets NUL (U+0000) de padding G4 + trim. */
+const cleanCell = (v: unknown): string => String(v ?? '').split(String.fromCharCode(0)).join('').trim()
+
+/** Extrait HH:MM d'une valeur datetime (tolère espace simple OU double). */
+function toHHMM(value: string): string | null {
+  const m = value.match(/(\d{1,2}):(\d{2})(?::\d{2})?/)
+  return m ? `${m[1].padStart(2, '0')}:${m[2]}` : null
+}
+
+/**
+ * Parse (PUR) les métadonnées d'un Résumé G4 depuis ses lignes + dialecte.
+ * Recherche PAR CLÉ (col0), pas par index — la structure du Résumé varie. Modèle
+ * en col1 / sériel en col2 de la ligne « Mètre » ; heures depuis « Heure de
+ * départ » / « Temps d'arrêt » (col1). Champs manquants → défauts.
+ */
+export function parseResumeMeta(lines: string[], dialect: CsvDialect): CsvMeta {
+  const meta: CsvMeta = { ...DEFAULT_CSV_META }
+  for (const line of lines) {
+    const f = splitLine(line, dialect)
+    const key = cleanCell(f[0]).toLowerCase()
+    if (key === 'mètre') {
+      const model = cleanCell(f[1]); if (model) meta.model = model
+      const serial = cleanCell(f[2]); if (serial) meta.serial = serial // NUL déjà strippé
+    } else if (key === 'heure de départ') {
+      const t = toHHMM(cleanCell(f[1])); if (t) meta.startTime = t
+    } else if (key === "temps d'arrêt") {
+      const t = toHHMM(cleanCell(f[1])); if (t) meta.stopTime = t
+    }
+  }
+  return meta
+}
+
+/** Lit un Résumé.csv (petit) en ENTIER (cp1252) et en extrait les métadonnées. */
+export async function readResumeMeta(blob: Blob): Promise<CsvMeta> {
+  const lines: string[] = []
+  for await (const l of streamBlobLines(blob)) lines.push(l)
+  return parseResumeMeta(lines, sniffDialect(lines))
+}
+
+/** Vrai si le nom ressemble à un Résumé (FR « Résumé » / EN « Summary »). */
+function isResumeName(name: string): boolean {
+  return /r[eé]sum[eé]|summary/i.test(name)
+}
+
+/**
+ * Préfixe de session commun à deux noms. VALIDE uniquement si leur plus long
+ * préfixe commun se termine SUR une frontière de segment '_' — c.-à-d. les deux
+ * partagent l'INTÉGRALITÉ de « <session>_ » puis diffèrent sur le descripteur.
+ *
+ * Un LCP finissant en plein milieu d'un segment (ex. deux sessions du même
+ * instrument dont les dates divergent : « …-25|0703 » vs « …-25|0919 ») = sessions
+ * DIFFÉRENTES → '' (pas d'appariement partiel sur « 821SE_40489- »). Robuste aux
+ * '_' internes du descripteur « Histoire_du_temps » (on ne découpe pas au 1er '_').
+ */
+function commonSessionPrefix(a: string, b: string): string {
+  let i = 0
+  const min = Math.min(a.length, b.length)
+  while (i < min && a[i] === b[i]) i++
+  const lcp = a.slice(0, i)
+  return lcp.endsWith('_') ? lcp.slice(0, -1) : ''
+}
+
+/**
+ * Trouve le Résumé apparié à un Histoire parmi des noms candidats : celui, nommé
+ * « Résumé »/« Summary », qui partage le plus long préfixe de session. undefined
+ * si aucun (→ le fichier se charge quand même avec les défauts).
+ */
+export function pairResume(histoireName: string, candidateNames: string[]): string | undefined {
+  let best: string | undefined
+  let bestLen = 0
+  for (const c of candidateNames) {
+    if (c === histoireName || !isResumeName(c)) continue
+    const len = commonSessionPrefix(histoireName, c).length
+    if (len > bestLen) { bestLen = len; best = c }
+  }
+  return best
+}
+
+// ───────────────────────────────────────────────────────────────────────────
 // Parse complet en flux
 // ───────────────────────────────────────────────────────────────────────────
 
@@ -105,8 +197,11 @@ function formatErrorFor(outcome: Exclude<SelectOutcome, { kind: 'ok' }>, fileNam
  * Parse un CSV G4 en flux et produit un MeasurementFile. Détection via SheetSource,
  * extraction via le mapping UNIQUE `rowToDataPoint`. Deux passages sur le Blob :
  * (1) échantillon borné pour la détection, (2) flux complet pour les données.
+ *
+ * `resumeBlob` (optionnel) : le Résumé.csv apparié → modèle/série/heures. Absent →
+ * défauts (`Sonomètre`/`''`/`00:00`). La DATE reste data-first (depuis les données).
  */
-export async function parseCsv(blob: Blob, fileName: string): Promise<MeasurementFile> {
+export async function parseCsv(blob: Blob, fileName: string, resumeBlob?: Blob): Promise<MeasurementFile> {
   const { dialect, rows: sample } = await readCsvSampleRows(blob, DETECT_LINES)
   const outcome = selectFormatFromSource(csvSource(sample))
   if (outcome.kind !== 'ok') throw formatErrorFor(outcome, fileName)
@@ -139,14 +234,17 @@ export async function parseCsv(blob: Blob, fileName: string): Promise<Measuremen
     spectraFreqs = nBands === cm.spectra.bands.length ? cm.spectra.bands : cm.spectra.bands.slice(0, nBands)
   }
 
+  // Métadonnées depuis le Résumé apparié, sinon défauts (jamais bloquant).
+  const meta = resumeBlob ? await readResumeMeta(resumeBlob) : DEFAULT_CSV_META
+
   return {
     id: crypto.randomUUID(),
     name: fileName,
-    model: 'Sonomètre', // défaut — Phase 5 : Résumé.csv
-    serial: '',
-    date: serialDaysToISO(firstDays), // data-first (pas de Résumé en Phase 4)
-    startTime: '00:00',
-    stopTime: '00:00',
+    model: meta.model,
+    serial: meta.serial,
+    date: serialDaysToISO(firstDays), // data-first (la date vient des données)
+    startTime: meta.startTime,
+    stopTime: meta.stopTime,
     point: null,
     data,
     rowCount: data.length,

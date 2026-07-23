@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import * as fs from 'fs'
 import * as XLSX from 'xlsx'
-import { csvSource, readCsvSampleRows, parseCsv } from './csvParser'
+import { csvSource, readCsvSampleRows, parseCsv, readResumeMeta, pairResume } from './csvParser'
 import { expectSheetSourceContract } from './sheetSourceContract.testkit'
 import { parseWorkbookFromWb, selectFormat, selectFormatFromSource } from './formatDetectors'
 
@@ -48,6 +48,80 @@ describe('parseCsv — G4-FR synthétique (flux complet)', () => {
     // spectre 6 bandes détecté
     expect(f.data[0].spectra).toEqual([50, 51, 52, 53, 54, 55])
     expect(f.spectraFreqs).toEqual([100, 125, 160, 200, 250, 315])
+  })
+})
+
+// ── Phase 5 : métadonnées (Résumé.csv) ───────────────────────────────────────
+describe('readResumeMeta — modèle/sériel (NUL strippé) / heures par CLÉ', () => {
+  const NUL = String.fromCharCode(0)
+  const resume = [
+    'Résumé',
+    ',Modèle,Sériel,,,,,,',
+    `Mètre,SoundExpert 821,40489${NUL}${NUL}${NUL}`, // sériel paddé de NUL
+    'Identifiant de fichier unique,00C:00009E29:686665E6:000019C4',
+    'Heure de départ,2025-07-03 11:13:42', // espace SIMPLE (double dans Histoire)
+    "Temps d'arrêt,2025-07-04 17:00:25",
+    'Durée de mesure,29:46:43',
+  ].join('\r\n')
+
+  it('extrait par clé : modèle col1, sériel col2 sans NUL, heures HH:MM', async () => {
+    const m = await readResumeMeta(blobOf(resume))
+    expect(m.model).toBe('SoundExpert 821')
+    expect(m.serial).toBe('40489') // NUL strippés
+    expect(m.startTime).toBe('11:13')
+    expect(m.stopTime).toBe('17:00')
+  })
+
+  const q = (v: string) => (v.includes(',') ? `"${v}"` : v)
+  const csvLine = (f: string[]) => f.map(q).join(',')
+  const hHdr = ['Record #', "Type d'enregistrement", 'Date', 'Temps', 'LAeq', 'LApk', 'LAFmax', 'LAFmin', 'LAImax', 'LCeq']
+  const hRow = (rec: string, sec: number, laeq: string) =>
+    [rec, '', `2025-07-03  07:00:0${sec}`, `2025-07-03  07:00:0${sec}`, laeq, '81,6', '70,5', '65,2', '71,1', '71,6']
+  const histoire = [hHdr, hRow('2', 0, '69,3'), hRow('3', 1, '70,5')].map(csvLine).join('\r\n')
+
+  it('parseCsv AVEC Résumé → modèle/sériel/heures ; SANS → défauts, jamais bloquant', async () => {
+    const withMeta = await parseCsv(blobOf(histoire), 'h.csv', blobOf(resume))
+    expect(withMeta.model).toBe('SoundExpert 821')
+    expect(withMeta.serial).toBe('40489')
+    expect(withMeta.startTime).toBe('11:13')
+    expect(withMeta.stopTime).toBe('17:00')
+    expect(withMeta.data).toHaveLength(2)
+
+    const noMeta = await parseCsv(blobOf(histoire), 'h.csv')
+    expect(noMeta.model).toBe('Sonomètre')
+    expect(noMeta.serial).toBe('')
+    expect(noMeta.startTime).toBe('00:00')
+    expect(noMeta.data).toHaveLength(2) // Histoire seul : se charge quand même
+  })
+})
+
+describe('pairResume — appariement Histoire ↔ Résumé (dernier _ du préfixe commun)', () => {
+  const h = '821SE_40489-250703000-111342_Histoire_du_temps.csv'
+  const r = '821SE_40489-250703000-111342_Résumé.csv'
+
+  it('apparie malgré les _ internes du descripteur « Histoire_du_temps »', () => {
+    expect(pairResume(h, [h, r, 'autre-session_Résumé.csv'])).toBe(r)
+  })
+
+  it('Histoire seul → undefined (→ défauts, jamais bloquant)', () => {
+    expect(pairResume(h, [h])).toBeUndefined()
+  })
+
+  // Multi-sessions du MÊME instrument (le préfixe '821SE_40489-' est commun).
+  const aH = '821SE_40489-250703000-111342_Histoire_du_temps.csv'
+  const aR = '821SE_40489-250703000-111342_Résumé.csv'
+  const bH = '821SE_40489-250919000-172259_Histoire_du_temps.csv'
+  const bR = '821SE_40489-250919000-172259_Résumé.csv'
+
+  it('2 sessions, chaque Histoire → SON Résumé (jamais celui de l’autre)', () => {
+    const all = [aH, aR, bH, bR]
+    expect(pairResume(aH, all)).toBe(aR)
+    expect(pairResume(bH, all)).toBe(bR)
+  })
+
+  it('2 sessions, un seul Résumé (celui de l’AUTRE session) → undefined, pas de faux appariement', () => {
+    // aH présent, mais SEUL le Résumé de la session B est là.
+    expect(pairResume(aH, [aH, bR])).toBeUndefined()
   })
 })
 

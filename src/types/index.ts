@@ -460,6 +460,9 @@ export interface ProjectData {
     rowCount: number
     // optionnel : données brutes, persistées uniquement via la voie Dataverse (blob Fichier). Omises des voies JSON/localStorage.
     data?: DataPoint[]
+    // fréquences des bandes 1/3 d'octave, persistées avec data (voie Dataverse) : sans elles
+    // les spectres 821SE (26 bandes) se réaligneraient mal au load. Cf. MeasurementFile.spectraFreqs.
+    spectraFreqs?: number[]
   }>
   pointAssignments: Record<string, string>
   events: SourceEvent[]

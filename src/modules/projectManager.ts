@@ -191,8 +191,10 @@ export function buildFullProjectData(input: FullProjectInput): ProjectData {
       startTime: f.startTime,
       stopTime: f.stopTime,
       rowCount: f.rowCount,
-      // ← LA différence : on embarque les données brutes (omises par saveProject).
+      // ← LA différence : on embarque les données brutes (omises par saveProject)
+      // + l'alignement spectral (indispensable au recalcul spectro/Kt au load).
       data: f.data,
+      spectraFreqs: f.spectraFreqs,
     })),
     pointAssignments: { ...pointMap },
     events: events.map((ev) => ({ ...ev })),
@@ -208,4 +210,20 @@ export function buildFullProjectData(input: FullProjectInput): ProjectData {
     periods: input.periods,
     meteoModule: input.meteoModule,
   }
+}
+
+/**
+ * Résumé lisible COURT du projet, destiné à la colonne `acq_notes` de Dataverse.
+ * Objectif : lire l'essentiel au portail / depuis le budget app sans ouvrir le
+ * blob. Ex. « 4 fichier(s), 2 point(s), 2026-07-07 → 2026-07-08 ».
+ */
+export function buildProjectNotes(
+  files: MeasurementFile[],
+  pointMap: Record<string, string>,
+): string {
+  const nbPoints = new Set(Object.values(pointMap).filter(Boolean)).size
+  const dates = [...new Set(files.map((f) => f.date).filter(Boolean))].sort()
+  const range =
+    dates.length === 0 ? 'aucune date' : dates.length === 1 ? dates[0] : `${dates[0]} → ${dates[dates.length - 1]}`
+  return `${files.length} fichier(s), ${nbPoints} point(s), ${range}`
 }

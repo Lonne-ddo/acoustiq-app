@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { buildIndicesSnapshot, buildFullProjectData } from './projectManager'
+import { buildIndicesSnapshot, buildFullProjectData, buildProjectNotes } from './projectManager'
 import { laeqAvg, dpTimestampMs, filterDataByPeriods } from '../utils/acoustics'
 import type { MeasurementFile, Period, Category, DataPoint } from '../types'
 
@@ -60,10 +60,13 @@ describe('buildFullProjectData — ProjectData COMPLET (voie Dataverse)', () => 
   const files = [file(data)]
   const pointMap = { f1: 'BV-1' }
 
-  it('embarque les données brutes files[].data (contrairement à saveProject)', () => {
-    const pd = buildFullProjectData({ files, pointMap, events: [], concordance: {}, savedAt: 'X' })
+  it('embarque les données brutes files[].data + spectraFreqs (contrairement à saveProject)', () => {
+    const freqs = [31.5, 40, 50, 63] // alignement 821SE
+    const withFreqs = [{ ...file(data), spectraFreqs: freqs }]
+    const pd = buildFullProjectData({ files: withFreqs, pointMap, events: [], concordance: {}, savedAt: 'X' })
     expect(pd.files).toHaveLength(1)
     expect(pd.files[0].data).toEqual(data) // présent + intact
+    expect(pd.files[0].spectraFreqs).toEqual(freqs) // alignement spectral préservé
     // métadonnées standard aussi présentes
     expect(pd.files[0]).toMatchObject({ id: 'f1', name: 'f1', model: '831C', rowCount: 3 })
   })
@@ -106,5 +109,24 @@ describe('buildFullProjectData — ProjectData COMPLET (voie Dataverse)', () => 
     const pd = buildFullProjectData({ files, pointMap: pm, events: evs, concordance: {}, savedAt: 'X' })
     expect(pd.pointAssignments).not.toBe(pm) // copie défensive
     expect(pm).toEqual({ f1: 'BV-1' }) // entrée intacte
+  })
+})
+
+describe('buildProjectNotes — résumé court pour acq_notes', () => {
+  const mk = (id: string, date: string): MeasurementFile => ({ ...file([]), id, name: id, date })
+
+  it('compte fichiers + points distincts + plage de dates', () => {
+    const files = [mk('f1', '2026-07-07'), mk('f2', '2026-07-08'), mk('f3', '2026-07-07')]
+    const notes = buildProjectNotes(files, { f1: 'BV-1', f2: 'BV-2', f3: 'BV-1' })
+    expect(notes).toBe('3 fichier(s), 2 point(s), 2026-07-07 → 2026-07-08')
+  })
+
+  it('une seule date → pas de flèche', () => {
+    const files = [mk('f1', '2026-07-07')]
+    expect(buildProjectNotes(files, { f1: 'BV-1' })).toBe('1 fichier(s), 1 point(s), 2026-07-07')
+  })
+
+  it('projet vide → 0 fichier, aucune date', () => {
+    expect(buildProjectNotes([], {})).toBe('0 fichier(s), 0 point(s), aucune date')
   })
 })

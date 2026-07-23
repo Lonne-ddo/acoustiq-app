@@ -34,6 +34,8 @@ import {
   Scale,
   History,
   MoreHorizontal,
+  Database,
+  DatabaseBackup,
 } from 'lucide-react'
 import type {
   MeasurementFile,
@@ -84,7 +86,13 @@ import TemplatesSection from './components/TemplatesSection'
 import MeteoSection from './components/MeteoSection'
 import ComparisonModal from './components/ComparisonModal'
 import { parseWorkbook } from './modules/formatDetectors'
-import { saveProject, loadProject, buildIndicesSnapshot } from './modules/projectManager'
+import { saveProject, loadProject, buildIndicesSnapshot, buildFullProjectData, buildProjectNotes } from './modules/projectManager'
+import { getDataverseClient } from './modules/dataverseClient'
+import {
+  serializeProject, deserializeProject,
+  createProjectRow, updateProjectRow, uploadProjectBlob, downloadProjectBlob, listProjects,
+} from './modules/dataverseProjectStore'
+import DataverseOpenModal from './components/DataverseOpenModal'
 import { loadSettings, saveSettings } from './modules/settings'
 import { t, setLanguage } from './modules/i18n'
 import TimeSeriesChart from './components/TimeSeriesChart'
@@ -690,6 +698,9 @@ interface SidebarProps {
   onDismissCandidate: (id: string) => void
   onClearError: (i: number) => void
   onSaveProject: () => void
+  onSaveDataverse: () => void
+  dataverseSaving: boolean
+  onOpenDataverse: () => void
   onLoadProject: (json: string) => void
   onParseFiles: (files: File[]) => void
   onAudioLoaded: (audio: AudioFile) => void
@@ -797,7 +808,7 @@ function Sidebar({
   onPointChange, onPointLabelChange, onCreatePoint, onFileRemove,
   onEventRemove, onClearError,
   onDetectCandidates, onConfirmCandidate, onDismissCandidate,
-  onSaveProject, onLoadProject, onParseFiles,
+  onSaveProject, onSaveDataverse, dataverseSaving, onOpenDataverse, onLoadProject, onParseFiles,
   onAudioLoaded, onAudioRemove, onAudioSeek,
   audioEntries, audioPointMap, audioCoverage, onAudioEntriesLoad, onAudioEntryRemove, onAudioPlayAt, onOpenCalage,
   groupSuggestions, onAcceptSuggestion, onDismissSuggestion, onAcceptAllSuggestions,
@@ -948,6 +959,14 @@ function Sidebar({
         >
           <Save size={14} />
         </button>
+        <button
+          onClick={onSaveDataverse}
+          disabled={files.length === 0 || dataverseSaving}
+          className="p-2 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 disabled:opacity-30 transition-colors"
+          title="Sauvegarder dans Dataverse"
+        >
+          {dataverseSaving ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+        </button>
         <input ref={projectInputRef} type="file" accept=".json" className="hidden" onChange={handleProjectLoad} />
         <button
           onClick={() => projectInputRef.current?.click()}
@@ -955,6 +974,13 @@ function Sidebar({
           title={t('sidebar.open')}
         >
           <FolderOpen size={14} />
+        </button>
+        <button
+          onClick={onOpenDataverse}
+          className="p-2 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors"
+          title="Ouvrir depuis Dataverse"
+        >
+          <DatabaseBackup size={14} />
         </button>
         {files.length > 0 && (
           <span className="text-xs text-gray-500 mt-2">{files.length}</span>
@@ -1019,6 +1045,17 @@ function Sidebar({
           {t('sidebar.save')}
         </button>
         <button
+          onClick={onSaveDataverse}
+          disabled={files.length === 0 || dataverseSaving}
+          title="Sauvegarder dans Dataverse (données brutes incluses)"
+          className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
+                     bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-30
+                     text-xs font-medium transition-colors"
+        >
+          {dataverseSaving ? <Loader2 size={11} className="animate-spin" /> : <Database size={11} />}
+          {dataverseSaving ? 'Envoi…' : 'Dataverse'}
+        </button>
+        <button
           onClick={() => projectInputRef.current?.click()}
           className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
                      bg-gray-800 text-gray-300 hover:bg-gray-700
@@ -1026,6 +1063,16 @@ function Sidebar({
         >
           <FolderOpen size={11} />
           {t('sidebar.open')}
+        </button>
+        <button
+          onClick={onOpenDataverse}
+          title="Ouvrir depuis Dataverse"
+          aria-label="Ouvrir depuis Dataverse"
+          className="flex items-center justify-center px-2 py-1.5 rounded
+                     bg-gray-800 text-gray-300 hover:bg-gray-700
+                     text-xs font-medium transition-colors"
+        >
+          <DatabaseBackup size={12} />
         </button>
         <button
           onClick={onOpenChecklist}
@@ -2625,6 +2672,12 @@ export default function App() {
   // Multi-projet
   const [projectName, setProjectName] = useState(t('project.untitled'))
   const [projectNumber, setProjectNumber] = useState('')
+  const [dataverseSaving, setDataverseSaving] = useState(false)
+  // Lien vers la ligne Dataverse du projet ouvert (null = jamais sauvé côté serveur).
+  // Renseigné après un create ou un load → le save suivant met à jour au lieu de dupliquer.
+  const [currentDataverseId, setCurrentDataverseId] = useState<string | null>(null)
+  const [showDataverseOpen, setShowDataverseOpen] = useState(false)
+  const [dataverseLoadingId, setDataverseLoadingId] = useState<string | null>(null)
   const [projectId, setProjectId] = useState<string>(() => crypto.randomUUID())
   const [recentProjects, setRecentProjects] = useState<RecentProject[]>(loadRecent)
 
@@ -3030,6 +3083,112 @@ export default function App() {
     })
   }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectId, projectName, projectNumber, checklist, scene3D, categories, periods, meteoModule, serializeCurrentState])
 
+  // ---- Sauvegarde Dataverse (voie serveur, blob complet avec données brutes) ----
+  const handleSaveDataverse = useCallback(async () => {
+    if (dataverseSaving) return
+    if (files.length === 0) {
+      showToast('Aucun fichier chargé — rien à sauvegarder.', 'info')
+      return
+    }
+    setDataverseSaving(true)
+    try {
+      const project = buildFullProjectData({
+        files, pointMap, events, concordance, mapImage, mapMarkers, meteo,
+        projectName, projectNumber, checklist, scene3D, categories, periods,
+        meteoModule: serializeMeteoModule(meteoModule),
+      })
+      const gz = serializeProject(project)
+      const client = getDataverseClient()
+      const meta = {
+        name: projectName || 'Sans titre',
+        numero: projectNumber,
+        notes: buildProjectNotes(files, pointMap),
+      }
+      const sizeKo = Math.max(1, Math.round(gz.length / 1024))
+      if (currentDataverseId === null) {
+        // Premier enregistrement serveur → création + mémorisation de l'id.
+        const { id } = await createProjectRow(client, meta)
+        await uploadProjectBlob(client, id, gz)
+        setCurrentDataverseId(id)
+        showToast(`Projet créé dans Dataverse (${sizeKo} Ko)`, 'success')
+      } else {
+        // Projet déjà lié → mise à jour de la même ligne (pas de doublon).
+        await updateProjectRow(client, currentDataverseId, meta)
+        await uploadProjectBlob(client, currentDataverseId, gz)
+        showToast(`Projet mis à jour dans Dataverse (${sizeKo} Ko)`, 'success')
+      }
+    } catch (e) {
+      // fail() du store remonte déjà « Dataverse <op> échec : <msg> (status <n>) ».
+      showToast(e instanceof Error ? e.message : String(e), 'error')
+    } finally {
+      setDataverseSaving(false)
+    }
+  }, [dataverseSaving, currentDataverseId, files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, projectNumber, checklist, scene3D, categories, periods, meteoModule])
+
+  // Liste des projets Dataverse (alimente la modal d'ouverture).
+  const fetchDataverseProjects = useCallback(() => listProjects(getDataverseClient()), [])
+
+  // Ouvre un projet Dataverse : download blob → deserialize → restaure l'état COMPLET.
+  // Les useMemo (IndicesPanel, conformité, spectro…) recalculent seuls à partir des sources.
+  const handleOpenDataverseProject = useCallback(async (id: string) => {
+    if (dataverseLoadingId !== null) return
+    setDataverseLoadingId(id)
+    try {
+      const client = getDataverseClient()
+      const gz = await downloadProjectBlob(client, id)
+      const { project } = deserializeProject(gz)
+
+      // Reconstitue les MeasurementFile depuis le blob (données brutes + alignement spectral).
+      const restoredFiles: MeasurementFile[] = project.files.map((pf) => ({
+        id: pf.id,
+        name: pf.name,
+        model: pf.model,
+        serial: pf.serial,
+        date: pf.date,
+        startTime: pf.startTime,
+        stopTime: pf.stopTime,
+        rowCount: pf.rowCount,
+        point: project.pointAssignments[pf.id] ?? null,
+        data: pf.data ?? [],
+        spectraFreqs: pf.spectraFreqs,
+      }))
+
+      // setFiles DIRECT (pas handleFilesAdded) : les fichiers viennent du blob, pas
+      // d'un import utilisateur → aucune dédup ni auto-assignation à appliquer.
+      setFiles(restoredFiles)
+      setPointMap({ ...project.pointAssignments })
+      setEvents(project.events ?? [])
+      setConcordance(project.concordance ?? {})
+      setMapImage(project.mapImage ?? null)
+      setMapMarkers(project.mapMarkers ?? {})
+      setMeteo(project.meteo ?? DEFAULT_METEO)
+      setMeteoModule(project.meteoModule ? deserializeMeteoModule(project.meteoModule) : makeDefaultMeteoState())
+      setChecklist(project.checklist ?? DEFAULT_CHECKLIST)
+      if (project.scene3D) setScene3D(project.scene3D)
+      {
+        const norm = normalizeProjectPeriods(project.categories, project.periods)
+        setCategories(norm.categories)
+        setPeriods(norm.periods)
+      }
+      setProjectName(project.projectName ?? t('project.untitled'))
+      setProjectNumber(project.projectNumber ?? '')
+      setCurrentDataverseId(id)
+      setProjectId(crypto.randomUUID())
+
+      // États éphémères réinitialisés (comme au switch de projet).
+      setSelectedDate(''); setZoomRange(null); setAudioFile(null); setConformiteSummary(null)
+      setOverlayDate(null); setCandidates([]); setAnnotations([]); setPendingAnnotationText(null)
+      setErrors([])
+
+      setShowDataverseOpen(false)
+      showToast(`Projet chargé depuis Dataverse (${restoredFiles.length} fichier(s))`, 'success')
+    } catch (e) {
+      showToast(e instanceof Error ? e.message : String(e), 'error')
+    } finally {
+      setDataverseLoadingId(null)
+    }
+  }, [dataverseLoadingId])
+
   const handleLoadProject = useCallback((json: string) => {
     try {
       const { project, missingFiles } = loadProject(json, files)
@@ -3049,6 +3208,7 @@ export default function App() {
       if (project.checklist) setChecklist(project.checklist)
       if (project.scene3D) setScene3D(project.scene3D)
       setProjectNumber(project.projectNumber ?? '')
+      setCurrentDataverseId(null) // projet JSON = non lié à une ligne Dataverse
       // Catégories + périodes (migration douce de l'ancien format status)
       {
         const norm = normalizeProjectPeriods(project.categories, project.periods)
@@ -3087,6 +3247,7 @@ export default function App() {
     setMeteo(DEFAULT_METEO)
     setChecklist(DEFAULT_CHECKLIST)
     setProjectId(crypto.randomUUID()); setProjectName(t('project.untitled')); setProjectNumber('')
+    setCurrentDataverseId(null)
   }, [files, projectId, projectName, serializeCurrentState])
 
   // Restaurer un projet récent
@@ -3108,6 +3269,7 @@ export default function App() {
       setProjectId(rp.id)
       setProjectName(rp.name)
       setProjectNumber(parsed.projectNumber ?? '')
+      setCurrentDataverseId(null) // projet récent (localStorage) = non lié à Dataverse
       setEvents(parsed.events ?? [])
       setConcordance(parsed.concordance ?? {})
       setMapImage(parsed.mapImage ?? null)
@@ -3363,6 +3525,9 @@ export default function App() {
         onConfirmCandidate={handleConfirmCandidate}
         onDismissCandidate={handleDismissCandidate}
         onSaveProject={handleSaveProject}
+        onSaveDataverse={handleSaveDataverse}
+        dataverseSaving={dataverseSaving}
+        onOpenDataverse={() => setShowDataverseOpen(true)}
         onLoadProject={handleLoadProject}
         onAudioLoaded={setAudioFile}
         onAudioRemove={() => setAudioFile(null)}
@@ -3592,6 +3757,14 @@ export default function App() {
         onChange={setChecklist}
         onClose={() => setChecklistOpen(false)}
       />
+      {showDataverseOpen && (
+        <DataverseOpenModal
+          onClose={() => setShowDataverseOpen(false)}
+          onPick={handleOpenDataverseProject}
+          loadingId={dataverseLoadingId}
+          fetchProjects={fetchDataverseProjects}
+        />
+      )}
     </div>
     </ToastProvider>
   )

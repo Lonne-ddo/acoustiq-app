@@ -90,6 +90,30 @@ export async function createProjectRow(
   return { id }
 }
 
+/**
+ * Met à jour les colonnes claires d'une ligne existante (name/numero/notes).
+ * Le blob se réécrit séparément via uploadProjectBlob sur le même id.
+ * Signature SDK vérifiée : updateRecordAsync(tableName, recordId, changes).
+ */
+export async function updateProjectRow(
+  client: DataClient,
+  id: string,
+  meta: { name: string; numero: string; notes?: string },
+): Promise<void> {
+  const changes: Record<string, string> = {
+    [DV_CFG.fields.name]: meta.name,
+    [DV_CFG.fields.num]: meta.numero,
+  }
+  if (meta.notes !== undefined) changes[DV_CFG.fields.notes] = meta.notes
+
+  const res = await client.updateRecordAsync<Record<string, string>, Record<string, unknown>>(
+    DV_CFG.table,
+    id,
+    changes,
+  )
+  if (!res.success) fail('updateRecordAsync', res.error)
+}
+
 /** Écrit le blob gzipé dans la colonne Fichier de la ligne. */
 export async function uploadProjectBlob(client: DataClient, id: string, gz: Uint8Array): Promise<void> {
   const res = await client.uploadFileToRecord(DV_CFG.table, id, DV_CFG.fileCol, 'project.json.gz', gz)

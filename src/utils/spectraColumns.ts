@@ -135,17 +135,27 @@ export function detectFreqColumns(headers: unknown[], minBands = 6): FreqColumns
 }
 
 /**
- * Extrait les valeurs d'une ligne pour une liste d'indices de colonnes.
- * Renvoie un tableau aligné uniquement si TOUTES les cellules sont finies
- * (spectre complet) — sinon null, pour garantir l'alignement bande↔fréquence.
+ * Cœur d'extraction spectrale par ACCESSEUR de cellule (colonne → valeur).
+ * Découplé de toute représentation de ligne : réutilisable par le parser dense
+ * (tableau) ET par un lecteur en flux (map colonne épars). Renvoie un tableau
+ * aligné uniquement si TOUTES les cellules sont finies (spectre complet) — sinon
+ * null, pour garantir l'alignement bande↔fréquence.
  */
-export function extractSpectrumRow(row: unknown[], cols: number[]): number[] | null {
+export function extractSpectrumCells(getCell: (colIndex: number) => unknown, cols: number[]): number[] | null {
   const out: number[] = []
   for (const c of cols) {
-    const v = row[c]
+    const v = getCell(c)
     const num = typeof v === 'number' ? v : parseFloat(String(v))
     if (!Number.isFinite(num)) return null
     out.push(num)
   }
   return out
+}
+
+/**
+ * Extrait les valeurs d'une ligne (tableau) pour une liste d'indices de colonnes.
+ * Adaptateur byte-identique au-dessus de `extractSpectrumCells`.
+ */
+export function extractSpectrumRow(row: unknown[], cols: number[]): number[] | null {
+  return extractSpectrumCells((c) => row[c], cols)
 }

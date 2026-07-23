@@ -21,7 +21,7 @@
  */
 import * as XLSX from 'xlsx'
 import type { MeasurementFile, DataPoint } from '../types'
-import { detectFreqColumns, detectMetricColumn, extractSpectrumRow } from '../utils/spectraColumns'
+import { detectFreqColumns, detectMetricColumn, extractSpectrumCells } from '../utils/spectraColumns'
 
 // ───────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -207,8 +207,12 @@ export interface ColumnMap {
   lceqCol: number
   lafmaxCol: number          // LAFmax 1 s (Ki 98-01)
   laftEqCol: number          // LAImax (proxy LAFTeq, Ki 2026)
-  /** jours-sériels du timestamp de la ligne, NaN si illisible. */
-  readTimeDays(row: unknown[]): number
+  /**
+   * jours-sériels du timestamp de la ligne, NaN si illisible. Prend un ACCESSEUR
+   * de cellule (colonne → valeur) plutôt qu'un tableau ligne, pour être partagé
+   * entre le parser dense (getCell = c => row[c]) et un futur lecteur en flux.
+   */
+  readTimeDays(getCell: (colIndex: number) => unknown): number
   spectra: SpectraPlan
 }
 
@@ -233,18 +237,18 @@ function buildColumnMap(headers: string[], spec: FormatSpec): ColumnMap {
   const lafmaxCol = col(['LAFmax', 'LAFMx', 'LAF Max', 'LAFMax'])
   const laftEqCol = col(['LAImax'])
 
-  let readTimeDays: (row: unknown[]) => number
+  let readTimeDays: (getCell: (colIndex: number) => unknown) => number
   if (spec.timeStrategy.kind === 'single') {
     const dateCol = col([spec.timeStrategy.dateAlias])
-    readTimeDays = (row) => (dateCol < 0 ? NaN : toSerialDays(row[dateCol]))
+    readTimeDays = (getCell) => (dateCol < 0 ? NaN : toSerialDays(getCell(dateCol)))
   } else {
     const dateCol = col([spec.timeStrategy.dateAlias])
     const timeCol = col([spec.timeStrategy.timeAlias])
     // Combine : jour entier depuis « Date », fraction de journée depuis « Temps ».
     // Robuste que « Date » soit date-seule OU datetime complet.
-    readTimeDays = (row) => {
-      const dDays = dateCol < 0 ? NaN : toSerialDays(row[dateCol])
-      const tDays = timeCol < 0 ? NaN : toSerialDays(row[timeCol])
+    readTimeDays = (getCell) => {
+      const dDays = dateCol < 0 ? NaN : toSerialDays(getCell(dateCol))
+      const tDays = timeCol < 0 ? NaN : toSerialDays(getCell(timeCol))
       if (!Number.isFinite(dDays) && !Number.isFinite(tDays)) return NaN
       const dayPart = Number.isFinite(dDays) ? Math.floor(dDays) : 0
       const fracPart = Number.isFinite(tDays) ? ((tDays % 1) + 1) % 1 : 0
@@ -281,7 +285,7 @@ function measureStepSec(rows: unknown[][], cm: ColumnMap, sampleRows = 40): numb
       const rt = row[cm.recordTypeCol]
       if (rt !== null && rt !== '' && rt !== undefined) continue // marqueur
     }
-    const d = cm.readTimeDays(row)
+    const d = cm.readTimeDays((c) => row[c])
     if (!Number.isFinite(d)) continue
     if (cm.laeqCol < 0 || !Number.isFinite(num(row[cm.laeqCol]))) continue
     days.push(d)
@@ -307,10 +311,57 @@ export type DetectorScan =
   | { kind: 'aggregate-only'; sheetName: string; reason: string }
   | null
 
+/**
+ * Source de feuilles DÉCOUPLÉE du WorkBook SheetJS : la détection n'a besoin que
+ * de (a) la liste des noms de feuilles et (b) les N premières lignes d'une
+ * feuille (valeurs de cellule brutes, `unknown[][]`). Le parser dense l'implémente
+ * via `wbSource(wb)` ; un futur lecteur en flux fournira la même interface sans
+ * jamais matérialiser la feuille entière. La LOGIQUE de matching reste identique.
+ *
+ * ─── CONTRAT (couture streamer ↔ détection) ─────────────────────────────────
+ * `sampleRows` DOIT reproduire EXACTEMENT ce que
+ * `XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null })` produit
+ * aujourd'hui via `wbSource` (feuille lue avec `XLSX.read{cellDates:false}`).
+ * Une divergence de type y produirait une corruption SILENCIEUSE (colonnes
+ * décalées, spectres désalignés). Figé et vérifié par le test de conformité
+ * « SheetSource — contrat de wbSource ».
+ *
+ * Par NATURE de cellule — valeur retournée dans `row[colIndex]` :
+ *   - cellule numérique                 → `number`
+ *   - date (lue avec cellDates:false)   → `number` (sériel Excel ; JAMAIS un `Date`)
+ *   - shared string / inline string     → `string`
+ *   - cellule VIDE ou ABSENTE           → `null`  (JAMAIS `undefined`, JAMAIS `''`)
+ *
+ * Par LIGNE :
+ *   - chaque ligne est PADDÉE à LARGEUR CONSTANTE = largeur du range de la feuille
+ *     (nb de colonnes de l'en-tête). Trous internes ET de fin comblés par `null`.
+ *     Donc `row[c]` est défini (éventuellement `null`) pour tout `c ∈ [0, width)` ;
+ *     au-delà, `row[c] === undefined` (hors tableau).
+ *   - `row[0]` = en-têtes ; les lignes de données suivent, dans l'ordre du fichier.
+ *
+ * NB : le mapping aval (`rowToDataPoint`, `measureStepSec`) traite `null` et
+ * `undefined` de façon équivalente (`num(null)=num(undefined)=NaN` ; un marqueur
+ * `null`/`''`/`undefined` = « pas un marqueur »). Mais la détection de colonnes
+ * s'appuie sur la LARGEUR et les TYPES ci-dessus : le contrat reste figé sur `null`.
+ */
+export interface SheetSource {
+  sheetNames: string[]
+  /** N premières lignes de la feuille, valeurs brutes alignées par colonne (cf. contrat). */
+  sampleRows(sheetName: string, maxRows: number): unknown[][]
+}
+
+/** Adaptateur SheetSource au-dessus d'un WorkBook SheetJS (comportement inchangé). */
+export function wbSource(wb: XLSX.WorkBook): SheetSource {
+  return {
+    sheetNames: wb.SheetNames,
+    sampleRows: (name, maxRows) => sheetToRows(wb.Sheets[name], maxRows),
+  }
+}
+
 export interface FormatDetector {
   id: string
   label: string
-  scan(wb: XLSX.WorkBook): DetectorScan
+  scan(src: SheetSource): DetectorScan
 }
 
 /**
@@ -331,11 +382,11 @@ function makeDetector(cfg: {
   return {
     id: cfg.id,
     label: cfg.label,
-    scan(wb) {
+    scan(src) {
       const candidates: Array<{ name: string; cm: ColumnMap; stepSec: number }> = []
-      for (const name of wb.SheetNames) {
+      for (const name of src.sheetNames) {
         // Détection : en-tête + échantillon seulement (jamais toute la feuille).
-        const rows = sheetToRows(wb.Sheets[name], 60)
+        const rows = src.sampleRows(name, 60)
         if (rows.length < 2) continue
         const headers = headerStrings(rows)
         if (!cfg.belongs(headers)) continue
@@ -433,9 +484,12 @@ export type SelectOutcome =
   | { kind: 'ambiguous'; ids: string[] }
   | { kind: 'aggregate-only'; detectorId: string; sheetName: string }
 
-/** Applique la règle 1/0/plusieurs sur la table des détecteurs. */
-export function selectFormat(wb: XLSX.WorkBook): SelectOutcome {
-  const scans = DETECTORS.map((d) => ({ d, scan: d.scan(wb) }))
+/**
+ * Applique la règle 1/0/plusieurs sur la table des détecteurs, à partir d'une
+ * SheetSource (découplée du WorkBook). Logique de matching IDENTIQUE.
+ */
+export function selectFormatFromSource(src: SheetSource): SelectOutcome {
+  const scans = DETECTORS.map((d) => ({ d, scan: d.scan(src) }))
   const matches = scans.filter((s): s is { d: FormatDetector; scan: Extract<DetectorScan, { kind: 'match' }> } => s.scan?.kind === 'match')
 
   if (matches.length === 1) {
@@ -453,10 +507,10 @@ export function selectFormat(wb: XLSX.WorkBook): SelectOutcome {
   }
 
   // Diagnostic : feuilles vues + en-têtes d'une feuille de données plausible.
-  const seenSheets = wb.SheetNames.slice()
+  const seenSheets = src.sheetNames.slice()
   let sampleHeaders: string[] = []
-  for (const name of wb.SheetNames) {
-    const rows = sheetToRows(wb.Sheets[name], 2)
+  for (const name of src.sheetNames) {
+    const rows = src.sampleRows(name, 2)
     if (rows.length >= 2) {
       const hs = headerStrings(rows).filter((h) => h.trim() !== '')
       if (hs.length > sampleHeaders.length) sampleHeaders = hs
@@ -465,12 +519,66 @@ export function selectFormat(wb: XLSX.WorkBook): SelectOutcome {
   return { kind: 'none', seenSheets, sampleHeaders: sampleHeaders.slice(0, 20) }
 }
 
+/** Applique la règle 1/0/plusieurs sur un WorkBook SheetJS (adaptateur). */
+export function selectFormat(wb: XLSX.WorkBook): SelectOutcome {
+  return selectFormatFromSource(wbSource(wb))
+}
+
 // ───────────────────────────────────────────────────────────────────────────
 // Parsing unique paramétré par le mapping
 // ───────────────────────────────────────────────────────────────────────────
 
 export interface ParseOptions {
   onProgress?: (fraction: number) => void
+}
+
+/**
+ * Mapping UNIQUE ligne → DataPoint, paramétré par le ColumnMap et alimenté par un
+ * ACCESSEUR de cellule (colonne → valeur), sans dépendre d'une représentation de
+ * ligne. Le chemin dense (SheetJS) l'appelle avec `getCell = c => row[c]` ; un
+ * futur lecteur en flux l'appellera avec un accès à sa map colonne épars — MÊME
+ * logique, aucune divergence possible.
+ *
+ * Renvoie null si la ligne doit être ignorée (marqueur d'enregistrement, temps
+ * ou LAeq illisibles). Réplique EXACTE de l'ancienne boucle inline.
+ */
+export function rowToDataPoint(getCell: (colIndex: number) => unknown, cn: ColumnMap): DataPoint | null {
+  // Marqueur (« Départ », « Run », « Calibration Change »…) → ligne ignorée.
+  if (cn.recordTypeCol >= 0) {
+    const rt = getCell(cn.recordTypeCol)
+    if (rt !== null && rt !== '' && rt !== undefined) return null
+  }
+
+  const days = cn.readTimeDays(getCell)
+  if (!Number.isFinite(days)) return null
+
+  const laeq = num(getCell(cn.laeqCol))
+  if (!Number.isFinite(laeq)) return null
+
+  const dp: DataPoint = { t: serialDaysToMin(days), laeq }
+  if (cn.lceqCol >= 0) { const v = num(getCell(cn.lceqCol)); if (Number.isFinite(v)) dp.lceq = v }
+  if (cn.laftEqCol >= 0) { const v = num(getCell(cn.laftEqCol)); if (Number.isFinite(v)) dp.laftEq = v }
+  if (cn.lafmaxCol >= 0) { const v = num(getCell(cn.lafmaxCol)); if (Number.isFinite(v)) dp.lafmax = v }
+
+  if (cn.spectra.kind === 'freq') {
+    const s = extractSpectrumCells(getCell, cn.spectra.cols)
+    if (s && s.length > 0) dp.spectra = s
+    if (cn.spectra.maxCols) {
+      const sm = extractSpectrumCells(getCell, cn.spectra.maxCols)
+      if (sm && sm.length > 0) dp.spectraMax = sm
+    }
+  } else if (cn.spectra.kind === 'positional') {
+    // Byte-identique à la borne `c < row.length` : hors plage, getCell → undefined
+    // → num → NaN → non poussé (idem cellule vide au milieu, alignement préservé).
+    const s: number[] = []
+    for (let c = cn.spectra.start; c <= cn.spectra.end; c++) {
+      const v = num(getCell(c))
+      if (Number.isFinite(v)) s.push(v)
+    }
+    if (s.length > 0) dp.spectra = s
+  }
+
+  return dp
 }
 
 /** Boucle d'extraction UNIQUE, paramétrée par le mapping du détecteur retenu. */
@@ -489,42 +597,14 @@ export function parseWithMatch(
   for (let i = 1; i < total; i++) {
     const row = rows[i]
     if (!row) continue
+    const getCell = (c: number) => row[c]
 
-    // Marqueur (« Départ », « Run », « Calibration Change »…) → sauté proprement.
-    if (cm.recordTypeCol >= 0) {
-      const rt = row[cm.recordTypeCol]
-      if (rt !== null && rt !== '' && rt !== undefined) continue
-    }
+    const dp = rowToDataPoint(getCell, cm)
+    if (!dp) continue
 
-    const days = cm.readTimeDays(row)
-    if (!Number.isFinite(days)) continue
-    const t = serialDaysToMin(days)
-
-    const laeq = num(row[cm.laeqCol])
-    if (!Number.isFinite(laeq)) continue
-
-    if (!Number.isFinite(firstDays)) firstDays = days
-
-    const dp: DataPoint = { t, laeq }
-    if (cm.lceqCol >= 0) { const v = num(row[cm.lceqCol]); if (Number.isFinite(v)) dp.lceq = v }
-    if (cm.laftEqCol >= 0) { const v = num(row[cm.laftEqCol]); if (Number.isFinite(v)) dp.laftEq = v }
-    if (cm.lafmaxCol >= 0) { const v = num(row[cm.lafmaxCol]); if (Number.isFinite(v)) dp.lafmax = v }
-
-    if (cm.spectra.kind === 'freq') {
-      const s = extractSpectrumRow(row, cm.spectra.cols)
-      if (s && s.length > 0) dp.spectra = s
-      if (cm.spectra.maxCols) {
-        const sm = extractSpectrumRow(row, cm.spectra.maxCols)
-        if (sm && sm.length > 0) dp.spectraMax = sm
-      }
-    } else if (cm.spectra.kind === 'positional') {
-      const s: number[] = []
-      for (let c = cm.spectra.start; c <= cm.spectra.end && c < row.length; c++) {
-        const v = num(row[c])
-        if (Number.isFinite(v)) s.push(v)
-      }
-      if (s.length > 0) dp.spectra = s
-    }
+    // Jours-sériels de la 1ʳᵉ ligne retenue → date du fichier. Re-lecture O(1) (une
+    // seule fois) de la même valeur que celle utilisée dans rowToDataPoint.
+    if (!Number.isFinite(firstDays)) firstDays = cm.readTimeDays(getCell)
 
     data.push(dp)
 

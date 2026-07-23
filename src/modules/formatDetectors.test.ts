@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import * as XLSX from 'xlsx'
-import { selectFormat, parseWorkbookFromWb, FormatError } from './formatDetectors'
+import { selectFormat, parseWorkbookFromWb, FormatError, wbSource } from './formatDetectors'
 
 // ── Fabriques de classeurs synthétiques (petits, en mémoire, portables) ──────
 // Sériels Excel : jour entier D + fraction de journée. On n'assert pas la date
@@ -59,6 +59,35 @@ function buildEnWb(opts: { stepwise?: boolean; aggregate?: boolean; aggregateFir
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Spec EXÉCUTABLE du contrat SheetSource : le futur streamer devra faire passer
+// CES MÊMES assertions avec une implémentation différente (voir JSDoc SheetSource).
+describe('SheetSource — contrat de wbSource', () => {
+  const wb = XLSX.utils.book_new()
+  // Ligne pleine (types mixtes) + ligne COURTE (cols 1..3 absentes → padding null).
+  appendAoa(wb, 'S', [
+    ['H0', 'H1', 'H2', 'H3'],   // en-têtes (strings)
+    [1.5, 'texte', 46000, 42],  // number | string | date-sériel(number) | number
+    [7],                        // ligne courte : B/C/D absentes
+  ])
+  const src = wbSource(wb)
+
+  it('sheetNames == wb.SheetNames', () => {
+    expect(src.sheetNames).toEqual(wb.SheetNames)
+  })
+
+  it('types par nature de cellule + padding largeur constante + vide = null', () => {
+    const rows = src.sampleRows('S', 60)
+    expect(rows.map((r) => r.length)).toEqual([4, 4, 4])     // largeur constante (range = 4)
+    expect(typeof rows[1][0]).toBe('number')                 // numérique → number
+    expect(typeof rows[1][1]).toBe('string')                 // string → string
+    expect(typeof rows[1][2]).toBe('number')                 // date (sériel) → number
+    expect(rows[2][0]).toBe(7)
+    expect(rows[2][1]).toBeNull()                            // absente → null
+    expect(rows[2][3]).toBeNull()                            // trou de fin → null
+    expect(rows[2][1]).not.toBeUndefined()                   // JAMAIS undefined
+  })
+})
 
 describe('selectFormat — règle 1/0/plusieurs + reconnaissance positive', () => {
   it('G4-EN : exactement 1 détecteur reconnaît, feuille « Time History »', () => {

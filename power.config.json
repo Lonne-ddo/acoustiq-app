@@ -8,5 +8,27 @@
   "buildPath": "./dist",
   "buildEntryPoint": "index.html",
   "localAppUrl": "http://localhost:3000",
-  "logoPath": "Default"
+  "logoPath": "Default",
+  "connectionReferences": {
+    "202ffce4-1ef5-4f63-acf1-40218b51886e": {
+      "id": "/providers/Microsoft.PowerApps/apis/shared_commondataserviceforapps",
+      "displayName": "Microsoft Dataverse",
+      "dataSources": [
+        "commondataserviceforapps"
+      ],
+      "authenticationType": "Oauth",
+      "dataSets": {}
+    }
+  },
+  "databaseReferences": {
+    "default.cds": {
+      "dataSources": {
+        "projet": {
+          "entitySetName": "acq_acq_projets",
+          "logicalName": "acq_acq_projet"
+        }
+      },
+      "environmentVariableName": ""
+    }
+  }
 }

@@ -469,10 +469,38 @@ const g4FrDetector: FormatDetector = makeDetector({
 })
 
 /**
+ * G4-FR à colonne DATETIME COMBINÉE — variante d'export (821SE, et le xlsx de la
+ * même session) où l'horodatage tient dans UNE seule colonne « Date / heure », au
+ * lieu des colonnes « Date » + « Temps » séparées du g4-fr. Tout le reste est du
+ * G4-FR (décimales virgule, en-têtes français, date data-first).
+ *
+ * Stratégie temps = `kind: 'single'` — le MÊME mécanisme que le g4-en sur sa
+ * colonne « Date » (datetime complet dans une colonne, lu via toSerialDays) :
+ * inutile d'inventer une stratégie, une colonne = un horodatage complet.
+ */
+const g4FrDatetimeDetector: FormatDetector = makeDetector({
+  id: 'g4-fr-datetime-combine',
+  label: 'G4 français (Date / heure combinée)',
+  spec: {
+    recordTypeAliases: ["Type d'enregistrement"],
+    timeStrategy: { kind: 'single', dateAlias: 'Date / heure' },
+  },
+  // « LAeq » ET une colonne « Date / heure » (espaces internes multiples tolérés
+  // via collapse \s+, en plus du trim de hasExactHeader). Mutuellement exclusif
+  // avec FR/EN qui exigent « Date » + « Temps »/« Time » SÉPARÉES (absentes ici).
+  belongs: (h) =>
+    hasExactHeader(h, 'LAeq') &&
+    h.some((x) => x.toLowerCase().replace(/\s+/g, ' ').trim() === 'date / heure'),
+  dateStrategy: 'data-first',
+  reasonFor: (name, step) =>
+    `onglet « ${name} » : en-têtes FR à datetime combiné (LAeq, Date / heure), pas temporel ~${step < 2 ? '1' : Math.round(step)} s`,
+})
+
+/**
  * Table des détecteurs. Ajouter un format = ajouter une entrée ici, sans
  * modifier les autres.
  */
-export const DETECTORS: FormatDetector[] = [g4EnDetector, g4FrDetector]
+export const DETECTORS: FormatDetector[] = [g4EnDetector, g4FrDetector, g4FrDatetimeDetector]
 
 // ───────────────────────────────────────────────────────────────────────────
 // Sélection

@@ -1,37 +1,43 @@
 /**
- * Web Worker de parsing XLSX en arrière-plan (gros fichiers > 1 Mo).
+ * Web Worker de parsing en arrière-plan (gros fichiers).
  *
- * Ne contient plus AUCUNE logique de détection/parsing propre : il délègue
- * intégralement à `parseWorkbook` (module partagé `formatDetectors`), le même
- * code que le main-thread. Un seul chemin de vérité pour les deux tailles de
- * fichier — fini les divergences worker ↔ main-thread.
+ * Deux chemins, un seul worker :
+ *  - xlsx  : reçoit { buffer } → parseWorkbook (INCHANGÉ).
+ *  - csv   : reçoit { file } (le File TEL QUEL, jamais pré-lu en ArrayBuffer) →
+ *            parseCsv qui streame via file.stream() → aucune rematérialisation.
+ *
+ * Les deux délèguent au même mapping (rowToDataPoint) — un seul chemin de vérité.
  */
 import type { MeasurementFile } from '../types'
 import { parseWorkbook } from '../modules/formatDetectors'
+import { parseCsv } from '../modules/csvParser'
 
 interface ParseResult { type: 'result'; file: MeasurementFile }
 interface ParseError { type: 'error'; fileName: string; error: string }
 interface ParseProgress { type: 'progress'; fileName: string; percent: number }
-type WorkerMessage = ParseResult | ParseError | ParseProgress
 
-self.onmessage = (e: MessageEvent<{ buffer: ArrayBuffer; fileName: string }>) => {
-  const { buffer, fileName } = e.data
+type XlsxMessage = { buffer: ArrayBuffer; fileName: string }
+type CsvMessage = { file: File; resumeFile?: File; fileName: string }
+
+self.onmessage = async (e: MessageEvent<XlsxMessage | CsvMessage>) => {
+  const data = e.data
+  const fileName = data.fileName
+  const onProgress = (fraction: number) => {
+    self.postMessage({ type: 'progress', fileName, percent: Math.round(fraction * 100) } satisfies ParseProgress)
+  }
   try {
-    const file = parseWorkbook(buffer, fileName, {
-      onProgress: (fraction) => {
-        self.postMessage({
-          type: 'progress',
-          fileName,
-          percent: Math.round(fraction * 100),
-        } satisfies ParseProgress)
-      },
-    })
-    self.postMessage({ type: 'result', file } satisfies WorkerMessage)
+    const file: MeasurementFile = 'file' in data
+      // Chemin CSV EN FLUX : le File est passé tel quel (blob.stream()), jamais
+      // rematérialisé en ArrayBuffer → pas d'OOM sur les gros relevés.
+      ? await parseCsv(data.file, data.fileName, data.resumeFile, { onProgress })
+      // Chemin xlsx INCHANGÉ.
+      : parseWorkbook(data.buffer, data.fileName, { onProgress })
+    self.postMessage({ type: 'result', file } satisfies ParseResult)
   } catch (err) {
     self.postMessage({
       type: 'error',
       fileName,
       error: err instanceof Error ? err.message : String(err),
-    } satisfies WorkerMessage)
+    } satisfies ParseError)
   }
 }

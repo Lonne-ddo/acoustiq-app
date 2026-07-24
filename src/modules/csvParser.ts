@@ -8,7 +8,7 @@
  * number / sériel Excel / string / null. Aucun UI, aucun routage (Phases 5-6).
  * Métadonnées (modèle/série/heures) = défauts pour l'instant → Phase 5 (Résumé.csv).
  */
-import { streamBlobLines } from '../utils/csvLineStream'
+import { streamLines, streamBlobLines } from '../utils/csvLineStream'
 import { sniffDialect, splitLine, normalizeCell, type CsvDialect } from '../utils/csvDialect'
 import {
   selectFormatFromSource,
@@ -134,7 +134,7 @@ export async function readResumeMeta(blob: Blob): Promise<CsvMeta> {
 }
 
 /** Vrai si le nom ressemble à un Résumé (FR « Résumé » / EN « Summary »). */
-function isResumeName(name: string): boolean {
+export function isResumeName(name: string): boolean {
   return /r[eé]sum[eé]|summary/i.test(name)
 }
 
@@ -193,6 +193,26 @@ function formatErrorFor(outcome: Exclude<SelectOutcome, { kind: 'ok' }>, fileNam
   }
 }
 
+/** Chunks du Blob avec comptage d'octets cumulés (pour la progression). */
+async function* countedChunks(blob: Blob, onBytes: (n: number) => void): AsyncGenerator<Uint8Array, void, unknown> {
+  const reader = (blob.stream() as ReadableStream<Uint8Array>).getReader()
+  let read = 0
+  try {
+    for (;;) {
+      const { done, value } = await reader.read()
+      if (done) break
+      if (value) { read += value.byteLength; onBytes(read); yield value }
+    }
+  } finally {
+    reader.releaseLock()
+  }
+}
+
+/** Options de parse CSV (progression par fraction d'octets lus). */
+export interface CsvParseOptions {
+  onProgress?: (fraction: number) => void
+}
+
 /**
  * Parse un CSV G4 en flux et produit un MeasurementFile. Détection via SheetSource,
  * extraction via le mapping UNIQUE `rowToDataPoint`. Deux passages sur le Blob :
@@ -200,8 +220,9 @@ function formatErrorFor(outcome: Exclude<SelectOutcome, { kind: 'ok' }>, fileNam
  *
  * `resumeBlob` (optionnel) : le Résumé.csv apparié → modèle/série/heures. Absent →
  * défauts (`Sonomètre`/`''`/`00:00`). La DATE reste data-first (depuis les données).
+ * `opts.onProgress` : fraction d'octets lus (progression du parse en flux).
  */
-export async function parseCsv(blob: Blob, fileName: string, resumeBlob?: Blob): Promise<MeasurementFile> {
+export async function parseCsv(blob: Blob, fileName: string, resumeBlob?: Blob, opts?: CsvParseOptions): Promise<MeasurementFile> {
   const { dialect, rows: sample } = await readCsvSampleRows(blob, DETECT_LINES)
   const outcome = selectFormatFromSource(csvSource(sample))
   if (outcome.kind !== 'ok') throw formatErrorFor(outcome, fileName)
@@ -209,10 +230,12 @@ export async function parseCsv(blob: Blob, fileName: string, resumeBlob?: Blob):
   const cm = outcome.columnMap
   const width = sample.length > 0 ? sample[0].length : 0
 
+  const size = blob.size || 1
+  let bytesRead = 0
   const data: DataPoint[] = []
   let firstDays = NaN
   let idx = 0
-  for await (const line of streamBlobLines(blob)) {
+  for await (const line of streamLines(countedChunks(blob, (n) => { bytesRead = n }))) {
     if (idx++ === 0) continue // en-tête déjà consommé par la détection
     const cells = dataRow(line, dialect, width)
     const getCell = (c: number) => cells[c]
@@ -220,7 +243,9 @@ export async function parseCsv(blob: Blob, fileName: string, resumeBlob?: Blob):
     if (!dp) continue
     if (!Number.isFinite(firstDays)) firstDays = cm.readTimeDays(getCell)
     data.push(dp)
+    if (opts?.onProgress && idx % 5000 === 0) opts.onProgress(Math.min(1, bytesRead / size))
   }
+  opts?.onProgress?.(1)
 
   if (data.length === 0) {
     throw new FormatError(`Aucune donnée exploitable dans "${fileName}" (format ${outcome.detectorId} reconnu mais lignes illisibles).`)

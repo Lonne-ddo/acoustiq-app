@@ -3150,6 +3150,20 @@ export default function App() {
       // autres extensions : ignorées (filtrées en amont)
     }
 
+    // Résumé(s) orphelin(s) : nommés « Résumé » mais non appariés à un Histoire
+    // chargé → ignorés, mais on le DIT clairement (sinon « rien ne se passe »).
+    const usedResumes = new Set(
+      items.flatMap((it) => (it.kind === 'csv' && it.resume ? [it.resume.name] : [])),
+    )
+    const orphanResumes = csvFiles.filter((f) => isResumeName(f.name) && !usedResumes.has(f.name))
+    if (orphanResumes.length > 0) {
+      showToast(
+        `${orphanResumes.length} fichier(s) « Résumé » ignoré(s) : métadonnées, pas des mesures. ` +
+          `Déposez-les avec leur « Histoire du temps ».`,
+        'info',
+      )
+    }
+
     const total = items.length || 1
     let completed = 0
     const parsed: MeasurementFile[] = []

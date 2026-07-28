@@ -1,11 +1,10 @@
 import { useEffect, useState } from 'react'
-import { Database, Loader2, X, AlertCircle } from 'lucide-react'
+import { Database, X } from 'lucide-react'
+import DataverseProjectList, { type DataverseProjectRow } from './DataverseProjectList'
 
-export interface DataverseProjectRow {
-  id: string
-  name: string
-  numero: string
-}
+// Ré-exporté pour compatibilité des imports existants (le type vit désormais
+// dans DataverseProjectList, partagé avec la section Dataverse du header).
+export type { DataverseProjectRow }
 
 interface Props {
   onClose: () => void
@@ -18,8 +17,8 @@ interface Props {
 }
 
 /**
- * Modal « Ouvrir depuis Dataverse ». Récupère la liste au montage, affiche
- * nom + N° projet, clic = load. Style neutre cohérent avec l'UI AcoustiQ.
+ * Modal « Ouvrir depuis Dataverse ». Récupère la liste au montage, délègue
+ * l'affichage (chargement / erreur / vide / liste) à DataverseProjectList.
  */
 export default function DataverseOpenModal({ onClose, onPick, loadingId, fetchProjects }: Props) {
   const [rows, setRows] = useState<DataverseProjectRow[] | null>(null)
@@ -58,39 +57,9 @@ export default function DataverseOpenModal({ onClose, onPick, loadingId, fetchPr
           </button>
         </div>
 
-        {/* Corps */}
+        {/* Corps — liste partagée */}
         <div className="flex-1 overflow-y-auto p-2">
-          {error !== null ? (
-            <div className="flex items-start gap-1.5 text-xs text-red-400 bg-red-950/40 border border-red-800/50 rounded px-2 py-1.5 m-1">
-              <AlertCircle size={12} className="mt-0.5 shrink-0" />
-              <span className="flex-1">{error}</span>
-            </div>
-          ) : rows === null ? (
-            <div className="flex items-center justify-center gap-2 text-xs text-gray-400 py-8">
-              <Loader2 size={14} className="animate-spin" /> Chargement de la liste…
-            </div>
-          ) : rows.length === 0 ? (
-            <div className="text-xs text-gray-500 text-center py-8">Aucun projet enregistré.</div>
-          ) : (
-            <ul className="space-y-0.5">
-              {rows.map((r) => (
-                <li key={r.id}>
-                  <button
-                    onClick={() => onPick(r.id)}
-                    disabled={busy}
-                    className="w-full flex items-center gap-2 px-2.5 py-2 rounded text-left
-                               hover:bg-gray-800 disabled:opacity-40 disabled:hover:bg-transparent transition-colors"
-                  >
-                    <div className="flex-1 min-w-0">
-                      <div className="text-sm text-gray-200 truncate">{r.name || 'Sans titre'}</div>
-                      {r.numero && <div className="text-xs text-gray-500 tabular-nums truncate">{r.numero}</div>}
-                    </div>
-                    {loadingId === r.id && <Loader2 size={14} className="animate-spin text-emerald-400 shrink-0" />}
-                  </button>
-                </li>
-              ))}
-            </ul>
-          )}
+          <DataverseProjectList rows={rows} error={error} loadingId={loadingId} onPick={onPick} />
         </div>
       </div>
     </div>

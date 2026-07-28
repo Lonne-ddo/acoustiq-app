@@ -93,6 +93,7 @@ import {
   createProjectRow, updateProjectRow, uploadProjectBlob, downloadProjectBlob, listProjects,
 } from './modules/dataverseProjectStore'
 import DataverseOpenModal from './components/DataverseOpenModal'
+import DataverseProjectList, { type DataverseProjectRow } from './components/DataverseProjectList'
 import { loadSettings, saveSettings } from './modules/settings'
 import { t, setLanguage } from './modules/i18n'
 import TimeSeriesChart from './components/TimeSeriesChart'
@@ -1413,6 +1414,12 @@ interface MainPanelProps {
   onProjectNumberChange: (num: string) => void
   onNewProject: () => void
   onSwitchProject: (project: RecentProject) => void
+  /** Charge la liste des projets Dataverse (métadonnées seules, sans blob). */
+  fetchDataverseProjects: () => Promise<DataverseProjectRow[]>
+  /** Ouvre un projet Dataverse par id (download blob → restaure l'état). */
+  onOpenDataverseProject: (id: string) => void
+  /** id du projet Dataverse en cours d'ouverture (spinner), ou null. */
+  dataverseLoadingId: string | null
   onOpenSettings: () => void
   onOpenShortcuts: () => void
   onOpenOnboarding: () => void
@@ -1451,6 +1458,7 @@ function MainPanel({
   onOpenAudioCalage, onAudioCalageApply,
   onDateChange, onTabChange, onCellChange, onZoomChange,
   onProjectNameChange, onProjectNumberChange, onNewProject, onSwitchProject,
+  fetchDataverseProjects, onOpenDataverseProject, dataverseLoadingId,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
   meteoModule, onMeteoModuleChange, meteoProjectPoints,
   recevabiliteOverlay, showMeteoRecevabilite,
@@ -1459,6 +1467,22 @@ function MainPanel({
   const visibleChartFiles = chartFiles.filter((f) => !hiddenPoints.has(pointMap[f.id]))
   const hasChart = chartFiles.length > 0
   const [showRecent, setShowRecent] = useState(false)
+  // Liste Dataverse chargée PARESSEUSEMENT : on ne tape Dataverse qu'à la
+  // première ouverture du popover, pas à chaque render (cf. useEffect du modal).
+  const [dvRows, setDvRows] = useState<DataverseProjectRow[] | null>(null)
+  const [dvError, setDvError] = useState<string | null>(null)
+  const dvLoadStartedRef = useRef(false)
+  useEffect(() => {
+    if (!showRecent || dvLoadStartedRef.current) return
+    dvLoadStartedRef.current = true
+    fetchDataverseProjects()
+      .then(setDvRows)
+      .catch((e) => {
+        setDvError(e instanceof Error ? e.message : String(e))
+        // Autorise une nouvelle tentative à la prochaine ouverture du popover.
+        dvLoadStartedRef.current = false
+      })
+  }, [showRecent, fetchDataverseProjects])
   // Drag-and-drop global de la page Visualisation : compteur qui fait clignoter
   // la zone AUDIO + état de survol pour le voile visuel.
   const [audioFlash, setAudioFlash] = useState(0)
@@ -1654,6 +1678,19 @@ function MainPanel({
                     ))}
                   </div>
                 )}
+                {/* Projets Dataverse — liste chargée à la 1ʳᵉ ouverture du popover */}
+                <div className="border-t border-gray-700 mt-1 pt-1">
+                  <p className="px-3 py-1 text-xs text-gray-600 font-medium">PROJETS DATAVERSE</p>
+                  <div className="max-h-48 overflow-y-auto px-1 pb-1">
+                    <DataverseProjectList
+                      rows={dvRows}
+                      error={dvError}
+                      loadingId={dataverseLoadingId}
+                      onPick={(id) => { onOpenDataverseProject(id); setShowRecent(false) }}
+                      dense
+                    />
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -3639,6 +3676,9 @@ export default function App() {
         onProjectNumberChange={setProjectNumber}
         onNewProject={handleNewProject}
         onSwitchProject={handleSwitchProject}
+        fetchDataverseProjects={fetchDataverseProjects}
+        onOpenDataverseProject={handleOpenDataverseProject}
+        dataverseLoadingId={dataverseLoadingId}
         onOpenSettings={() => setShowSettings(true)}
         onOpenShortcuts={() => setShowShortcuts(true)}
         onOpenOnboarding={() => { resetOnboarding(); setShowOnboarding(true) }}

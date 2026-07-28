@@ -13,7 +13,6 @@ import {
   Layers,
   FileText,
   Shield,
-  Save,
   FolderOpen,
   Settings as SettingsIcon,
   HelpCircle,
@@ -36,6 +35,7 @@ import {
   MoreHorizontal,
   Database,
   DatabaseBackup,
+  Download,
 } from 'lucide-react'
 import type {
   MeasurementFile,
@@ -953,20 +953,23 @@ function Sidebar({
           <Upload size={16} />
         </button>
         <input ref={inputRef} type="file" accept=".xlsx" multiple className="hidden" onChange={handleFileChange} />
-        <button
-          onClick={onSaveProject}
-          className="p-2 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 transition-colors mt-1"
-          title={t('sidebar.save')}
-        >
-          <Save size={14} />
-        </button>
+        {/* Primaire : « Sauvegarder » = Dataverse */}
         <button
           onClick={onSaveDataverse}
           disabled={files.length === 0 || dataverseSaving}
-          className="p-2 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 disabled:opacity-30 transition-colors"
-          title="Sauvegarder dans Dataverse"
+          className="p-2 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 disabled:opacity-30 transition-colors mt-1"
+          title={t('sidebar.save')}
         >
           {dataverseSaving ? <Loader2 size={14} className="animate-spin" /> : <Database size={14} />}
+        </button>
+        {/* Secondaire : export fichier JSON */}
+        <button
+          onClick={onSaveProject}
+          disabled={files.length === 0}
+          className="p-2 rounded text-gray-400 hover:text-gray-200 hover:bg-gray-800 disabled:opacity-30 transition-colors"
+          title={t('sidebar.export')}
+        >
+          <Download size={14} />
         </button>
         <input ref={projectInputRef} type="file" accept=".json" className="hidden" onChange={handleProjectLoad} />
         <button
@@ -1035,16 +1038,7 @@ function Sidebar({
       {/* Actions rapides : projet + checklist */}
       <div className="px-3 py-2 border-b border-gray-800 shrink-0 flex gap-1.5">
         <input ref={projectInputRef} type="file" accept=".json" className="hidden" onChange={handleProjectLoad} />
-        <button
-          onClick={onSaveProject}
-          disabled={files.length === 0}
-          className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
-                     bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-30
-                     text-xs font-medium transition-colors"
-        >
-          <Save size={11} />
-          {t('sidebar.save')}
-        </button>
+        {/* Primaire : « Sauvegarder » = Dataverse (voie par défaut, AUCUN download) */}
         <button
           onClick={onSaveDataverse}
           disabled={files.length === 0 || dataverseSaving}
@@ -1054,7 +1048,7 @@ function Sidebar({
                      text-xs font-medium transition-colors"
         >
           {dataverseSaving ? <Loader2 size={11} className="animate-spin" /> : <Database size={11} />}
-          {dataverseSaving ? 'Envoi…' : 'Dataverse'}
+          {dataverseSaving ? 'Envoi…' : t('sidebar.save')}
         </button>
         <button
           onClick={() => projectInputRef.current?.click()}
@@ -1064,6 +1058,18 @@ function Sidebar({
         >
           <FolderOpen size={11} />
           {t('sidebar.open')}
+        </button>
+        {/* Secondaire discret : export fichier JSON (déclenché explicitement) */}
+        <button
+          onClick={onSaveProject}
+          disabled={files.length === 0}
+          title={t('sidebar.export')}
+          aria-label={t('sidebar.export')}
+          className="flex items-center justify-center px-2 py-1.5 rounded
+                     bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200 disabled:opacity-30
+                     transition-colors"
+        >
+          <Download size={12} />
         </button>
         <button
           onClick={onOpenDataverse}
@@ -3107,9 +3113,9 @@ export default function App() {
   }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods, meteoModule, projectNumber])
 
   // ---- Handlers projet ----
-  const handleSaveProject = useCallback(() => {
-    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D, categories, periods, serializeMeteoModule(meteoModule), projectNumber)
-    // Sauvegarder dans les projets récents
+  // Cache de reprise rapide (localStorage) : alimenté par TOUTES les voies de
+  // sauvegarde (Dataverse par défaut + export fichier) pour garder les récents.
+  const cacheToRecents = useCallback(() => {
     const state = serializeCurrentState()
     const entry: RecentProject = { id: projectId, name: projectName, savedAt: new Date().toISOString(), state }
     setRecentProjects((prev) => {
@@ -3118,7 +3124,14 @@ export default function App() {
       saveRecent(updated)
       return updated
     })
-  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectId, projectName, projectNumber, checklist, scene3D, categories, periods, meteoModule, serializeCurrentState])
+  }, [projectId, projectName, serializeCurrentState])
+
+  // Export fichier JSON (voie secondaire explicite, déclenchée par « Exporter en
+  // fichier » — jamais par « Sauvegarder », qui va dans Dataverse).
+  const handleSaveProject = useCallback(() => {
+    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D, categories, periods, serializeMeteoModule(meteoModule), projectNumber)
+    cacheToRecents()
+  }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, projectNumber, checklist, scene3D, categories, periods, meteoModule, cacheToRecents])
 
   // ---- Sauvegarde Dataverse (voie serveur, blob complet avec données brutes) ----
   const handleSaveDataverse = useCallback(async () => {
@@ -3154,13 +3167,17 @@ export default function App() {
         await uploadProjectBlob(client, currentDataverseId, gz)
         showToast(`Projet mis à jour dans Dataverse (${sizeKo} Ko)`, 'success')
       }
+      // Miroir dans le cache de reprise rapide (localStorage) après succès.
+      cacheToRecents()
     } catch (e) {
       // fail() du store remonte déjà « Dataverse <op> échec : <msg> (status <n>) ».
-      showToast(e instanceof Error ? e.message : String(e), 'error')
+      // Échec FRANC : on guide vers l'export local, jamais de download silencieux.
+      const detail = e instanceof Error ? e.message : String(e)
+      showToast(`Échec de sauvegarde Dataverse : ${detail}. Utilisez « Exporter en fichier » pour un backup local.`, 'error')
     } finally {
       setDataverseSaving(false)
     }
-  }, [dataverseSaving, currentDataverseId, files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, projectNumber, checklist, scene3D, categories, periods, meteoModule])
+  }, [dataverseSaving, currentDataverseId, files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, projectNumber, checklist, scene3D, categories, periods, meteoModule, cacheToRecents])
 
   // Liste des projets Dataverse (alimente la modal d'ouverture).
   const fetchDataverseProjects = useCallback(() => listProjects(getDataverseClient()), [])

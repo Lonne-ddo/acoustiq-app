@@ -10,6 +10,7 @@ const translations: Record<string, Record<string, string>> = {
   'sidebar.loading': { fr: 'Chargement…', en: 'Loading…' },
   'sidebar.importHint': { fr: 'Fichiers XLSX de mesure', en: 'XLSX measurement files' },
   'sidebar.save': { fr: 'Sauvegarder', en: 'Save' },
+  'sidebar.export': { fr: 'Exporter en fichier', en: 'Export to file' },
   'sidebar.open': { fr: 'Ouvrir', en: 'Open' },
   'sidebar.files': { fr: 'Fichiers de mesure', en: 'Measurement files' },
   'sidebar.filesEmpty': { fr: 'Cliquez sur "Importer" ci-dessus', en: 'Click "Import" above' },

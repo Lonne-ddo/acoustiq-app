@@ -584,18 +584,42 @@ export const THIRD_OCTAVE_CENTERS: number[] = [
  * Bandes 1/3 d'octave utilisées pour l'analyse tonale Kt (24 bandes,
  * 50 Hz → 10 kHz).
  *
- * ATTENTION — cette plage n'a PAS de fondement normatif. Les Lignes
- * directrices MELCCFP 2026 (§ 3.7.4) énoncent que « les bandes de tiers
- * d'octave mesurées et analysées varient de 16 à 20 000 Hz », identique à la
- * Note 98-01 qu'elles remplacent. La plage 50 Hz – 10 kHz est HÉRITÉE du
- * gabarit Excel Bruit_tonal.xls ; la norme exige 16 Hz – 20 kHz. À corriger
- * dans une branche dédiée (élargir la table change les résultats Kt : ce n'est
- * pas un changement à glisser dans un correctif de parseur).
+ * ATTENTION — cette plage n'a PAS de fondement normatif. Les Lignes directrices
+ * MELCCFP 2026 (§ 3.7.4) énoncent que « les bandes de tiers d'octave mesurées
+ * et analysées varient de 16 à 20 000 hertz », formulation identique à celle de
+ * la Note 98-01 (annexe IV) qu'elles remplacent : la plage n'a pas changé en
+ * 2026. Les 50 Hz – 10 kHz codés ici sont une transcription du gabarit Excel
+ * Bruit_tonal.xls de l'équipe, pas une décision normative.
  *
- * L'index 0 correspond au premier élément du `spectra[]` parsé depuis le bloc
- * positionnel 831C (col 41 du Time History). `analyzeKt` associe positionnement
- * `spectrum[i]` ↔ `KT_BAND_FREQS[i]` : tout spectre ne commençant pas à 50 Hz
- * doit être aligné par l'appelant.
+ * IMPACT — sont hors analyse : 16 / 20 / 25 / 31,5 / 40 Hz en bas, 12,5 / 16 /
+ * 20 kHz en haut. Les bandes basses exclues sont celles où le seuil est le plus
+ * sévère (15 dB, cf. `ktThreshold`) et où les tonalités industrielles sont les
+ * plus fréquentes — ventilateurs, transformateurs, compresseurs. Faux négatifs
+ * Kt possibles sur des projets réels.
+ *
+ * À CORRIGER DANS UNE BRANCHE DÉDIÉE (le changement modifie les résultats Kt
+ * des projets existants ⇒ non-régression + validation joueur propres). Trois
+ * pièges à traiter dans le même geste :
+ *
+ *  1. `A_WEIGHT` (juste dessous) s'arrête à 10 kHz. Il lui manque SIX
+ *     coefficients pour couvrir 16 Hz – 20 kHz : 16, 20, 25 Hz en bas ET
+ *     12,5k, 16k, 20k en haut (31,5 et 40 y sont déjà). `A_WEIGHTING`
+ *     (weighting.ts) les a tous, et la comparaison des deux tables ne montre
+ *     AUCUN écart sur les 26 bandes communes : la recopie est sûre.
+ *  2. La lecture est `A_WEIGHT[freq] ?? 0`. Une bande hors table ne lève donc
+ *     rien : elle reçoit 0 dB d'atténuation. À 20 kHz cela surestime
+ *     `laeqBand` de 9,3 dB, à 16 Hz de 56,7 dB — et `laeqBand` pilote
+ *     l'exclusion « bande masquée ». Élargir la plage sans compléter la table
+ *     ne planterait pas : ça produirait des bandes faussement significatives,
+ *     en silence.
+ *  3. `analyzeKt` et `analyzeKt9801` associent `spectrum[i]` ↔
+ *     `KT_BAND_FREQS[i]` PAR INDEX. Le seul spectre naturellement aligné est
+ *     le bloc positionnel 831C (col 41 du Time History, 1ʳᵉ bande = 50 Hz) ;
+ *     les exports G4 français et 821SE démarrent à 6,3 Hz, soit NEUF bandes de
+ *     décalage. Élargir la table à 16 Hz ne corrige pas ce décalage, ça le fait
+ *     passer de 9 à 4 : il faut aligner l'appelant sur `spectraFreqs` dans le
+ *     même geste. En attendant, `checkKtAlignment` refuse tout spectre dont
+ *     l'alignement n'est pas prouvé, plutôt que de produire un Kt faux.
  */
 export const KT_BAND_FREQS: number[] = [
   50, 63, 80, 100, 125, 160, 200, 250, 315, 400,

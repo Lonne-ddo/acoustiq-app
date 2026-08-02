@@ -12,6 +12,7 @@ import {
   computeKb9801,
   analyzeKt9801,
   analyzeKt,
+  KT_BAND_FREQS,
   leqOnRegPeriod,
   leqByClockHour,
   dayEnergyDistribution,
@@ -335,22 +336,24 @@ describe('analyzeKt9801 — seuils 15/8/5 + significativité ≤ 14,5', () => {
     s[5] = 50 + emergence
     return s
   }
+  // Spectre synthétique construit SUR les bandes d'analyse : alignement prouvé.
+  const F = KT_BAND_FREQS
 
   it('160 Hz exige 15 dB en 98-01 (vs 8 dB en MELCCFP 2026)', () => {
     const s = spec160(10) // 10 dB : ≥ 8 (2026) mais < 15 (98-01)
-    expect(analyzeKt9801(s, 50).kt).toBe(0)   // 98-01 : non tonal
-    expect(analyzeKt(s, 50).kt).toBe(5)        // MELCCFP : tonal
+    expect(analyzeKt9801(s, 50, F).kt).toBe(0)   // 98-01 : non tonal
+    expect(analyzeKt(s, 50, F).kt).toBe(5)        // MELCCFP : tonal
   })
 
   it('160 Hz tonal en 98-01 si émergence ≥ 15', () => {
-    expect(analyzeKt9801(spec160(16), 50).kt).toBe(5)
+    expect(analyzeKt9801(spec160(16), 50, F).kt).toBe(5)
   })
 
   it('significativité : exclu si (global − bande) > 14,5', () => {
     // band 160 Hz : LAeq_band = (50+16) + A_WEIGHT[160](−13,4) = 52,6.
     const s = spec160(16)
-    expect(analyzeKt9801(s, 65).kt).toBe(5)  // 65 − 52,6 = 12,4 ≤ 14,5 → significatif
-    expect(analyzeKt9801(s, 70).kt).toBe(0)  // 70 − 52,6 = 17,4 > 14,5 → exclu
+    expect(analyzeKt9801(s, 65, F).kt).toBe(5)  // 65 − 52,6 = 12,4 ≤ 14,5 → significatif
+    expect(analyzeKt9801(s, 70, F).kt).toBe(0)  // 70 − 52,6 = 17,4 > 14,5 → exclu
   })
 })
 

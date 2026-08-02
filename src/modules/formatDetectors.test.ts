@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import * as XLSX from 'xlsx'
-import { selectFormat, parseWorkbookFromWb, FormatError } from './formatDetectors'
+import { selectFormat, parseWorkbookFromWb, FormatError, wbSource } from './formatDetectors'
+import { expectSheetSourceContract } from './sheetSourceContract.testkit'
 
 // ── Fabriques de classeurs synthétiques (petits, en mémoire, portables) ──────
 // Sériels Excel : jour entier D + fraction de journée. On n'assert pas la date
@@ -59,6 +60,22 @@ function buildEnWb(opts: { stepwise?: boolean; aggregate?: boolean; aggregateFir
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+
+// Spec EXÉCUTABLE PARTAGÉE du contrat SheetSource (cf. sheetSourceContract.testkit).
+// csvSource (Phase 4) fait passer LES MÊMES assertions avec une autre implémentation.
+describe('SheetSource — contrat de wbSource', () => {
+  const wb = XLSX.utils.book_new()
+  // Fixture canonique : ligne pleine (types mixtes) + ligne COURTE (padding null).
+  appendAoa(wb, 'S', [
+    ['H0', 'H1', 'H2', 'H3'],
+    [1.5, 'texte', 46000, 42],
+    [7],
+  ])
+
+  it('respecte le contrat SheetSource (spec partagée)', () => {
+    expectSheetSourceContract(wbSource(wb), 'S')
+  })
+})
 
 describe('selectFormat — règle 1/0/plusieurs + reconnaissance positive', () => {
   it('G4-EN : exactement 1 détecteur reconnaît, feuille « Time History »', () => {

@@ -6,13 +6,14 @@
  * Un canvas par point de mesure, curseur synchronisé entre eux.
  */
 import { useRef, useEffect, useMemo, useState, useCallback } from 'react'
-import type { MeasurementFile, SourceEvent, DataPoint, ZoomRange, Period, Category } from '../types'
+import type { MeasurementFile, SourceEvent, DataPoint, ZoomRange, Period, Category, SpectraSource, SpectraBlocker } from '../types'
 
 function hhmmToMin(t: string): number {
   const [h = '0', m = '0'] = t.split(':')
   return parseInt(h, 10) * 60 + parseInt(m, 10)
 }
 import { weightingVector, type Weighting } from '../utils/weighting'
+import { SPECTRA_SOURCE_LABEL, SPECTRA_SOURCE_HINT, SPECTRA_BLOCKER_MESSAGE } from '../utils/spectraProvenance'
 
 const DEFAULT_CANVAS_HEIGHT = 200  // hauteur affichée en px par spectrogramme (mode plein)
 const Y_AXIS_W = 70                // largeur réservée à l'axe Y (titre + étiquettes 11px)
@@ -723,6 +724,28 @@ export default function Spectrogram({
     return null
   }, [filesByPoint])
 
+  // Provenance du spectre affiché. Si UN SEUL des fichiers visibles est
+  // reconstruit, l'image l'est en partie : on affiche le cas le moins direct
+  // plutôt que de laisser croire à une mesure Z de bout en bout.
+  const spectraSourceShown = useMemo<SpectraSource | null>(() => {
+    let seen: SpectraSource | null = null
+    for (const fs of filesByPoint.values()) {
+      for (const { file: f } of fs) {
+        if (f.spectraSource === 'A-déponderé') return 'A-déponderé'
+        if (f.spectraSource) seen = f.spectraSource
+      }
+    }
+    return seen
+  }, [filesByPoint])
+
+  // Motif de non-calculabilité (bandes présentes mais non convertibles).
+  const spectraBlocker = useMemo<SpectraBlocker | null>(() => {
+    for (const fs of filesByPoint.values()) {
+      for (const { file: f } of fs) if (f.spectraUnavailable) return f.spectraUnavailable
+    }
+    return null
+  }, [filesByPoint])
+
   // Vecteur de pondération par bande (LZeq → pondération choisie) appliqué à
   // l'affichage. En Z (défaut), atténuation nulle → spectrogramme LZeq brut.
   const weightVector = useMemo(() => {
@@ -922,7 +945,11 @@ export default function Spectrogram({
   if (nBands === 0) {
     return (
       <div className="flex items-center justify-center h-full text-gray-500 text-xs px-4 text-center">
-        Aucune donnée spectrale dans le fichier importé
+        {/* Motif DISTINCT : « bandes présentes mais non convertibles » n'est pas
+            « ce sonomètre n'exporte pas de spectre ». */}
+        {spectraBlocker
+          ? SPECTRA_BLOCKER_MESSAGE[spectraBlocker]
+          : 'Aucune donnée spectrale dans le fichier importé'}
       </div>
     )
   }
@@ -930,6 +957,20 @@ export default function Spectrogram({
   // Barre d'outils commune : toggle Moyen/Instantané + min/max dB
   const headerControls = (
     <div className="flex items-center gap-3 flex-wrap">
+      {/* Provenance du spectre affiché — toujours explicite ici : c'est la vue
+          d'analyse, un spectre reconstruit ne doit pas s'y lire comme mesuré. */}
+      {spectraSourceShown && (
+        <span
+          className={`text-[10px] px-1.5 py-0.5 rounded border ${
+            spectraSourceShown === 'A-déponderé'
+              ? 'border-amber-600/60 text-amber-400 bg-amber-950/30'
+              : 'border-gray-700 text-gray-400 bg-gray-800/60'
+          }`}
+          title={SPECTRA_SOURCE_HINT[spectraSourceShown]}
+        >
+          {SPECTRA_SOURCE_LABEL[spectraSourceShown]}
+        </span>
+      )}
       <div className="flex items-center gap-1">
         <span className="text-[10px] text-gray-500 mr-1">Mode</span>
         <button

@@ -581,13 +581,45 @@ export const THIRD_OCTAVE_CENTERS: number[] = [
 ]
 
 /**
- * Bandes 1/3 d'octave utilisées pour l'analyse tonale Kt — Lignes directrices
- * MELCCFP 2026, Tableau 2 (50 Hz → 10 kHz, 24 bandes). Les bandes au-dessus de
- * 10 kHz sont exclues par la méthode et ignorées même si présentes dans le
- * spectre brut.
+ * Bandes 1/3 d'octave utilisées pour l'analyse tonale Kt (24 bandes,
+ * 50 Hz → 10 kHz).
  *
- * L'index 0 correspond exactement au premier élément du `spectra[]` parsé
- * depuis le 831C (col 41 du Time History).
+ * ATTENTION — cette plage n'a PAS de fondement normatif. Les Lignes directrices
+ * MELCCFP 2026 (§ 3.7.4) énoncent que « les bandes de tiers d'octave mesurées
+ * et analysées varient de 16 à 20 000 hertz », formulation identique à celle de
+ * la Note 98-01 (annexe IV) qu'elles remplacent : la plage n'a pas changé en
+ * 2026. Les 50 Hz – 10 kHz codés ici sont une transcription du gabarit Excel
+ * Bruit_tonal.xls de l'équipe, pas une décision normative.
+ *
+ * IMPACT — sont hors analyse : 16 / 20 / 25 / 31,5 / 40 Hz en bas, 12,5 / 16 /
+ * 20 kHz en haut. Les bandes basses exclues sont celles où le seuil est le plus
+ * sévère (15 dB, cf. `ktThreshold`) et où les tonalités industrielles sont les
+ * plus fréquentes — ventilateurs, transformateurs, compresseurs. Faux négatifs
+ * Kt possibles sur des projets réels.
+ *
+ * À CORRIGER DANS UNE BRANCHE DÉDIÉE (le changement modifie les résultats Kt
+ * des projets existants ⇒ non-régression + validation joueur propres). Trois
+ * pièges à traiter dans le même geste :
+ *
+ *  1. `A_WEIGHT` (juste dessous) s'arrête à 10 kHz. Il lui manque SIX
+ *     coefficients pour couvrir 16 Hz – 20 kHz : 16, 20, 25 Hz en bas ET
+ *     12,5k, 16k, 20k en haut (31,5 et 40 y sont déjà). `A_WEIGHTING`
+ *     (weighting.ts) les a tous, et la comparaison des deux tables ne montre
+ *     AUCUN écart sur les 26 bandes communes : la recopie est sûre.
+ *  2. La lecture est `A_WEIGHT[freq] ?? 0`. Une bande hors table ne lève donc
+ *     rien : elle reçoit 0 dB d'atténuation. À 20 kHz cela surestime
+ *     `laeqBand` de 9,3 dB, à 16 Hz de 56,7 dB — et `laeqBand` pilote
+ *     l'exclusion « bande masquée ». Élargir la plage sans compléter la table
+ *     ne planterait pas : ça produirait des bandes faussement significatives,
+ *     en silence.
+ *  3. `analyzeKt` et `analyzeKt9801` associent `spectrum[i]` ↔
+ *     `KT_BAND_FREQS[i]` PAR INDEX. Le seul spectre naturellement aligné est
+ *     le bloc positionnel 831C (col 41 du Time History, 1ʳᵉ bande = 50 Hz) ;
+ *     les exports G4 français et 821SE démarrent à 6,3 Hz, soit NEUF bandes de
+ *     décalage. Élargir la table à 16 Hz ne corrige pas ce décalage, ça le fait
+ *     passer de 9 à 4 : il faut aligner l'appelant sur `spectraFreqs` dans le
+ *     même geste. En attendant, `checkKtAlignment` refuse tout spectre dont
+ *     l'alignement n'est pas prouvé, plutôt que de produire un Kt faux.
  */
 export const KT_BAND_FREQS: number[] = [
   50, 63, 80, 100, 125, 160, 200, 250, 315, 400,
@@ -644,10 +676,90 @@ export interface KtBandRow {
 export interface KtAnalysis {
   /** Une ligne par bande analysée (24 bandes au maximum) */
   bands: KtBandRow[]
-  /** Correction tonale finale (0 ou 5 dB) */
+  /** Correction tonale finale (0 ou 5 dB) — N'A DE SENS QUE SI `unavailable` est null. */
   kt: number
   /** Index dans `bands` de la première bande tonale, ou null */
   triggeringIndex: number | null
+  /**
+   * Motif de NON-CALCULABILITÉ, `null` si l'analyse a pu être menée.
+   *
+   * Tout appelant DOIT le tester avant de lire `kt` : un `kt` de 0 accompagné
+   * d'un motif signifie « pas évalué », JAMAIS « pas de tonalité ». Confondre
+   * les deux ferait passer un échec technique pour un fait de donnée.
+   */
+  unavailable: KtUnavailable | null
+}
+
+/** Motifs de non-calculabilité de l'analyse tonale — volontairement DISTINCTS. */
+export type KtUnavailableReason =
+  /** Le fichier n'expose aucune bande 1/3 d'octave. */
+  | 'aucune-donnee-spectrale'
+  /** Des bandes existent, mais rien ne prouve qu'elles tombent en face de `KT_BAND_FREQS`. */
+  | 'alignement-non-verifiable'
+
+export interface KtUnavailable {
+  reason: KtUnavailableReason
+  /** Phrase destinée à l'acousticien, affichable telle quelle. */
+  message: string
+}
+
+const KT_NO_SPECTRUM: KtUnavailable = {
+  reason: 'aucune-donnee-spectrale',
+  message: 'Tonalité non évaluable — aucune donnée spectrale.',
+}
+
+const misalignedKt = (detail: string): KtUnavailable => ({
+  reason: 'alignement-non-verifiable',
+  message: `Tonalité non évaluable — alignement des bandes non vérifiable (${detail}).`,
+})
+
+/**
+ * GARDE-FOU D'ALIGNEMENT (`analyzeKt` / `analyzeKt9801`).
+ *
+ * Les deux analyses associent `spectrum[i]` à `KT_BAND_FREQS[i]` PAR INDEX.
+ * Rien dans un tableau de nombres ne dit à quelle fréquence il commence : un
+ * spectre débutant à 6,3 Hz (exports G4 français et 821SE) verrait sa bande
+ * 6,3 Hz analysée comme du 50 Hz — mauvais seuil, mauvaise pondération A,
+ * mauvais test d'exclusion, et AUCUN signal.
+ *
+ * On refuse donc de produire un Kt tant que les fréquences réelles du spectre
+ * ne sont pas fournies ET superposables à `KT_BAND_FREQS`. Fréquences inconnues
+ * = non vérifiable = non calculable : ne pas pouvoir vérifier n'autorise pas à
+ * supposer.
+ *
+ * @param spectrum     niveaux par bande
+ * @param spectraFreqs fréquences centrales réelles (`MeasurementFile.spectraFreqs`)
+ * @returns le motif si l'analyse doit être refusée, `null` si l'alignement est prouvé
+ */
+export function checkKtAlignment(
+  spectrum: number[],
+  spectraFreqs: number[] | undefined,
+): KtUnavailable | null {
+  if (!spectraFreqs || spectraFreqs.length === 0) {
+    return misalignedKt(
+      `fréquences des bandes inconnues, analyse attendue à partir de ${KT_BAND_FREQS[0]} Hz`,
+    )
+  }
+  if (spectraFreqs.length !== spectrum.length) {
+    return misalignedKt(
+      `${spectrum.length} niveaux pour ${spectraFreqs.length} fréquences déclarées`,
+    )
+  }
+  if (spectraFreqs[0] !== KT_BAND_FREQS[0]) {
+    return misalignedKt(
+      `spectre débute à ${spectraFreqs[0]} Hz, analyse attendue à ${KT_BAND_FREQS[0]} Hz`,
+    )
+  }
+  // Superposition bande à bande sur la portion effectivement analysée.
+  const n = Math.min(KT_BAND_FREQS.length, spectraFreqs.length)
+  for (let i = 0; i < n; i++) {
+    if (spectraFreqs[i] !== KT_BAND_FREQS[i]) {
+      return misalignedKt(
+        `bande n°${i + 1} : ${spectraFreqs[i]} Hz dans le spectre, ${KT_BAND_FREQS[i]} Hz attendu`,
+      )
+    }
+  }
+  return null
 }
 
 /**
@@ -665,17 +777,28 @@ export interface KtAnalysis {
  *
  * Résultat : Kt = 5 dB si AU MOINS UNE bande est tonale, sinon Kt = 0.
  *
- * @param spectrum    spectres LZeq par bande 1/3 d'octave (dB), aligné sur
- *                    `KT_BAND_FREQS` (le spectre 831C démarre à 50 Hz).
- *                    Les valeurs au-delà de 10 kHz sont ignorées.
- * @param globalLAeq  niveau global pondéré A de la période (dB(A)), pour
- *                    appliquer l'exception « bande masquée ».
+ * @param spectrum     spectres LZeq par bande 1/3 d'octave (dB), aligné sur
+ *                     `KT_BAND_FREQS` (le spectre 831C démarre à 50 Hz).
+ *                     Les valeurs au-delà de 10 kHz sont ignorées.
+ * @param globalLAeq   niveau global pondéré A de la période (dB(A)), pour
+ *                     appliquer l'exception « bande masquée ».
+ * @param spectraFreqs fréquences centrales RÉELLES du spectre. Paramètre
+ *                     OBLIGATOIRE (`undefined` accepté, mais il faut le passer)
+ *                     pour que tout appelant tranche explicitement : sans
+ *                     preuve d'alignement, l'analyse est refusée plutôt que
+ *                     supposée. Cf. `checkKtAlignment`.
  */
-export function analyzeKt(spectrum: number[], globalLAeq: number): KtAnalysis {
+export function analyzeKt(
+  spectrum: number[],
+  globalLAeq: number,
+  spectraFreqs: number[] | undefined,
+): KtAnalysis {
   const bands: KtBandRow[] = []
   if (!spectrum || spectrum.length === 0) {
-    return { bands, kt: 0, triggeringIndex: null }
+    return { bands, kt: 0, triggeringIndex: null, unavailable: KT_NO_SPECTRUM }
   }
+  const misaligned = checkKtAlignment(spectrum, spectraFreqs)
+  if (misaligned) return { bands, kt: 0, triggeringIndex: null, unavailable: misaligned }
   const N = Math.min(KT_BAND_FREQS.length, spectrum.length)
 
   for (let i = 0; i < N; i++) {
@@ -706,6 +829,7 @@ export function analyzeKt(spectrum: number[], globalLAeq: number): KtAnalysis {
     bands,
     kt: triggering >= 0 ? 5 : 0,
     triggeringIndex: triggering >= 0 ? triggering : null,
+    unavailable: null,
   }
 }
 
@@ -721,17 +845,27 @@ export interface KtDetection {
   /** Plus petite des deux émergences (Δ préc., Δ suiv.) en dB */
   emergence: number | null
   threshold: number | null
+  /** Motif de non-calculabilité, `null` si l'analyse a pu être menée. */
+  unavailable: KtUnavailable | null
 }
 
-export function detectKt(spectrum: number[], laeqA?: number | null): KtDetection {
+export function detectKt(
+  spectrum: number[],
+  laeqA: number | null | undefined,
+  spectraFreqs: number[] | undefined,
+): KtDetection {
   const empty: KtDetection = {
     kt: 0, detected: false, bandIndex: null, fc: null, emergence: null, threshold: null,
+    unavailable: null,
   }
-  if (!spectrum || spectrum.length === 0) return empty
+  if (!spectrum || spectrum.length === 0) return { ...empty, unavailable: KT_NO_SPECTRUM }
   const analysis = analyzeKt(
     spectrum,
     typeof laeqA === 'number' && Number.isFinite(laeqA) ? laeqA : -Infinity,
+    spectraFreqs,
   )
+  // « Non évalué » ne se déguise pas en « pas de tonalité » : le motif remonte.
+  if (analysis.unavailable) return { ...empty, unavailable: analysis.unavailable }
   if (analysis.triggeringIndex === null) return empty
   const b = analysis.bands[analysis.triggeringIndex]
   const emergence = Math.min(b.diffPrev as number, b.diffNext as number)
@@ -742,12 +876,17 @@ export function detectKt(spectrum: number[], laeqA?: number | null): KtDetection
     fc: b.freq,
     emergence,
     threshold: b.threshold,
+    unavailable: null,
   }
 }
 
 /** Variante historique : ne retourne que la valeur Kt (0 ou 5). */
-export function computeKt(spectrum: number[], laeqA?: number | null): number {
-  return detectKt(spectrum, laeqA).kt
+export function computeKt(
+  spectrum: number[],
+  laeqA: number | null | undefined,
+  spectraFreqs: number[] | undefined,
+): number {
+  return detectKt(spectrum, laeqA, spectraFreqs).kt
 }
 
 /**
@@ -866,11 +1005,18 @@ function ktThreshold9801(fc: number): number {
  * « (LAeq_global − LAeq_band) ≤ 14,5 dB » (exclu au-delà), au lieu du ≥ 15 dB
  * du cadre 2026.
  */
-export function analyzeKt9801(spectrum: number[], globalLAeq: number): KtAnalysis {
+export function analyzeKt9801(
+  spectrum: number[],
+  globalLAeq: number,
+  spectraFreqs: number[] | undefined,
+): KtAnalysis {
   const bands: KtBandRow[] = []
   if (!spectrum || spectrum.length === 0) {
-    return { bands, kt: 0, triggeringIndex: null }
+    return { bands, kt: 0, triggeringIndex: null, unavailable: KT_NO_SPECTRUM }
   }
+  // G3 : MÊME alignement positionnel que le cadre 2026 → MÊME garde-fou.
+  const misaligned = checkKtAlignment(spectrum, spectraFreqs)
+  if (misaligned) return { bands, kt: 0, triggeringIndex: null, unavailable: misaligned }
   const N = Math.min(KT_BAND_FREQS.length, spectrum.length)
   for (let i = 0; i < N; i++) {
     const freq = KT_BAND_FREQS[i]
@@ -895,6 +1041,7 @@ export function analyzeKt9801(spectrum: number[], globalLAeq: number): KtAnalysi
     bands,
     kt: triggering >= 0 ? 5 : 0,
     triggeringIndex: triggering >= 0 ? triggering : null,
+    unavailable: null,
   }
 }
 

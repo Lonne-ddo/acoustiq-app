@@ -86,6 +86,7 @@ import TemplatesSection from './components/TemplatesSection'
 import MeteoSection from './components/MeteoSection'
 import ComparisonModal from './components/ComparisonModal'
 import { parseWorkbook } from './modules/formatDetectors'
+import { pairResume, isResumeName } from './modules/csvParser'
 import { saveProject, loadProject, buildIndicesSnapshot, buildFullProjectData, buildProjectNotes } from './modules/projectManager'
 import { getDataverseClient } from './modules/dataverseClient'
 import {
@@ -95,6 +96,7 @@ import {
 import DataverseOpenModal from './components/DataverseOpenModal'
 import DataverseProjectList, { type DataverseProjectRow } from './components/DataverseProjectList'
 import { loadSettings, saveSettings } from './modules/settings'
+import { SPECTRA_SOURCE_LABEL, SPECTRA_SOURCE_HINT, SPECTRA_BLOCKER_MESSAGE } from './utils/spectraProvenance'
 import { t, setLanguage } from './modules/i18n'
 import TimeSeriesChart from './components/TimeSeriesChart'
 import IndicesPanel from './components/IndicesPanel'
@@ -397,6 +399,25 @@ function FileList({
         >
           {f.startTime} → {f.stopTime} · {f.rowCount.toLocaleString('fr-FR')} mes.
         </p>
+        {/* Provenance du spectre — signalée seulement quand elle n'est PAS le
+            cas nominal (mesure en Z), pour que la reconstruction A→Z et le
+            refus de reconstruire sautent aux yeux dans la liste des fichiers. */}
+        {f.spectraSource === 'A-déponderé' && (
+          <p
+            className="text-[9px] leading-tight text-amber-400/90"
+            title={SPECTRA_SOURCE_HINT['A-déponderé']}
+          >
+            ⟳ {SPECTRA_SOURCE_LABEL['A-déponderé']}
+          </p>
+        )}
+        {f.spectraUnavailable && (
+          <p
+            className="text-[9px] leading-tight text-rose-400/90"
+            title={SPECTRA_BLOCKER_MESSAGE[f.spectraUnavailable]}
+          >
+            ⚠ Spectre non calculable
+          </p>
+        )}
         {showAssign && (
           <div className="mt-1.5 space-y-1">
             <select
@@ -858,9 +879,9 @@ function Sidebar({
   function handleFileChange(e: React.ChangeEvent<HTMLInputElement>) {
     const selected = Array.from(e.target.files ?? [])
     if (selected.length === 0) return
-    const xlsx = selected.filter((f) => /\.xlsx$/i.test(f.name))
+    const measures = selected.filter((f) => /\.(xlsx|csv)$/i.test(f.name))
     const audios = selected.filter((f) => /\.(mp3|wav|m4a|ogg|flac)$/i.test(f.name))
-    if (xlsx.length > 0) onParseFiles(xlsx)
+    if (measures.length > 0) onParseFiles(measures)
     if (audios.length > 0) void onAudioEntriesLoad(audios)
     e.target.value = ''
   }
@@ -881,10 +902,10 @@ function Sidebar({
     e.stopPropagation()
     setDragOver(false)
     const droppedFiles = Array.from(e.dataTransfer.files)
-    const xlsx = droppedFiles.filter((f) => /\.xlsx$/i.test(f.name))
+    const measures = droppedFiles.filter((f) => /\.(xlsx|csv)$/i.test(f.name))
     const audios = droppedFiles.filter((f) => /\.(mp3|wav|m4a|ogg|flac)$/i.test(f.name))
     const json = droppedFiles.filter((f) => /\.json$/i.test(f.name))
-    if (xlsx.length > 0) onParseFiles(xlsx)
+    if (measures.length > 0) onParseFiles(measures)
     if (audios.length > 0) {
       void onAudioEntriesLoad(audios)
     }
@@ -952,7 +973,7 @@ function Sidebar({
         >
           <Upload size={16} />
         </button>
-        <input ref={inputRef} type="file" accept=".xlsx" multiple className="hidden" onChange={handleFileChange} />
+        <input ref={inputRef} type="file" accept=".xlsx,.csv" multiple className="hidden" onChange={handleFileChange} />
         {/* Primaire : « Sauvegarder » = Dataverse */}
         <button
           onClick={onSaveDataverse}
@@ -1116,7 +1137,7 @@ function Sidebar({
 
         {/* ─── 📂 FICHIERS ─────────────────────────────────────────────── */}
         <SidebarSection title="📂 Fichiers" defaultOpen persistKey="files">
-          <input ref={inputRef} type="file" accept=".xlsx,.mp3,.wav,.m4a,.ogg,.flac" multiple className="hidden" onChange={handleFileChange} />
+          <input ref={inputRef} type="file" accept=".xlsx,.csv,.mp3,.wav,.m4a,.ogg,.flac" multiple className="hidden" onChange={handleFileChange} />
           <button
             onClick={() => inputRef.current?.click()}
             disabled={loading}
@@ -3362,51 +3383,86 @@ export default function App() {
     setLoadProgress(0)
     setRejectedFiles([])
 
-    const total = rawFiles.length
+    // Appariement CSV : chaque *_Histoire est parsé et apparié à son *_Résumé
+    // (métadonnées). Un Histoire sans Résumé se charge quand même (défauts). Un
+    // Résumé orphelin (nommé Résumé, sans Histoire) est ignoré : pas une mesure.
+    const csvFiles = rawFiles.filter((f) => /\.csv$/i.test(f.name))
+    const csvNames = csvFiles.map((f) => f.name)
+    const csvByName = new Map(csvFiles.map((f) => [f.name, f] as const))
+
+    type WorkItem = { kind: 'xlsx'; file: File } | { kind: 'csv'; file: File; resume?: File }
+    const items: WorkItem[] = []
+    for (const file of rawFiles) {
+      if (/\.xlsx$/i.test(file.name)) {
+        items.push({ kind: 'xlsx', file })
+      } else if (/\.csv$/i.test(file.name)) {
+        if (isResumeName(file.name)) continue // Résumé = métadonnées, jamais chargé seul
+        const rName = pairResume(file.name, csvNames)
+        items.push({ kind: 'csv', file, resume: rName ? csvByName.get(rName) : undefined })
+      }
+      // autres extensions : ignorées (filtrées en amont)
+    }
+
+    // Résumé(s) orphelin(s) : nommés « Résumé » mais non appariés à un Histoire
+    // chargé → ignorés, mais on le DIT clairement (sinon « rien ne se passe »).
+    const usedResumes = new Set(
+      items.flatMap((it) => (it.kind === 'csv' && it.resume ? [it.resume.name] : [])),
+    )
+    const orphanResumes = csvFiles.filter((f) => isResumeName(f.name) && !usedResumes.has(f.name))
+    if (orphanResumes.length > 0) {
+      showToast(
+        `${orphanResumes.length} fichier(s) « Résumé » ignoré(s) : métadonnées, pas des mesures. ` +
+          `Déposez-les avec leur « Histoire du temps ».`,
+        'info',
+      )
+    }
+
+    const total = items.length || 1
     let completed = 0
     const parsed: MeasurementFile[] = []
     const rejected: RejectedFile[] = []
 
-    for (const file of rawFiles) {
-      try {
-        const buf = await readAsArrayBuffer(file)
+    // Worker partagé : même remontée de progression (percent) pour xlsx et csv.
+    const runWorker = (message: unknown, transfer: Transferable[] = []): Promise<MeasurementFile> =>
+      new Promise<MeasurementFile>((resolve, reject) => {
+        const worker = new Worker(new URL('./workers/parserWorker.ts', import.meta.url), { type: 'module' })
+        worker.onmessage = (e) => {
+          const msg = e.data
+          if (msg.type === 'progress') {
+            const overallPct = ((completed + msg.percent / 100) / total) * 100
+            setLoadProgress(Math.round(overallPct))
+          } else if (msg.type === 'result') {
+            worker.terminate()
+            resolve(msg.file)
+          } else if (msg.type === 'error') {
+            worker.terminate()
+            reject(new Error(msg.error))
+          }
+        }
+        worker.onerror = (err) => {
+          worker.terminate()
+          reject(new Error(err.message))
+        }
+        worker.postMessage(message, transfer)
+      })
 
-        // Utiliser le Web Worker pour les gros fichiers (> 1 Mo)
-        if (buf.byteLength > 1_000_000) {
-          const result = await new Promise<MeasurementFile>((resolve, reject) => {
-            const worker = new Worker(
-              new URL('./workers/parserWorker.ts', import.meta.url),
-              { type: 'module' },
-            )
-            worker.onmessage = (e) => {
-              const msg = e.data
-              if (msg.type === 'progress') {
-                // Progression intra-fichier
-                const filePct = msg.percent / 100
-                const overallPct = ((completed + filePct) / total) * 100
-                setLoadProgress(Math.round(overallPct))
-              } else if (msg.type === 'result') {
-                worker.terminate()
-                resolve(msg.file)
-              } else if (msg.type === 'error') {
-                worker.terminate()
-                reject(new Error(msg.error))
-              }
-            }
-            worker.onerror = (err) => {
-              worker.terminate()
-              reject(new Error(err.message))
-            }
-            worker.postMessage({ buffer: buf, fileName: file.name }, [buf])
-          })
-          parsed.push(result)
+    for (const item of items) {
+      try {
+        if (item.kind === 'csv') {
+          // CRITIQUE : le File est passé TEL QUEL au worker (clone de référence),
+          // JAMAIS pré-lu en ArrayBuffer → aucune rematérialisation, pas d'OOM.
+          parsed.push(await runWorker({ file: item.file, resumeFile: item.resume, fileName: item.file.name }))
         } else {
-          // Petit fichier : parser sur le thread principal
-          parsed.push(parseFile(buf, file.name))
+          // Chemin xlsx INCHANGÉ : > 1 Mo → worker (buffer transféré), sinon main-thread.
+          const buf = await readAsArrayBuffer(item.file)
+          if (buf.byteLength > 1_000_000) {
+            parsed.push(await runWorker({ buffer: buf, fileName: item.file.name }, [buf]))
+          } else {
+            parsed.push(parseFile(buf, item.file.name))
+          }
         }
       } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err)
-        rejected.push({ name: file.name, error: msg })
+        rejected.push({ name: item.file.name, error: err instanceof Error ? err.message : String(err) })
       }
       completed++
       setLoadProgress(Math.round((completed / total) * 100))

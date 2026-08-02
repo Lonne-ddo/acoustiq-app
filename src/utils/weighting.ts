@@ -9,6 +9,8 @@
  * spectrogramme. Les 36 bandes standard sont donc toutes renseignées.
  */
 
+import { FormatError } from './formatError'
+
 export type Weighting = 'Z' | 'A' | 'C'
 
 /** Pondération A (dB par bande tiers d'octave) — 6.3 Hz → 20 kHz. */
@@ -40,4 +42,56 @@ export function weightingVector(freqs: number[], w: Weighting): number[] {
   if (w === 'Z') return freqs.map(() => 0)
   const table = w === 'A' ? A_WEIGHTING : C_WEIGHTING
   return freqs.map((f) => table[f] ?? 0)
+}
+
+// ───────────────────────────────────────────────────────────────────────────
+// Dépondération A → Z (spectres mesurés en dB(A) par bande)
+// ───────────────────────────────────────────────────────────────────────────
+
+/**
+ * Bandes (Hz) sans coefficient de pondération A dans `A_WEIGHTING`. Sert de
+ * garde AMONT (à la construction du plan de colonnes) : on refuse un plan
+ * A-dépondéré plutôt que de produire une bande fausse en aval.
+ */
+export function missingAWeightBands(freqs: number[]): number[] {
+  return freqs.filter((f) => !(f in A_WEIGHTING))
+}
+
+/**
+ * Inverse la pondération A d'un spectre mesuré en dB(A) par bande :
+ *
+ *     LZ(f) = LA(f) − A(f)
+ *
+ * Exact à la table CEI 61672 (l'aller-retour LA → LZ → LA est neutre au bit
+ * près). Utilisé par les exports G4 qui ne fournissent QUE le spectre pondéré A
+ * (821SE : colonnes « 1/3 LAeq … », aucune colonne « 1/3 LZeq ») afin que
+ * `DataPoint.spectra` reste TOUJOURS du LZeq — invariant de toute la chaîne
+ * aval (spectrogramme, spectre instantané, analyse Kt).
+ *
+ * JAMAIS de NaN, JAMAIS de retombée silencieuse à 0 dB : une bande absente de la
+ * table lève une `FormatError` explicite (un 0 dB muet fausserait le spectre de
+ * plusieurs dizaines de dB dans les extrêmes, cf. −85,4 dB à 6,3 Hz).
+ *
+ * @param levels niveaux dB(A) par bande
+ * @param freqs  fréquences centrales alignées sur `levels`
+ */
+export function deweightAToZ(levels: number[], freqs: number[]): number[] {
+  if (levels.length !== freqs.length) {
+    throw new FormatError(
+      `Dépondération A→Z impossible : ${levels.length} niveaux pour ${freqs.length} fréquences ` +
+      `(alignement bande↔fréquence rompu).`,
+    )
+  }
+  const out = new Array<number>(levels.length)
+  for (let i = 0; i < levels.length; i++) {
+    const a = A_WEIGHTING[freqs[i]]
+    if (a === undefined) {
+      throw new FormatError(
+        `Dépondération A→Z impossible : la bande ${freqs[i]} Hz n'a pas de coefficient de ` +
+        `pondération A (table CEI 61672, 6,3 Hz – 20 kHz).`,
+      )
+    }
+    out[i] = levels[i] - a
+  }
+  return out
 }

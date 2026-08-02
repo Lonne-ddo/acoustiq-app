@@ -15,6 +15,7 @@ const facts = (over: Partial<Corr9801Facts>): Corr9801Facts => ({
   laftm5IsNull: false,
   spectrumPresent: true,
   spectrumValid: true,
+  spectrumAligned: true,
   ...over,
 })
 

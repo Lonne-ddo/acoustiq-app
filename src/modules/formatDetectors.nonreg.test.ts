@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import * as XLSX from 'xlsx'
 import { parseWorkbook } from './formatDetectors'
 import { parse831C } from './parser831C'
+import { analyzeKt } from '../utils/acoustics'
 
 /**
  * NON-RÉGRESSION G4 ANGLAIS : le nouveau chemin (table de détecteurs) doit
@@ -64,5 +65,21 @@ describe('non-régression G4-EN : parseWorkbook ≡ parse831C', () => {
     expect(modern.stopTime).toBe(legacy.stopTime)
     expect(modern.spectraFreqs).toEqual(legacy.spectraFreqs)
     expect(modern.rowCount).toBe(legacy.rowCount)
+  })
+
+  it('Kt inchangé sur un 831C en Z natif (le support du A ne touche pas ce chemin)', () => {
+    const buf = buildEnBuffer()
+    const legacy = parse831C(buf, 'en.xlsx')
+    const modern = parseWorkbook(buf, 'en.xlsx')
+
+    // Le spectre est mesuré en Z : aucune dépondération ne doit s'appliquer.
+    expect(modern.spectraSource).toBe('Z-natif')
+    for (let i = 0; i < legacy.data.length; i++) {
+      const a = analyzeKt(modern.data[i].spectra ?? [], modern.data[i].laeq)
+      const b = analyzeKt(legacy.data[i].spectra ?? [], legacy.data[i].laeq)
+      expect(a.kt).toBe(b.kt)
+      expect(a.triggeringIndex).toBe(b.triggeringIndex)
+      expect(a.bands).toEqual(b.bands)
+    }
   })
 })

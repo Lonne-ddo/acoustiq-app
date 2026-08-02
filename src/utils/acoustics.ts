@@ -581,13 +581,21 @@ export const THIRD_OCTAVE_CENTERS: number[] = [
 ]
 
 /**
- * Bandes 1/3 d'octave utilisées pour l'analyse tonale Kt — Lignes directrices
- * MELCCFP 2026, Tableau 2 (50 Hz → 10 kHz, 24 bandes). Les bandes au-dessus de
- * 10 kHz sont exclues par la méthode et ignorées même si présentes dans le
- * spectre brut.
+ * Bandes 1/3 d'octave utilisées pour l'analyse tonale Kt (24 bandes,
+ * 50 Hz → 10 kHz).
  *
- * L'index 0 correspond exactement au premier élément du `spectra[]` parsé
- * depuis le 831C (col 41 du Time History).
+ * ATTENTION — cette plage n'a PAS de fondement normatif. Les Lignes
+ * directrices MELCCFP 2026 (§ 3.7.4) énoncent que « les bandes de tiers
+ * d'octave mesurées et analysées varient de 16 à 20 000 Hz », identique à la
+ * Note 98-01 qu'elles remplacent. La plage 50 Hz – 10 kHz est HÉRITÉE du
+ * gabarit Excel Bruit_tonal.xls ; la norme exige 16 Hz – 20 kHz. À corriger
+ * dans une branche dédiée (élargir la table change les résultats Kt : ce n'est
+ * pas un changement à glisser dans un correctif de parseur).
+ *
+ * L'index 0 correspond au premier élément du `spectra[]` parsé depuis le bloc
+ * positionnel 831C (col 41 du Time History). `analyzeKt` associe positionnement
+ * `spectrum[i]` ↔ `KT_BAND_FREQS[i]` : tout spectre ne commençant pas à 50 Hz
+ * doit être aligné par l'appelant.
  */
 export const KT_BAND_FREQS: number[] = [
   50, 63, 80, 100, 125, 160, 200, 250, 315, 400,

@@ -8,7 +8,8 @@
 import { useRef, useEffect, useMemo, useState, useCallback } from 'react'
 import * as XLSX from 'xlsx'
 import { Download, Snowflake, ChevronDown, ChevronUp } from 'lucide-react'
-import type { MeasurementFile, Period } from '../types'
+import type { MeasurementFile, Period, SpectraSource, SpectraBlocker } from '../types'
+import { SPECTRA_SOURCE_LABEL, SPECTRA_BLOCKER_MESSAGE } from '../utils/spectraProvenance'
 import {
   buildSpectraSamples, spectrumAtInstant, spectrumOverRange, applyWeighting,
   freqAxisLabel, type Weighting, type SpectraSample,
@@ -156,6 +157,29 @@ export default function InstantSpectrum({
       if (f.spectraFreqs && f.spectraFreqs.length > best.length) best = f.spectraFreqs
     }
     return best
+  }, [files, pointMap, hidden])
+
+  // Provenance du spectre par point — mesuré en Z ou reconstruit depuis du A.
+  // Reportée telle quelle à l'export : un spectre archivé sans sa provenance
+  // n'est plus interprétable des années après la campagne.
+  const sourceByPoint = useMemo(() => {
+    const m = new Map<string, SpectraSource>()
+    for (const f of files) {
+      const pt = pointMap[f.id]
+      if (!pt || !f.spectraSource) continue
+      // Un seul fichier reconstruit suffit à qualifier la série du point.
+      if (f.spectraSource === 'A-déponderé' || !m.has(pt)) m.set(pt, f.spectraSource)
+    }
+    return m
+  }, [files, pointMap])
+
+  // Motif de non-calculabilité (bandes présentes mais non convertibles).
+  const spectraBlocker = useMemo<SpectraBlocker | null>(() => {
+    for (const f of files) {
+      const pt = pointMap[f.id]
+      if (pt && !hidden.has(pt) && f.spectraUnavailable) return f.spectraUnavailable
+    }
+    return null
   }, [files, pointMap, hidden])
 
   // Résolution de l'instant/plage actif → titre + séries par point.
@@ -390,7 +414,7 @@ export default function InstantSpectrum({
   const buildRows = () => {
     const freqs = refFreqs
     const header = ['Fréquence (Hz)']
-    for (const s of series) header.push(`${s.pt} Leq`, `${s.pt} LFmin`, `${s.pt} LFmax`)
+    for (const s of series) header.push(`${s.pt} Leq`, `${s.pt} LFmin`, `${s.pt} LFmax`, `${s.pt} Source`)
     const rows: (string | number)[][] = [header]
     freqs.forEach((f, i) => {
       const row: (string | number)[] = [f]
@@ -399,6 +423,9 @@ export default function InstantSpectrum({
           Number.isFinite(s.leq[i]) ? Math.round(s.leq[i] * 10) / 10 : '',
           s.min && Number.isFinite(s.min[i]) ? Math.round(s.min[i] * 10) / 10 : '',
           s.max && Number.isFinite(s.max[i]) ? Math.round(s.max[i] * 10) / 10 : '',
+          // Répétée sur chaque bande : une ligne d'export reste lisible seule,
+          // même filtrée ou recollée dans un autre tableur.
+          sourceByPoint.has(s.pt) ? SPECTRA_SOURCE_LABEL[sourceByPoint.get(s.pt)!] : '',
         )
       }
       rows.push(row)
@@ -527,8 +554,11 @@ export default function InstantSpectrum({
           {/* Graphique */}
           <div ref={containerRef} className="flex-1 min-h-0 px-2 pt-1">
             {refFreqs.length === 0 ? (
-              <div className="h-full flex items-center justify-center text-[11px] text-gray-500">
-                Aucune donnée spectrale dans le fichier importé
+              <div className="h-full flex items-center justify-center text-[11px] text-gray-500 px-4 text-center">
+                {/* Motif DISTINCT : bandes présentes mais non convertibles. */}
+                {spectraBlocker
+                  ? SPECTRA_BLOCKER_MESSAGE[spectraBlocker]
+                  : 'Aucune donnée spectrale dans le fichier importé'}
               </div>
             ) : (
               <canvas ref={canvasRef} className="block w-full" style={{ height: canvasH, backgroundColor: '#030712', borderRadius: 4 }} />

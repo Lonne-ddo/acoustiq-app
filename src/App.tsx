@@ -87,6 +87,7 @@ import { parseWorkbook } from './modules/formatDetectors'
 import { pairResume, isResumeName } from './modules/csvParser'
 import { saveProject, loadProject, buildIndicesSnapshot } from './modules/projectManager'
 import { loadSettings, saveSettings } from './modules/settings'
+import { SPECTRA_SOURCE_LABEL, SPECTRA_SOURCE_HINT, SPECTRA_BLOCKER_MESSAGE } from './utils/spectraProvenance'
 import { t, setLanguage } from './modules/i18n'
 import TimeSeriesChart from './components/TimeSeriesChart'
 import IndicesPanel from './components/IndicesPanel'
@@ -389,6 +390,25 @@ function FileList({
         >
           {f.startTime} → {f.stopTime} · {f.rowCount.toLocaleString('fr-FR')} mes.
         </p>
+        {/* Provenance du spectre — signalée seulement quand elle n'est PAS le
+            cas nominal (mesure en Z), pour que la reconstruction A→Z et le
+            refus de reconstruire sautent aux yeux dans la liste des fichiers. */}
+        {f.spectraSource === 'A-déponderé' && (
+          <p
+            className="text-[9px] leading-tight text-amber-400/90"
+            title={SPECTRA_SOURCE_HINT['A-déponderé']}
+          >
+            ⟳ {SPECTRA_SOURCE_LABEL['A-déponderé']}
+          </p>
+        )}
+        {f.spectraUnavailable && (
+          <p
+            className="text-[9px] leading-tight text-rose-400/90"
+            title={SPECTRA_BLOCKER_MESSAGE[f.spectraUnavailable]}
+          >
+            ⚠ Spectre non calculable
+          </p>
+        )}
         {showAssign && (
           <div className="mt-1.5 space-y-1">
             <select

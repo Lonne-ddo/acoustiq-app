@@ -77,11 +77,15 @@ describe('G4-FR — détecteur français (débloque le fichier de référence)',
     }
   })
 
-  it('LIMITATION connue : bandes à décimale virgule (« 1/3 LZeq 6,3 ») non détectées (absentes, jamais fausses)', () => {
+  it('bandes à décimale VIRGULE (« 1/3 LZeq 6,3 ») détectées, fréquences non tronquées', () => {
+    // Ex-limitation levée : le groupe fréquence accepte la virgule ET reste
+    // gourmand — « 8,0 » vaut 8 (et non un match tronqué sur « 8 »), « 12,5 »
+    // vaut 12,5 (et non 12). Le spectre reste du LZeq mesuré.
     const commaBands = ['1/3 LZeq 6,3', '1/3 LZeq 8,0', '1/3 LZeq 10,0', '1/3 LZeq 12,5', '1/3 LZeq 16,0', '1/3 LZeq 20,0']
     const f = parseWorkbookFromWb(buildFrWb({ bandLabels: commaBands }), 'fr.xlsx')
-    // Aucune bande détectée avec ces libellés → pas de spectre (pas un spectre faux).
-    expect(f.data[0].spectra).toBeUndefined()
+    expect(f.data[0].spectra).toHaveLength(6)
+    expect(f.spectraFreqs).toEqual([6.3, 8, 10, 12.5, 16, 20])
+    expect(f.spectraSource).toBe('Z-natif')
   })
 })
 

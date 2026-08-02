@@ -1,5 +1,30 @@
 // Interfaces TypeScript pour AcoustiQ
 
+/**
+ * Provenance du spectre stocké dans `DataPoint.spectra` (toujours du LZeq) :
+ *  - 'Z-natif'      : bandes MESURÉES en linéaire (831C, 821SE xlsx)
+ *  - 'A-déponderé'  : bandes mesurées en dB(A) et ramenées en Z par
+ *    `LZ = LA − A(f)` (821SE CSV, qui n'exporte aucune colonne LZeq)
+ *
+ * L'inversion est exacte à la table CEI 61672, mais reste une RECONSTRUCTION :
+ * rétention 10 ans oblige, elle doit rester lisible en UI comme à l'export.
+ */
+export type SpectraSource = 'Z-natif' | 'A-déponderé'
+
+/**
+ * Motif de non-calculabilité du spectre — DISTINCT de « aucune donnée
+ * spectrale » (sonomètre qui n'exporte pas de bandes). Ici les bandes existent
+ * mais ne sont pas ramenables en LZeq sans inventer une valeur.
+ *
+ * Une seule valeur aujourd'hui, et c'est voulu : les deux autres risques cités
+ * au design sont éliminés par CONSTRUCTION plutôt que rapportés a posteriori —
+ * un mélange A/Z est impossible (le jeu Fmax est apparié sur la pondération du
+ * jeu Leq, et Z prime sur A quand les deux coexistent), et une pondération
+ * indéterminée n'existe pas (chaque motif d'en-tête reconnu porte la sienne, la
+ * fréquence nue restant Z par convention historique).
+ */
+export type SpectraBlocker = 'bande-hors-table'
+
 export interface MeasurementFile {
   id: string
   name: string
@@ -19,6 +44,10 @@ export interface MeasurementFile {
    * Si absent : ancien comportement (les N dernières bandes de FREQ_BANDS_ALL).
    */
   spectraFreqs?: number[]
+  /** Provenance du spectre (mesuré en Z ou reconstruit depuis du A). */
+  spectraSource?: SpectraSource
+  /** Bandes présentes mais inexploitables — motif ; exclusif de `spectraFreqs`. */
+  spectraUnavailable?: SpectraBlocker
 }
 
 export interface DataPoint {

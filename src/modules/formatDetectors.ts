@@ -20,8 +20,12 @@
  * du détecteur retenu — plus de logique recopiée entre main-thread et worker.
  */
 import * as XLSX from 'xlsx'
-import type { MeasurementFile, DataPoint } from '../types'
-import { detectFreqColumns, detectMetricColumn, extractSpectrumCells } from '../utils/spectraColumns'
+import type { MeasurementFile, DataPoint, SpectraBlocker, SpectraSource } from '../types'
+import { detectFreqColumns, detectMetricColumn, extractSpectrumCells, type SpectrumWeighting } from '../utils/spectraColumns'
+import { deweightAToZ, missingAWeightBands } from '../utils/weighting'
+import { FormatError } from '../utils/formatError'
+
+export { FormatError }
 
 // ───────────────────────────────────────────────────────────────────────────
 // Constantes
@@ -196,9 +200,21 @@ function readMeta(wb: XLSX.WorkBook): Meta {
 // Mapping de colonnes
 // ───────────────────────────────────────────────────────────────────────────
 
+/**
+ * Plan d'extraction spectrale.
+ *
+ * `blocked` = les bandes ONT été reconnues mais ne peuvent pas être ramenées en
+ * LZeq de façon exacte (cf. `SpectraBlocker`). On produit alors un fichier SANS
+ * spectre plutôt qu'un spectre faux, en conservant le MOTIF — l'UI doit pouvoir
+ * distinguer « ce sonomètre n'exporte pas de spectre » de « le spectre exporté
+ * n'est pas exploitable ». Le reste du fichier (LAeq, LCeq, temps) se charge
+ * normalement : une pondération non inversible ne justifie pas de perdre la
+ * série temporelle.
+ */
 type SpectraPlan =
-  | { kind: 'freq'; cols: number[]; freqs: number[]; maxCols?: number[] }
+  | { kind: 'freq'; cols: number[]; freqs: number[]; maxCols?: number[]; weighting: SpectrumWeighting }
   | { kind: 'positional'; start: number; end: number; bands: number[] }
+  | { kind: 'blocked'; reason: SpectraBlocker; detail: string }
   | { kind: 'none' }
 
 export interface ColumnMap {
@@ -256,9 +272,15 @@ function buildColumnMap(headers: string[], spec: FormatSpec): ColumnMap {
     }
   }
 
+  // Garde AMONT de la dépondération : un jeu A dont une bande n'a pas de
+  // coefficient CEI 61672 est refusé ICI (une fois), jamais silencieusement
+  // ramené à 0 dB ligne par ligne.
   const freq = detectFreqColumns(headers)
+  const missingA = freq && freq.weighting === 'A' ? missingAWeightBands(freq.freqs) : []
   const spectra: SpectraPlan = freq
-    ? { kind: 'freq', cols: freq.cols, freqs: freq.freqs, maxCols: freq.maxCols }
+    ? (missingA.length > 0
+        ? { kind: 'blocked', reason: 'bande-hors-table', detail: `${missingA.join(', ')} Hz` }
+        : { kind: 'freq', cols: freq.cols, freqs: freq.freqs, maxCols: freq.maxCols, weighting: freq.weighting })
     : spec.positionalSpectra
       ? { kind: 'positional', ...spec.positionalSpectra }
       : { kind: 'none' }
@@ -450,10 +472,8 @@ const g4EnDetector: FormatDetector = makeDetector({
  * datetime combiné anglais et retombait sur la mauvaise colonne.
  *
  * NB : les bandes spectrales du G4-FR sont libellées à décimale VIRGULE
- * (« 1/3 LZeq 6,3 ») ; `detectFreqColumns` ne reconnaît aujourd'hui que les
- * libellés à point/entiers → les bandes basses (6,3–80 Hz) sont absentes du
- * spectre (limitation connue, suivi séparé — pas un « faux » : les fréquences
- * retenues restent correctement alignées).
+ * (« 1/3 LZeq 6,3 ») ; `parseSpectrumColumn` accepte les deux séparateurs, les
+ * bandes basses (6,3–80 Hz) sont donc bien présentes dans le spectre.
  */
 const g4FrDetector: FormatDetector = makeDetector({
   id: 'g4-fr',
@@ -589,11 +609,17 @@ export function rowToDataPoint(getCell: (colIndex: number) => unknown, cn: Colum
   if (cn.lafmaxCol >= 0) { const v = num(getCell(cn.lafmaxCol)); if (Number.isFinite(v)) dp.lafmax = v }
 
   if (cn.spectra.kind === 'freq') {
+    // INVARIANT : `dp.spectra` est du LZeq. Un jeu mesuré en A (821SE CSV) est
+    // dépondéré ICI — aucun consommateur aval n'a à connaître la pondération
+    // d'origine. La table est validée à la construction du plan : la
+    // `FormatError` de `deweightAToZ` est une garde, pas un chemin nominal.
+    const toZ = (v: number[]): number[] =>
+      cn.spectra.kind === 'freq' && cn.spectra.weighting === 'A' ? deweightAToZ(v, cn.spectra.freqs) : v
     const s = extractSpectrumCells(getCell, cn.spectra.cols)
-    if (s && s.length > 0) dp.spectra = s
+    if (s && s.length > 0) dp.spectra = toZ(s)
     if (cn.spectra.maxCols) {
       const sm = extractSpectrumCells(getCell, cn.spectra.maxCols)
-      if (sm && sm.length > 0) dp.spectraMax = sm
+      if (sm && sm.length > 0) dp.spectraMax = toZ(sm)
     }
   } else if (cn.spectra.kind === 'positional') {
     // Byte-identique à la borne `c < row.length` : hors plage, getCell → undefined
@@ -607,6 +633,35 @@ export function rowToDataPoint(getCell: (colIndex: number) => unknown, cn: Colum
   }
 
   return dp
+}
+
+/**
+ * Métadonnées spectrales du MeasurementFile (fréquences + provenance), dérivées
+ * du plan de colonnes. Partagé par le chemin dense (xlsx) et le chemin en flux
+ * (CSV) : une seule définition de la provenance, aucune divergence possible.
+ *
+ * `spectraSource` documente si le spectre stocké a été MESURÉ en Z ou
+ * RECONSTRUIT depuis du A. Rétention 10 ans : un spectre reconstruit doit rester
+ * distinguable d'un spectre mesuré, en UI comme à l'export.
+ */
+export function spectraMeta(cm: ColumnMap, nBands: number): {
+  spectraFreqs?: number[]
+  spectraSource?: SpectraSource
+  spectraUnavailable?: SpectraBlocker
+} {
+  if (cm.spectra.kind === 'blocked') return { spectraUnavailable: cm.spectra.reason }
+  if (nBands === 0) return {}
+  if (cm.spectra.kind === 'freq') {
+    return {
+      spectraFreqs: cm.spectra.freqs,
+      spectraSource: cm.spectra.weighting === 'A' ? 'A-déponderé' : 'Z-natif',
+    }
+  }
+  if (cm.spectra.kind === 'positional') {
+    const b = cm.spectra.bands
+    return { spectraFreqs: nBands === b.length ? b : b.slice(0, nBands), spectraSource: 'Z-natif' }
+  }
+  return {}
 }
 
 /** Boucle d'extraction UNIQUE, paramétrée par le mapping du détecteur retenu. */
@@ -653,13 +708,8 @@ export function parseWithMatch(
     ? (meta.startDate || firstDataDate || '')
     : (firstDataDate || meta.startDate || '')
 
-  // Fréquences des bandes présentes (pour aligner l'affichage/analyse Kt).
+  // Fréquences + provenance des bandes présentes (alignement affichage/Kt).
   const nBands = data.find((d) => d.spectra)?.spectra?.length ?? 0
-  let spectraFreqs: number[] | undefined
-  if (cm.spectra.kind === 'freq') spectraFreqs = cm.spectra.freqs
-  else if (cm.spectra.kind === 'positional' && nBands > 0) {
-    spectraFreqs = nBands === cm.spectra.bands.length ? cm.spectra.bands : cm.spectra.bands.slice(0, nBands)
-  }
 
   return {
     id: crypto.randomUUID(),
@@ -672,15 +722,7 @@ export function parseWithMatch(
     point: null,
     data,
     rowCount: data.length,
-    ...(nBands > 0 && spectraFreqs ? { spectraFreqs } : {}),
-  }
-}
-
-/** Erreur de format porteuse d'un diagnostic (feuilles/en-têtes vus). */
-export class FormatError extends Error {
-  constructor(message: string) {
-    super(message)
-    this.name = 'FormatError'
+    ...spectraMeta(cm, nBands),
   }
 }
 

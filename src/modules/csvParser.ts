@@ -14,6 +14,7 @@ import {
   selectFormatFromSource,
   rowToDataPoint,
   serialDaysToISO,
+  spectraMeta,
   FormatError,
   type SheetSource,
   type SelectOutcome,
@@ -251,13 +252,8 @@ export async function parseCsv(blob: Blob, fileName: string, resumeBlob?: Blob, 
     throw new FormatError(`Aucune donnée exploitable dans "${fileName}" (format ${outcome.detectorId} reconnu mais lignes illisibles).`)
   }
 
-  // Alignement spectral (même logique que parseWithMatch).
+  // Alignement + provenance spectrale : MÊME helper que parseWithMatch.
   const nBands = data.find((d) => d.spectra)?.spectra?.length ?? 0
-  let spectraFreqs: number[] | undefined
-  if (cm.spectra.kind === 'freq') spectraFreqs = cm.spectra.freqs
-  else if (cm.spectra.kind === 'positional' && nBands > 0) {
-    spectraFreqs = nBands === cm.spectra.bands.length ? cm.spectra.bands : cm.spectra.bands.slice(0, nBands)
-  }
 
   // Métadonnées depuis le Résumé apparié, sinon défauts (jamais bloquant).
   const meta = resumeBlob ? await readResumeMeta(resumeBlob) : DEFAULT_CSV_META
@@ -273,6 +269,6 @@ export async function parseCsv(blob: Blob, fileName: string, resumeBlob?: Blob, 
     point: null,
     data,
     rowCount: data.length,
-    ...(nBands > 0 && spectraFreqs ? { spectraFreqs } : {}),
+    ...spectraMeta(cm, nBands),
   }
 }

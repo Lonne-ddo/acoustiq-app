@@ -27,6 +27,7 @@ export type Corr9801Cause =
   | 'no-lceq'
   | 'no-lafmax'
   | 'no-spectrum'
+  | 'misaligned-bands'
   | 'invalid-values'
   | 'no-data'
   | 'unknown'
@@ -47,6 +48,11 @@ export interface Corr9801Facts {
   spectrumPresent: boolean
   /** Kt : toutes les bandes du spectre moyen ont au moins une valeur finie. */
   spectrumValid: boolean
+  /**
+   * Kt : les fréquences du spectre se superposent à `KT_BAND_FREQS`. Faux =
+   * bandes présentes mais impossibles à mettre en face de l'analyse.
+   */
+  spectrumAligned: boolean
 }
 
 /**
@@ -63,6 +69,9 @@ export function classifyCorr9801(term: Corr9801Term, facts: Corr9801Facts): Corr
   if (term === 'kt') {
     if (!facts.spectrumPresent) return 'no-spectrum'
     if (!facts.spectrumValid) return 'invalid-values'
+    // DISTINCT de 'no-spectrum' : les bandes existent, c'est leur mise en face
+    // des bandes d'analyse qui n'est pas prouvée.
+    if (!facts.spectrumAligned) return 'misaligned-bands'
     return 'unknown'
   }
   // ki
@@ -83,6 +92,9 @@ export function corr9801CauseMessage(term: Corr9801Term, cause: Corr9801Cause): 
       return `${t} indisponible — LAFmax 1 s absent du fichier source`
     case 'no-spectrum':
       return `${t} indisponible — spectre 1/3 d'octave absent du fichier source`
+    case 'misaligned-bands':
+      return `${t} indisponible — alignement des bandes non vérifiable : le spectre ne se `
+        + `superpose pas aux bandes d'analyse (50 Hz – 10 kHz)`
     case 'invalid-values':
       return `${t} indisponible — valeurs présentes mais non exploitables (non finies)`
     case 'no-data':
@@ -114,6 +126,12 @@ export interface Corr9801TermDetail {
  */
 export function computeCorr9801Point(
   dps: DataPoint[],
+  /**
+   * Fréquences centrales réelles du spectre (`MeasurementFile.spectraFreqs`).
+   * OBLIGATOIRE : sans elles, l'alignement des bandes n'est pas vérifiable et
+   * Kt est déclaré indisponible plutôt que calculé de travers.
+   */
+  spectraFreqs: number[] | undefined,
 ): Record<Corr9801Term, Corr9801TermDetail> {
   const hasData = dps.length > 0
   const laeqWin = hasData ? laeqAvg(dps.map((d) => d.laeq)) : 0
@@ -143,6 +161,7 @@ export function computeCorr9801Point(
   const spectrumPresent = specs.length > 0
   let ktAnalysis: KtAnalysis | null = null
   let spectrumValid = false
+  let spectrumAligned = true
   if (spectrumPresent) {
     const nBands = specs[0].length
     const avgSpec: number[] = []
@@ -155,9 +174,13 @@ export function computeCorr9801Point(
       }
       avgSpec.push(laeqAvg(finiteBand))
     }
-    if (spectrumValid) ktAnalysis = analyzeKt9801(avgSpec, laeqWin)
+    if (spectrumValid) {
+      ktAnalysis = analyzeKt9801(avgSpec, laeqWin, spectraFreqs)
+      // Alignement non prouvé ⇒ Kt INDISPONIBLE (jamais un 0 muet).
+      if (ktAnalysis.unavailable) spectrumAligned = false
+    }
   }
-  const ktVal = ktAnalysis ? ktAnalysis.kt : null
+  const ktVal = ktAnalysis && !ktAnalysis.unavailable ? ktAnalysis.kt : null
 
   const facts: Corr9801Facts = {
     hasData,
@@ -167,6 +190,7 @@ export function computeCorr9801Point(
     laftm5IsNull: laftm5 === null,
     spectrumPresent,
     spectrumValid,
+    spectrumAligned,
   }
   const causeOf = (term: Corr9801Term, val: number | null): Corr9801Cause | null =>
     val === null ? classifyCorr9801(term, facts) : null

@@ -7,7 +7,7 @@
  * après que l'auteur du rapport ait oublié quel sonomètre exportait quoi. Une
  * source unique de libellés évite que l'écran et l'export ne se contredisent.
  */
-import type { SpectraBlocker, SpectraSource } from '../types'
+import type { MeasurementFile, SpectraBlocker, SpectraSource } from '../types'
 
 /** Libellé court (badge, en-tête de colonne d'export). */
 export const SPECTRA_SOURCE_LABEL: Record<SpectraSource, string> = {
@@ -33,4 +33,31 @@ export const SPECTRA_BLOCKER_MESSAGE: Record<SpectraBlocker, string> = {
     'Spectre non calculable : bandes mesurées en dB(A) dont au moins une n\'a pas de '
     + 'coefficient de pondération A normalisé (hors 6,3 Hz – 20 kHz). Le spectre n\'est pas '
     + 'reconstruit — aucune valeur n\'est inventée.',
+}
+
+/**
+ * Fréquences centrales du spectre d'un POINT de mesure, à une date donnée.
+ *
+ * Nécessaire à `checkKtAlignment` : sans elles, l'analyse tonale refuse de
+ * produire un résultat. Renvoie `undefined` si aucun fichier ne les déclare —
+ * mais AUSSI si deux fichiers du même point déclarent des découpages
+ * DIFFÉRENTS : leurs spectres sont alors moyennés bande à bande sans base
+ * commune, et le résultat n'est vérifiable pour aucun des deux.
+ */
+export function spectraFreqsForPoint(
+  files: MeasurementFile[],
+  pointMap: Record<string, string>,
+  point: string,
+  date: string,
+): number[] | undefined {
+  let ref: number[] | undefined
+  for (const f of files) {
+    if (pointMap[f.id] !== point || f.date !== date) continue
+    const freqs = f.spectraFreqs
+    if (!freqs || freqs.length === 0) continue
+    if (!ref) { ref = freqs; continue }
+    const same = ref.length === freqs.length && ref.every((v, i) => v === freqs[i])
+    if (!same) return undefined // découpages incompatibles → non vérifiable
+  }
+  return ref
 }

@@ -32,6 +32,7 @@ import {
 } from 'lucide-react'
 import { loadAll as loadRegulationDocs, OFFICIAL_SOURCES } from '../modules/regulationDB'
 import HelpTooltip from './HelpTooltip'
+import { spectraFreqsForPoint } from '../utils/spectraProvenance'
 import type { MeasurementFile, DataPoint, ConformiteSummary, Period as NamedPeriod, Category } from '../types'
 import {
   laeqAvg,
@@ -297,9 +298,13 @@ export default function Conformite2026({
             const vals = specs.map((s) => s[i]).filter((v) => typeof v === 'number')
             return laeqAvg(vals)
           })
-          ktAnalysis = analyzeKt(avgSpec, ba)
-          kt = ktAnalysis.kt
-          ktAuto = true
+          // Alignement PROUVÉ ou rien : un Kt de 0 sur un spectre désaligné
+          // serait un échec technique déguisé en « pas de tonalité ».
+          ktAnalysis = analyzeKt(avgSpec, ba, spectraFreqsForPoint(files, pointMap, pt, selectedDate))
+          if (!ktAnalysis.unavailable) {
+            kt = ktAnalysis.kt
+            ktAuto = true
+          }
         }
       }
 
@@ -792,6 +797,17 @@ export default function Conformite2026({
                             }
                             hasOverride={ktManual[r.point] !== undefined}
                           />
+                          {/* Kt non évalué : le motif s'affiche à la place du
+                              détail, pour qu'un 0 automatique ne se lise jamais
+                              comme « pas de tonalité ». */}
+                          {ktManual[r.point] === undefined && r.ktAnalysis?.unavailable && (
+                            <div
+                              className="mt-0.5 text-[9px] leading-tight text-amber-400"
+                              title={r.ktAnalysis.unavailable.message}
+                            >
+                              Non évaluable
+                            </div>
+                          )}
                           {r.ktAuto && ktManual[r.point] === undefined && r.ktAnalysis && (() => {
                             const a = r.ktAnalysis
                             const detected = a.kt > 0 && a.triggeringIndex !== null

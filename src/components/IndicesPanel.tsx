@@ -31,6 +31,7 @@ import {
   type Corr9801Term,
   type Corr9801TermDetail,
 } from '../utils/corr9801'
+import { spectraFreqsForPoint } from '../utils/spectraProvenance'
 import { windowData, isRegPeriodMode, type IndicesMode } from '../utils/indicesWindow'
 
 /** Libellés courts des modes période (toggle + libellé d'export). */
@@ -210,7 +211,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
           return laeqAvg(vals)
         })
         const laeqA = laeqAvg(dps.map((d) => d.laeq))
-        return [pt, detectKt(avgSpec, laeqA)]
+        return [pt, detectKt(avgSpec, laeqA, spectraFreqsForPoint(files, pointMap, pt, selectedDate))]
       }),
     ) as Record<string, ReturnType<typeof detectKt> | null>
   }, [files, pointMap, selectedDate, pointNames, mode, startTime, endTime, periods, categories, excludedCatIds])
@@ -229,7 +230,7 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
           .flatMap((f) => filterDataByPeriods(f.data, f.date, periods, categories, { excludeCategoryIds: excludedCatIds }))
         const dps = windowData(cat, mode, startMin, endMin)
         // Brique partagée + testée (filtre Number.isFinite : NaN ⇒ indispo, pas 0).
-        return [pt, computeCorr9801Point(dps)]
+        return [pt, computeCorr9801Point(dps, spectraFreqsForPoint(files, pointMap, pt, selectedDate))]
       }),
     ) as Record<string, Record<Corr9801Term, Corr9801TermDetail>>
   }, [files, pointMap, selectedDate, pointNames, mode, startTime, endTime, periods, categories, excludedCatIds])
@@ -711,6 +712,19 @@ export default function IndicesPanel({ files, pointMap, selectedDate, meteo, agg
                 if (!det) {
                   return (
                     <td key={pt} className="px-4 py-1.5 text-center text-gray-700">—</td>
+                  )
+                }
+                // « Non » = tonalité RECHERCHÉE et absente. Si l'analyse n'a
+                // pas pu être menée, on l'écrit — jamais un « Non » rassurant.
+                if (det.unavailable) {
+                  return (
+                    <td
+                      key={pt}
+                      className="px-4 py-1.5 text-center text-amber-400 text-[11px]"
+                      title={det.unavailable.message}
+                    >
+                      Non évaluable
+                    </td>
                   )
                 }
                 if (!det.detected) {

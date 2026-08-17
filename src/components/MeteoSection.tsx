@@ -59,7 +59,12 @@ export default function MeteoSection({ meteo, onChange }: Props) {
                 value={meteo.windSpeed ?? ''}
                 onChange={(e) => set('windSpeed', parseNum(e.target.value))}
                 placeholder="km/h"
-                className="flex-1 text-xs bg-gray-800 text-gray-100 border border-gray-600 rounded
+                /* `min-w-0` : la taille minimale automatique d'un contrôle de
+                   formulaire n'est pas zéro mais sa largeur intrinsèque, pilotée
+                   par l'attribut `size` par défaut (~20 caractères). Sans cette
+                   classe, la ligne ne descend pas sous ~184 px alors que le
+                   panneau va jusqu'à 180. */
+                className="flex-1 min-w-0 text-xs bg-gray-800 text-gray-100 border border-gray-600 rounded
                            px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               />
               <span className="text-xs text-gray-500">km/h</span>
@@ -108,7 +113,8 @@ export default function MeteoSection({ meteo, onChange }: Props) {
                 value={meteo.temperature ?? ''}
                 onChange={(e) => set('temperature', parseNum(e.target.value))}
                 placeholder="°C"
-                className="flex-1 text-xs bg-gray-800 text-gray-100 border border-gray-600 rounded
+                /* `min-w-0` — même raison que le champ « Vitesse du vent ». */
+                className="flex-1 min-w-0 text-xs bg-gray-800 text-gray-100 border border-gray-600 rounded
                            px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500"
               />
               <span className="text-xs text-gray-500">°C</span>

@@ -456,7 +456,10 @@ function FileList({
                   name="np"
                   autoFocus
                   placeholder="Nom du point"
-                  className="flex-1 text-[11px] bg-gray-800 text-emerald-300 border border-gray-700
+                  /* `min-w-0` — même défaut que les champs de MeteoSection :
+                     un <input> flex ne descend pas sous sa largeur intrinsèque
+                     (~20 caractères) sans cette classe. */
+                  className="flex-1 min-w-0 text-[11px] bg-gray-800 text-emerald-300 border border-gray-700
                              rounded px-1.5 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500
                              placeholder:text-gray-600"
                   onKeyDown={(e) => { if (e.key === 'Escape') setNewPointInput(null) }}

@@ -161,7 +161,14 @@ export default function CategoriesManager({
                   {c.name}
                 </button>
               )}
-              <span className="text-[10px] text-gray-500 shrink-0">
+              {/* Compteur : compressible, pas `shrink-0`. Il pesait ~40 px
+                  incompressibles et laissait la ligne à ~173 px de plancher
+                  pour un panneau qui descend à 180 — aucune marge dès qu'un
+                  libellé de statut s'allonge. Valeur complète au survol. */}
+              <span
+                className="text-[10px] text-gray-500 min-w-0 truncate"
+                title={`${stat.count} période(s)${c.mode !== 'annotation' && stat.count > 0 ? ` · ${fmtDuration(stat.ms)} au total` : ''}`}
+              >
                 {stat.count}{c.mode !== 'annotation' && stat.count > 0 ? ` · ${fmtDuration(stat.ms)}` : ''}
               </span>
               <button

@@ -584,7 +584,13 @@ function FileList({
                             <span className="flex-1 truncate text-gray-300 font-mono" title={a.name}>
                               {a.name}
                             </span>
-                            <span className="shrink-0 text-gray-500 font-mono">
+                            {/* Bloc horaire : compressible, pas `shrink-0`.
+                                En font-mono il pesait ~121 px incompressibles,
+                                ce qui portait le plancher de la ligne à ~262 px
+                                pour un panneau de 220. Le nom du fichier est
+                                l'identifiant, l'horaire un détail — le title de
+                                la <li> le répète en entier au survol. */}
+                            <span className="min-w-0 truncate text-gray-500 font-mono">
                               {durLabel} · {h(a.startMin)} → {h(endMin)}
                             </span>
                             <button
@@ -1125,8 +1131,14 @@ function Sidebar({
         </div>
       </div>
 
-      {/* Zone scrollable — 3 sections accordéon */}
-      <div className="flex-1 overflow-y-auto flex flex-col">
+      {/* Zone scrollable — 3 sections accordéon.
+          `overflow-x-hidden` explicite : Tailwind ne pose que `overflow-y`, et
+          la spec CSS calcule alors `overflow-x: visible` en `auto` — d'où une
+          barre de défilement horizontale qui apparaissait sans qu'aucune classe
+          ne la demande. Filet de sécurité seulement : le contenu large est
+          traité à la source (break-words sur les erreurs, truncate sur les
+          blocs horaires et compteurs), pas masqué ici. */}
+      <div className="flex-1 overflow-y-auto overflow-x-hidden flex flex-col">
         {/* Erreurs */}
         {errors.length > 0 && (
           <div className="px-3 py-2 space-y-1 shrink-0">
@@ -1137,7 +1149,14 @@ function Sidebar({
                            border border-red-800/50 rounded px-2 py-1.5"
               >
                 <AlertCircle size={12} className="mt-0.5 shrink-0" />
-                <span className="flex-1">{err}</span>
+                {/* `min-w-0 break-words` : les messages d'erreur concaténent des
+                    noms de fichiers (cf. project.missingFiles), et un nom comme
+                    « BV-94_Sonometre_831C_2026-03-09.xlsx » est un mot insécable
+                    de plus de 300 px — il imposait sa largeur au panneau entier.
+                    `break-word` ne coupe que ce qui ne tient pas : les phrases
+                    gardent leur césure aux espaces, le nom reste lisible en
+                    entier sur deux lignes plutôt que d'être masqué. */}
+                <span className="flex-1 min-w-0 break-words">{err}</span>
                 <button onClick={() => onClearError(i)} className="shrink-0 hover:text-red-200">
                   <X size={10} />
                 </button>

@@ -1056,14 +1056,20 @@ function Sidebar({
         <p className="text-xs text-gray-400 mt-1">{t('sidebar.subtitle')}</p>
       </div>
 
-      {/* Actions rapides : projet + checklist */}
-      <div className="px-3 py-2 border-b border-gray-800 shrink-0 flex gap-1.5">
+      {/* Actions rapides : projet + checklist
+          `flex-wrap` : la largeur du panneau (180–480 px, redimensionnable) descend
+          sous le minimum insécable de la barre (~296 px en FR, « Sauvegarder » ne se
+          coupe pas). Sans retour à la ligne, les items débordaient sous <main>, qui
+          est `overflow-hidden` et opaque — d'où l'effet de troncature au bord droit.
+          Les 3 icônes secondaires sont groupées pour basculer d'un bloc. */}
+      <div className="px-3 py-2 border-b border-gray-800 shrink-0 flex flex-wrap gap-1.5">
         <input ref={projectInputRef} type="file" accept=".json" className="hidden" onChange={handleProjectLoad} />
         {/* Primaire : « Sauvegarder » = Dataverse (voie par défaut, AUCUN download) */}
         <button
           onClick={onSaveDataverse}
           disabled={files.length === 0 || dataverseSaving}
           title="Sauvegarder dans Dataverse (données brutes incluses)"
+          aria-label="Sauvegarder dans Dataverse (données brutes incluses)"
           className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
                      bg-gray-800 text-gray-300 hover:bg-gray-700 disabled:opacity-30
                      text-xs font-medium transition-colors"
@@ -1073,6 +1079,8 @@ function Sidebar({
         </button>
         <button
           onClick={() => projectInputRef.current?.click()}
+          title={t('sidebar.open')}
+          aria-label={t('sidebar.open')}
           className="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 rounded
                      bg-gray-800 text-gray-300 hover:bg-gray-700
                      text-xs font-medium transition-colors"
@@ -1080,38 +1088,41 @@ function Sidebar({
           <FolderOpen size={11} />
           {t('sidebar.open')}
         </button>
-        {/* Secondaire discret : export fichier JSON (déclenché explicitement) */}
-        <button
-          onClick={onSaveProject}
-          disabled={files.length === 0}
-          title={t('sidebar.export')}
-          aria-label={t('sidebar.export')}
-          className="flex items-center justify-center px-2 py-1.5 rounded
-                     bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200 disabled:opacity-30
-                     transition-colors"
-        >
-          <Download size={12} />
-        </button>
-        <button
-          onClick={onOpenDataverse}
-          title="Ouvrir depuis Dataverse"
-          aria-label="Ouvrir depuis Dataverse"
-          className="flex items-center justify-center px-2 py-1.5 rounded
-                     bg-gray-800 text-gray-300 hover:bg-gray-700
-                     text-xs font-medium transition-colors"
-        >
-          <DatabaseBackup size={12} />
-        </button>
-        <button
-          onClick={onOpenChecklist}
-          className="flex items-center justify-center px-2 py-1.5 rounded
-                     bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-emerald-300
-                     transition-colors"
-          title="Checklist terrain"
-          aria-label="Checklist terrain"
-        >
-          <ClipboardCheck size={12} />
-        </button>
+        {/* Secondaires : groupés pour passer à la ligne ensemble, jamais disloqués */}
+        <div className="flex gap-1.5">
+          {/* Export fichier JSON (déclenché explicitement) */}
+          <button
+            onClick={onSaveProject}
+            disabled={files.length === 0}
+            title={t('sidebar.export')}
+            aria-label={t('sidebar.export')}
+            className="flex items-center justify-center px-2 py-1.5 rounded
+                       bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-gray-200 disabled:opacity-30
+                       transition-colors"
+          >
+            <Download size={12} />
+          </button>
+          <button
+            onClick={onOpenDataverse}
+            title="Ouvrir depuis Dataverse"
+            aria-label="Ouvrir depuis Dataverse"
+            className="flex items-center justify-center px-2 py-1.5 rounded
+                       bg-gray-800 text-gray-300 hover:bg-gray-700
+                       text-xs font-medium transition-colors"
+          >
+            <DatabaseBackup size={12} />
+          </button>
+          <button
+            onClick={onOpenChecklist}
+            className="flex items-center justify-center px-2 py-1.5 rounded
+                       bg-gray-800 text-gray-300 hover:bg-gray-700 hover:text-emerald-300
+                       transition-colors"
+            title="Checklist terrain"
+            aria-label="Checklist terrain"
+          >
+            <ClipboardCheck size={12} />
+          </button>
+        </div>
       </div>
 
       {/* Zone scrollable — 3 sections accordéon */}

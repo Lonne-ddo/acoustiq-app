@@ -33,6 +33,7 @@ import type { MeasurementFile, SourceEvent, ZoomRange, AppSettings, CandidateEve
 import { PERIOD_PALETTE } from '../types'
 import type { AudioCoverageRange } from '../hooks/useAudioSync'
 import { findCoveringRange } from '../hooks/useAudioSync'
+import { buildAudioZones } from '../utils/audioZones'
 import AudioTimelineBar from './audio/AudioTimelineBar'
 import type { ClassifiedSegment } from '../utils/yamnetProcessor'
 import { laeqAvg } from '../utils/acoustics'
@@ -51,6 +52,47 @@ const FALLBACK_COLORS = ['#ec4899', '#84cc16', '#f97316', '#a78bfa']
 
 function getPointColor(point: string, index: number, custom?: Record<string, string>): string {
   return custom?.[point] ?? POINT_COLORS[point] ?? FALLBACK_COLORS[index % FALLBACK_COLORS.length]
+}
+
+// ─── Surbrillance des plages couvertes par un fichier audio ─────────────────
+// Magenta Okabe-Ito. La couleur ne porte JAMAIS l'information seule :
+// l'utilisateur peut assigner n'importe quelle couleur de PERIOD_PALETTE à une
+// catégorie, magenta compris. Le discriminant fiable est la hachure — aucune
+// catégorie n'utilise de motif, elles se distinguent par un contour pointillé.
+const AUDIO_HATCH_COLOR = '#CC79A7'
+const AUDIO_HATCH_ID = 'audio-hatch'
+const AUDIO_HATCH_SWATCH_ID = 'audio-hatch-swatch'
+
+/**
+ * Motif de hachure diagonale, défini deux fois sous deux `id` distincts :
+ * une fois dans le SVG du graphique, une fois dans celui de la pastille de
+ * légende. Deux `id` plutôt qu'une référence croisée — chaque SVG reste
+ * autonome, et aucun `id` n'est dupliqué dans le document.
+ *
+ * `strokeOpacity` diffère entre les deux usages : 0.10 dans le graphique pour
+ * ne jamais masquer la courbe LAeq, plus marqué dans la pastille de 10 px où
+ * 0.10 serait illisible. Géométrie et couleur, elles, sont identiques.
+ */
+function AudioHatchPattern({ id, strokeOpacity }: { id: string; strokeOpacity: number }) {
+  return (
+    <pattern
+      id={id}
+      width={6}
+      height={6}
+      patternUnits="userSpaceOnUse"
+      patternTransform="rotate(45)"
+    >
+      <line
+        x1={0}
+        y1={0}
+        x2={0}
+        y2={6}
+        stroke={AUDIO_HATCH_COLOR}
+        strokeWidth={2}
+        strokeOpacity={strokeOpacity}
+      />
+    </pattern>
+  )
 }
 
 /** Convertit des minutes depuis minuit en chaîne HH:MM */
@@ -744,6 +786,15 @@ export default function TimeSeriesChart({
 
   // Plage effective (zoom ou pleine)
   const effectiveRange = zoomRange ?? fullRange
+
+  // Bandes de surbrillance audio : tronquées à `fullRange` (comme periodBounds)
+  // et fusionnées quand elles se touchent. Le zoom est géré par
+  // ifOverflow="hidden" côté rendu, d'où `fullRange` et non `effectiveRange`.
+  // Tableau vide = ni bande, ni entrée de légende.
+  const audioZones = useMemo(
+    () => buildAudioZones(audioCoverage ?? [], fullRange),
+    [audioCoverage, fullRange],
+  )
 
   // Synchronisation des refs pour l'export PNG (déclaré plus haut)
   exportStateRef.current.effectiveRange = effectiveRange
@@ -1492,6 +1543,31 @@ export default function TimeSeriesChart({
           )
         })()}
 
+        {/* Légende de la surbrillance audio. Volontairement hors du <Legend>
+            Recharts : celui-ci est alimenté par les séries et son onClick
+            résout un dataKey de ligne pour basculer la visibilité d'un point —
+            y injecter un payload le casserait. Rendue seulement s'il y a au
+            moins une bande à l'écran (pas de légende fantôme). */}
+        {audioZones.length > 0 && (
+          <span className="flex items-center gap-1.5 text-[10px] text-gray-400">
+            <svg width={10} height={10} aria-hidden="true" className="shrink-0">
+              <defs>
+                <AudioHatchPattern id={AUDIO_HATCH_SWATCH_ID} strokeOpacity={0.6} />
+              </defs>
+              <rect
+                x={0.5}
+                y={0.5}
+                width={9}
+                height={9}
+                fill={`url(#${AUDIO_HATCH_SWATCH_ID})`}
+                stroke={AUDIO_HATCH_COLOR}
+                strokeOpacity={0.45}
+              />
+            </svg>
+            Audio disponible
+          </span>
+        )}
+
         {/* Astuces (?) — tooltip au survol */}
         <div className="relative group">
           <HelpCircle size={13} className="text-gray-600 hover:text-gray-300 transition-colors cursor-help" />
@@ -1707,6 +1783,14 @@ export default function TimeSeriesChart({
         <div ref={chartRef} className="h-full px-4 py-3">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={visibleData} margin={{ top: 8, right: 24, left: 0, bottom: 8 }}>
+              {/* Motif de hachure de la surbrillance audio. Défini seulement
+                  s'il y a au moins une bande à rendre. */}
+              {audioZones.length > 0 && (
+                <defs>
+                  <AudioHatchPattern id={AUDIO_HATCH_ID} strokeOpacity={0.1} />
+                </defs>
+              )}
+
               <CartesianGrid strokeDasharray="3 3" stroke="#1f2937" />
 
               {/* Multi-jours : fond alterné subtil un jour sur deux (jours pairs = transparent, impairs = blanc 2%) */}
@@ -2021,6 +2105,27 @@ export default function TimeSeriesChart({
                   />
                 )
               })}
+
+              {/* Surbrillance des plages couvertes par un fichier audio chargé.
+                  Placée après les périodes pour que la hachure reste lisible
+                  par-dessus une bande de catégorie, mais avant les <Line> :
+                  la courbe LAeq passe toujours au-dessus.
+                  Bandes déjà tronquées et fusionnées par buildAudioZones ;
+                  ifOverflow="hidden" empêche toute extension de l'axe au zoom. */}
+              {audioZones.map((z) => (
+                <ReferenceArea
+                  key={`audio-${z.key}`}
+                  yAxisId="left"
+                  x1={z.x1}
+                  x2={z.x2}
+                  fill={`url(#${AUDIO_HATCH_ID})`}
+                  fillOpacity={1}
+                  stroke={AUDIO_HATCH_COLOR}
+                  strokeOpacity={0.45}
+                  strokeDasharray="2 3"
+                  ifOverflow="hidden"
+                />
+              ))}
 
               {/* Multi-jours : séparateurs de minuit + label du jour */}
               {isMultiDay && sortedDates.map((iso, i) => {

@@ -4,10 +4,24 @@
  * Les catégories (création, visibilité, mode de calcul) sont gérées dans la
  * sidebar (CategoriesManager). Ce panneau ne fait qu'afficher / éditer les
  * périodes et leur assignation de catégorie.
+ *
+ * Édition : le nom, l'heure de début et l'heure de fin sont modifiables en
+ * place (clic → champ, Entrée valide, Échap annule). La durée n'est jamais
+ * saisie, elle se déduit des bornes. Les bornes gardent leur jour civil —
+ * voir utils/periodEdit.
  */
-import { useMemo, useState } from 'react'
-import { ChevronDown, Plus, Trash2, Check } from 'lucide-react'
+import { Fragment, useMemo, useRef, useState } from 'react'
+import { ChevronDown, Plus, Trash2, Check, AlertTriangle, CalendarPlus } from 'lucide-react'
 import type { Period, Category } from '../types'
+import {
+  validatePeriodEdit,
+  applyTimeChange,
+  parseHHMMSS,
+  shiftToNextDay,
+  fmtDayMonth,
+  dateToMsAtMidnight,
+  type MeasureRange,
+} from '../utils/periodEdit'
 
 interface Props {
   periods: Period[]
@@ -16,6 +30,9 @@ interface Props {
   onRemove: (id: string) => void
   categories: Category[]
   selectedDate: string // YYYY-MM-DD — ancre pour les périodes ajoutées manuellement
+  /** Plage couverte par les fichiers de mesure du jour. Omise → aucun
+   *  avertissement de hors-plage (comportement d'avant cette fonctionnalité). */
+  measureRange?: MeasureRange | null
 }
 
 function fmtHHMMSS(ms: number): string {
@@ -35,23 +52,9 @@ function fmtDuration(ms: number): string {
   return parts.join('')
 }
 
-function parseHHMMSS(s: string): number | null {
-  const m = s.match(/^(\d{1,2}):(\d{2})(?::(\d{2}))?$/)
-  if (!m) return null
-  const h = parseInt(m[1], 10)
-  const mi = parseInt(m[2], 10)
-  const se = m[3] ? parseInt(m[3], 10) : 0
-  if (h > 23 || mi > 59 || se > 59) return null
-  return ((h * 60 + mi) * 60 + se) * 1000
-}
+type BoundField = 'start' | 'end'
 
-function dateToMsAtMidnight(iso: string): number {
-  const m = iso.match(/^(\d{4})-(\d{2})-(\d{2})$/)
-  if (!m) return NaN
-  return new Date(parseInt(m[1], 10), parseInt(m[2], 10) - 1, parseInt(m[3], 10)).getTime()
-}
-
-export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categories, selectedDate }: Props) {
+export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categories, selectedDate, measureRange }: Props) {
   const [open, setOpen] = useState(true)
   const [adding, setAdding] = useState(false)
   const [formName, setFormName] = useState('')
@@ -61,7 +64,17 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
   const [formNotes, setFormNotes] = useState('')
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editingName, setEditingName] = useState('')
+  const [editingBound, setEditingBound] = useState<{ id: string; field: BoundField } | null>(null)
+  const [boundDraft, setBoundDraft] = useState('')
+  /** Message de refus affiché sous la ligne en cours d'édition. */
+  const [rowError, setRowError] = useState<{ id: string; msg: string } | null>(null)
   const [filterCat, setFilterCat] = useState<string>('all')
+
+  /** Échap démonte l'input ; ce drapeau garantit que le onBlur qui suit ne
+   *  valide pas la saisie abandonnée. Sans lui, T6 dépendrait du fait qu'un
+   *  navigateur n'émet pas `blur` sur un élément retiré du DOM — vrai
+   *  aujourd'hui, mais jamais garanti. */
+  const skipBlurRef = useRef(false)
 
   const catById = useMemo(() => new Map(categories.map((c) => [c.id, c])), [categories])
 
@@ -70,7 +83,33 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
     [periods, filterCat],
   )
 
+  /** Contrôle permanent de chaque période — les avertissements ne sont pas
+   *  réservés au moment de l'édition. Une période hors plage doit se signaler
+   *  d'elle-même, y compris si elle a été créée par glisser sur le graphique. */
+  const checks = useMemo(
+    () =>
+      new Map(
+        periods.map((p) => [
+          p.id,
+          validatePeriodEdit({ name: p.name, startMs: p.startMs, endMs: p.endMs }, measureRange),
+        ]),
+      ),
+    [periods, measureRange],
+  )
+
   const defaultAddCat = categories.find((c) => c.visible && c.mode === 'include')?.id ?? categories[0]?.id ?? ''
+
+  /** Jour de la fin si le formulaire d'ajout va reporter la borne au lendemain.
+   *  Rend visible le +24 h que submitAdd applique — même calcul, à l'identique. */
+  const addWrapDay = useMemo(() => {
+    const s = parseHHMMSS(formStart)
+    const e = parseHHMMSS(formEnd)
+    if (s === null || e === null || !selectedDate) return null
+    const base = dateToMsAtMidnight(selectedDate)
+    if (!Number.isFinite(base)) return null
+    if (base + e > base + s) return null
+    return fmtDayMonth(base + e + 24 * 3600 * 1000)
+  }, [formStart, formEnd, selectedDate])
 
   function submitAdd() {
     const start = parseHHMMSS(formStart)
@@ -91,6 +130,73 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
     })
     setAdding(false); setFormName(''); setFormNotes('')
   }
+
+  // ── Édition du nom ────────────────────────────────────────────────────────
+  function startEditName(p: Period) {
+    setEditingBound(null)
+    setRowError(null)
+    setEditingId(p.id)
+    setEditingName(p.name)
+  }
+
+  /** @returns vrai si la modification a été acceptée. */
+  function commitName(p: Period): boolean {
+    const v = validatePeriodEdit(
+      { name: editingName, startMs: p.startMs, endMs: p.endMs },
+      measureRange,
+    )
+    if (!v.ok) {
+      // Refus explicite. On NE rétablit PAS l'ancien nom en silence : le champ
+      // reste ouvert avec la saisie fautive et le motif s'affiche.
+      setRowError({ id: p.id, msg: v.errors.join(' ') })
+      return false
+    }
+    onUpdate(p.id, { name: editingName.trim() })
+    setEditingId(null)
+    setRowError(null)
+    return true
+  }
+
+  function cancelEdit() {
+    skipBlurRef.current = true
+    setEditingId(null)
+    setEditingBound(null)
+    setRowError(null)
+  }
+
+  // ── Édition des bornes ────────────────────────────────────────────────────
+  function startEditBound(p: Period, field: BoundField) {
+    setEditingId(null)
+    setRowError(null)
+    setEditingBound({ id: p.id, field })
+    setBoundDraft(fmtHHMMSS(field === 'start' ? p.startMs : p.endMs))
+  }
+
+  function commitBound(p: Period, field: BoundField): boolean {
+    const originalMs = field === 'start' ? p.startMs : p.endMs
+    const nextMs = applyTimeChange(originalMs, boundDraft)
+    if (nextMs === null) {
+      setRowError({ id: p.id, msg: 'Heure illisible — format attendu HH:MM ou HH:MM:SS.' })
+      return false
+    }
+    const draft = field === 'start'
+      ? { name: p.name, startMs: nextMs, endMs: p.endMs }
+      : { name: p.name, startMs: p.startMs, endMs: nextMs }
+    const v = validatePeriodEdit(draft, measureRange)
+    if (!v.ok) {
+      setRowError({ id: p.id, msg: v.errors.join(' ') })
+      return false
+    }
+    // Les avertissements (bornes inversées, hors plage) n'empêchent jamais
+    // l'écriture : ils s'affichent ensuite sous la ligne, en permanence.
+    onUpdate(p.id, field === 'start' ? { startMs: nextMs } : { endMs: nextMs })
+    setEditingBound(null)
+    setRowError(null)
+    return true
+  }
+
+  const boundInputClass =
+    'text-[11px] font-mono bg-gray-800 text-gray-100 border border-gray-700 rounded px-1 py-0.5 w-[9ch] focus:outline-none focus:ring-1 focus:ring-emerald-500'
 
   return (
     <div className="border-t border-gray-800 bg-gray-950/40">
@@ -127,6 +233,14 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
                   {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
                 </select>
               </div>
+              {/* Le report au lendemain était appliqué sans rien dire. Il reste
+                  le comportement, mais annoncé avant la validation. */}
+              {addWrapDay && (
+                <p className="flex items-center gap-1.5 text-[10px] text-amber-300">
+                  <AlertTriangle size={10} className="shrink-0" />
+                  La fin étant antérieure au début, elle sera reportée au lendemain ({addWrapDay}).
+                </p>
+              )}
               <textarea value={formNotes} onChange={(e) => setFormNotes(e.target.value)} rows={2} placeholder="Notes (optionnel)"
                 className="w-full text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-2 py-1 focus:outline-none focus:ring-1 focus:ring-emerald-500 resize-none" />
               <div className="flex gap-1 justify-end">
@@ -164,22 +278,33 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
                     const dur = Math.max(0, p.endMs - p.startMs)
                     const isEditing = editingId === p.id
                     const cat = catById.get(p.categoryId)
+                    const check = checks.get(p.id)
+                    const err = rowError?.id === p.id ? rowError.msg : null
+                    const hasMessages = !!err || (check?.warnings.length ?? 0) > 0
+                    const editingStart = editingBound?.id === p.id && editingBound.field === 'start'
+                    const editingEnd = editingBound?.id === p.id && editingBound.field === 'end'
                     return (
-                      <tr key={p.id} className="border-b border-gray-900 last:border-0">
+                      <Fragment key={p.id}>
+                      <tr className={hasMessages ? '' : 'border-b border-gray-900 last:border-0'}>
                         <td className="px-2 py-1 text-gray-200">
                           {isEditing ? (
                             <input
                               autoFocus value={editingName}
                               onChange={(e) => setEditingName(e.target.value)}
-                              onBlur={() => { onUpdate(p.id, { name: editingName.trim() || p.name }); setEditingId(null) }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') { onUpdate(p.id, { name: editingName.trim() || p.name }); setEditingId(null) }
-                                else if (e.key === 'Escape') setEditingId(null)
+                              onBlur={() => {
+                                if (skipBlurRef.current) { skipBlurRef.current = false; return }
+                                commitName(p)
                               }}
-                              className="text-[11px] bg-gray-800 text-gray-100 border border-gray-700 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-emerald-500 w-full"
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') { if (commitName(p)) e.currentTarget.blur() }
+                                else if (e.key === 'Escape') cancelEdit()
+                              }}
+                              className={`text-[11px] bg-gray-800 text-gray-100 border rounded px-1 py-0.5 focus:outline-none focus:ring-1 w-full ${
+                                err ? 'border-rose-600 focus:ring-rose-500' : 'border-gray-700 focus:ring-emerald-500'
+                              }`}
                             />
                           ) : (
-                            <button onClick={() => { setEditingId(p.id); setEditingName(p.name) }} className="text-left w-full hover:text-emerald-300 truncate" title={p.notes || 'Renommer'}>
+                            <button onClick={() => startEditName(p)} className="text-left w-full hover:text-emerald-300 truncate" title={p.notes || 'Renommer'}>
                               {p.name}
                             </button>
                           )}
@@ -197,13 +322,95 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
                             </select>
                           </div>
                         </td>
-                        <td className="px-2 py-1 font-mono text-gray-300">{fmtHHMMSS(p.startMs)}</td>
-                        <td className="px-2 py-1 font-mono text-gray-300">{fmtHHMMSS(p.endMs)}</td>
+                        <td className="px-2 py-1 font-mono text-gray-300">
+                          {editingStart ? (
+                            <input
+                              autoFocus value={boundDraft}
+                              onChange={(e) => setBoundDraft(e.target.value)}
+                              onBlur={() => {
+                                if (skipBlurRef.current) { skipBlurRef.current = false; return }
+                                commitBound(p, 'start')
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') { if (commitBound(p, 'start')) e.currentTarget.blur() }
+                                else if (e.key === 'Escape') cancelEdit()
+                              }}
+                              className={boundInputClass}
+                            />
+                          ) : (
+                            <button
+                              onClick={() => startEditBound(p, 'start')}
+                              className="text-left hover:text-emerald-300"
+                              title={`Modifier l'heure de début (${fmtDayMonth(p.startMs)})`}
+                            >
+                              {fmtHHMMSS(p.startMs)}
+                            </button>
+                          )}
+                        </td>
+                        <td className="px-2 py-1 font-mono text-gray-300">
+                          {editingEnd ? (
+                            <input
+                              autoFocus value={boundDraft}
+                              onChange={(e) => setBoundDraft(e.target.value)}
+                              onBlur={() => {
+                                if (skipBlurRef.current) { skipBlurRef.current = false; return }
+                                commitBound(p, 'end')
+                              }}
+                              onKeyDown={(e) => {
+                                if (e.key === 'Enter') { if (commitBound(p, 'end')) e.currentTarget.blur() }
+                                else if (e.key === 'Escape') cancelEdit()
+                              }}
+                              className={boundInputClass}
+                            />
+                          ) : (
+                            <button
+                              onClick={() => startEditBound(p, 'end')}
+                              className="text-left hover:text-emerald-300"
+                              title={`Modifier l'heure de fin (${fmtDayMonth(p.endMs)})`}
+                            >
+                              {fmtHHMMSS(p.endMs)}
+                            </button>
+                          )}
+                        </td>
+                        {/* Durée : toujours déduite des bornes, jamais saisie. */}
                         <td className="px-2 py-1 font-mono text-gray-400">{fmtDuration(dur)}</td>
                         <td className="px-2 py-1 text-right">
                           <button onClick={() => onRemove(p.id)} className="text-gray-600 hover:text-red-400" title="Supprimer"><Trash2 size={11} /></button>
                         </td>
                       </tr>
+                      {/* Messages de la ligne. Les erreurs sont transitoires
+                          (le temps de corriger la saisie) ; les avertissements
+                          sont permanents — une période hors plage doit se
+                          signaler en continu, pas seulement pendant l'édition. */}
+                      {hasMessages && (
+                        <tr className="border-b border-gray-900 last:border-0">
+                          <td colSpan={6} className="px-2 pb-1.5 pt-0">
+                            {err && (
+                              <p className="flex items-start gap-1.5 text-[10px] text-rose-300">
+                                <AlertTriangle size={10} className="mt-0.5 shrink-0" />
+                                <span className="flex-1 min-w-0 break-words">{err}</span>
+                              </p>
+                            )}
+                            {(check?.warnings ?? []).map((w, i) => (
+                              <p key={i} className="flex items-start gap-1.5 text-[10px] text-amber-300/90">
+                                <AlertTriangle size={10} className="mt-0.5 shrink-0" />
+                                <span className="flex-1 min-w-0 break-words">{w}</span>
+                              </p>
+                            ))}
+                            {check?.endBeforeStart && (
+                              <button
+                                onClick={() => onUpdate(p.id, { endMs: shiftToNextDay(p.endMs) })}
+                                className="mt-1 inline-flex items-center gap-1 text-[10px] text-amber-200 bg-gray-800 hover:bg-gray-700 border border-amber-800/60 rounded px-1.5 py-0.5"
+                                title={`Reporter la fin au ${fmtDayMonth(shiftToNextDay(p.endMs))}`}
+                              >
+                                <CalendarPlus size={10} />
+                                Reporter la fin au lendemain ({fmtDayMonth(shiftToNextDay(p.endMs))})
+                              </button>
+                            )}
+                          </td>
+                        </tr>
+                      )}
+                      </Fragment>
                     )
                   })}
                 </tbody>

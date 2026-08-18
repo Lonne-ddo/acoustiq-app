@@ -101,6 +101,7 @@ import { t, setLanguage } from './modules/i18n'
 import TimeSeriesChart from './components/TimeSeriesChart'
 import IndicesPanel from './components/IndicesPanel'
 import PeriodsPanel from './components/PeriodsPanel'
+import { parseHHMMSS, dateToMsAtMidnight as dateMsMidnight } from './utils/periodEdit'
 import EventsPanel from './components/EventsPanel'
 import ConcordanceTable from './components/ConcordanceTable'
 import Spectrogram from './components/Spectrogram'
@@ -1525,6 +1526,28 @@ function MainPanel({
 }: MainPanelProps) {
   const chartFiles = files.filter((f) => !!pointMap[f.id])
   const visibleChartFiles = chartFiles.filter((f) => !hiddenPoints.has(pointMap[f.id]))
+  /** Plage réellement couverte par les mesures du jour affiché, en epoch ms.
+   *  Alimente l'avertissement « période hors plage » de PeriodsPanel. Null si
+   *  aucun fichier exploitable → PeriodsPanel n'avertit alors sur rien, ce qui
+   *  reproduit le comportement d'avant. */
+  const periodsMeasureRange = useMemo(() => {
+    const base = dateMsMidnight(selectedDate)
+    if (!Number.isFinite(base)) return null
+    let min = Infinity
+    let max = -Infinity
+    for (const f of visibleChartFiles) {
+      if (f.date !== selectedDate) continue
+      const s = parseHHMMSS(f.startTime ?? '')
+      let e = parseHHMMSS(f.stopTime ?? '')
+      if (s === null || e === null) continue
+      // Fichier qui traverse minuit : la fin appartient au lendemain.
+      if (e <= s) e += 24 * 3600 * 1000
+      if (s < min) min = s
+      if (e > max) max = e
+    }
+    if (!Number.isFinite(min) || !Number.isFinite(max)) return null
+    return { startMs: base + min, endMs: base + max }
+  }, [visibleChartFiles, selectedDate])
   const hasChart = chartFiles.length > 0
   const [showRecent, setShowRecent] = useState(false)
   // Liste Dataverse chargée PARESSEUSEMENT : on ne tape Dataverse qu'à la
@@ -2076,6 +2099,7 @@ function MainPanel({
                       onRemove={onPeriodRemove}
                       categories={categories}
                       selectedDate={selectedDate}
+                      measureRange={periodsMeasureRange}
                     />
                   </div>
                   <div className="shrink-0 mt-4">

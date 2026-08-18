@@ -20,6 +20,7 @@ import {
   shiftToNextDay,
   fmtDayMonth,
   dateToMsAtMidnight,
+  sameCivilDay,
   type MeasureRange,
 } from '../utils/periodEdit'
 
@@ -96,6 +97,10 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
       ),
     [periods, measureRange],
   )
+
+  /** Minuit du jour affiché — référence pour décider si une borne appartient
+   *  à un autre jour et doit donc porter sa date visible. */
+  const selectedDayMs = useMemo(() => dateToMsAtMidnight(selectedDate), [selectedDate])
 
   const defaultAddCat = categories.find((c) => c.visible && c.mode === 'include')?.id ?? categories[0]?.id ?? ''
 
@@ -283,6 +288,15 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
                     const hasMessages = !!err || (check?.warnings.length ?? 0) > 0
                     const editingStart = editingBound?.id === p.id && editingBound.field === 'start'
                     const editingEnd = editingBound?.id === p.id && editingBound.field === 'end'
+                    // Une borne qui n'appartient pas au jour affiché porte sa
+                    // date, à l'œil. Le tableau alimente un calcul réglementaire :
+                    // aucune information ne doit dépendre d'un survol.
+                    const dayKnown = Number.isFinite(selectedDayMs)
+                    const startOffDay = dayKnown && !sameCivilDay(p.startMs, selectedDayMs)
+                    const endOffDay = dayKnown && !sameCivilDay(p.endMs, selectedDayMs)
+                    // Ambre seulement si la période est réellement hors plage :
+                    // une fin au lendemain (Lnuit) est normale, pas une alerte.
+                    const dayChipClass = check?.outsideMeasureRange ? 'text-amber-400' : 'text-gray-500'
                     return (
                       <Fragment key={p.id}>
                       <tr className={hasMessages ? '' : 'border-b border-gray-900 last:border-0'}>
@@ -323,54 +337,74 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
                           </div>
                         </td>
                         <td className="px-2 py-1 font-mono text-gray-300">
-                          {editingStart ? (
-                            <input
-                              autoFocus value={boundDraft}
-                              onChange={(e) => setBoundDraft(e.target.value)}
-                              onBlur={() => {
-                                if (skipBlurRef.current) { skipBlurRef.current = false; return }
-                                commitBound(p, 'start')
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') { if (commitBound(p, 'start')) e.currentTarget.blur() }
-                                else if (e.key === 'Escape') cancelEdit()
-                              }}
-                              className={boundInputClass}
-                            />
-                          ) : (
-                            <button
-                              onClick={() => startEditBound(p, 'start')}
-                              className="text-left hover:text-emerald-300"
-                              title={`Modifier l'heure de début (${fmtDayMonth(p.startMs)})`}
-                            >
-                              {fmtHHMMSS(p.startMs)}
-                            </button>
-                          )}
+                          <span className="inline-flex items-baseline gap-1">
+                            {editingStart ? (
+                              <input
+                                autoFocus value={boundDraft}
+                                onChange={(e) => setBoundDraft(e.target.value)}
+                                onBlur={() => {
+                                  if (skipBlurRef.current) { skipBlurRef.current = false; return }
+                                  commitBound(p, 'start')
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') { if (commitBound(p, 'start')) e.currentTarget.blur() }
+                                  else if (e.key === 'Escape') cancelEdit()
+                                }}
+                                className={boundInputClass}
+                              />
+                            ) : (
+                              <button
+                                onClick={() => startEditBound(p, 'start')}
+                                className="text-left hover:text-emerald-300"
+                                title={`Modifier l'heure de début (${fmtDayMonth(p.startMs)})`}
+                              >
+                                {fmtHHMMSS(p.startMs)}
+                              </button>
+                            )}
+                            {startOffDay && (
+                              <span
+                                className={`text-[9px] shrink-0 ${dayChipClass}`}
+                                title={`Cette borne est le ${fmtDayMonth(p.startMs)}, pas le jour affiché`}
+                              >
+                                {fmtDayMonth(p.startMs)}
+                              </span>
+                            )}
+                          </span>
                         </td>
                         <td className="px-2 py-1 font-mono text-gray-300">
-                          {editingEnd ? (
-                            <input
-                              autoFocus value={boundDraft}
-                              onChange={(e) => setBoundDraft(e.target.value)}
-                              onBlur={() => {
-                                if (skipBlurRef.current) { skipBlurRef.current = false; return }
-                                commitBound(p, 'end')
-                              }}
-                              onKeyDown={(e) => {
-                                if (e.key === 'Enter') { if (commitBound(p, 'end')) e.currentTarget.blur() }
-                                else if (e.key === 'Escape') cancelEdit()
-                              }}
-                              className={boundInputClass}
-                            />
-                          ) : (
-                            <button
-                              onClick={() => startEditBound(p, 'end')}
-                              className="text-left hover:text-emerald-300"
-                              title={`Modifier l'heure de fin (${fmtDayMonth(p.endMs)})`}
-                            >
-                              {fmtHHMMSS(p.endMs)}
-                            </button>
-                          )}
+                          <span className="inline-flex items-baseline gap-1">
+                            {editingEnd ? (
+                              <input
+                                autoFocus value={boundDraft}
+                                onChange={(e) => setBoundDraft(e.target.value)}
+                                onBlur={() => {
+                                  if (skipBlurRef.current) { skipBlurRef.current = false; return }
+                                  commitBound(p, 'end')
+                                }}
+                                onKeyDown={(e) => {
+                                  if (e.key === 'Enter') { if (commitBound(p, 'end')) e.currentTarget.blur() }
+                                  else if (e.key === 'Escape') cancelEdit()
+                                }}
+                                className={boundInputClass}
+                              />
+                            ) : (
+                              <button
+                                onClick={() => startEditBound(p, 'end')}
+                                className="text-left hover:text-emerald-300"
+                                title={`Modifier l'heure de fin (${fmtDayMonth(p.endMs)})`}
+                              >
+                                {fmtHHMMSS(p.endMs)}
+                              </button>
+                            )}
+                            {endOffDay && (
+                              <span
+                                className={`text-[9px] shrink-0 ${dayChipClass}`}
+                                title={`Cette borne est le ${fmtDayMonth(p.endMs)}, pas le jour affiché`}
+                              >
+                                {fmtDayMonth(p.endMs)}
+                              </span>
+                            )}
+                          </span>
                         </td>
                         {/* Durée : toujours déduite des bornes, jamais saisie. */}
                         <td className="px-2 py-1 font-mono text-gray-400">{fmtDuration(dur)}</td>

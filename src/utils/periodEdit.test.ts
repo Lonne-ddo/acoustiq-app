@@ -6,6 +6,7 @@ import {
   shiftToNextDay,
   sameCivilDay,
   fmtDayMonth,
+  dateToMsAtMidnight,
 } from './periodEdit'
 
 /** Instant local, pour que les tests ne dépendent pas du fuseau. */
@@ -63,6 +64,29 @@ describe('shiftToNextDay', () => {
 
   it('traverse correctement une fin de mois', () => {
     expect(shiftToNextDay(at(2026, 3, 31, 22))).toBe(at(2026, 4, 1, 22))
+  })
+})
+
+describe('sameCivilDay — socle de l\'affichage de la date au tableau', () => {
+  it('deux instants du même jour, heures différentes → vrai', () => {
+    expect(sameCivilDay(D1_09, D1_22)).toBe(true)
+  })
+
+  it('deux instants de jours différents → faux, même à une minute d\'écart', () => {
+    expect(sameCivilDay(at(2026, 3, 9, 23, 59, 59), at(2026, 3, 10, 0, 0, 0))).toBe(false)
+  })
+
+  it('même quantième, mois ou année différents → faux', () => {
+    expect(sameCivilDay(at(2026, 3, 9, 12), at(2026, 4, 9, 12))).toBe(false)
+    expect(sameCivilDay(at(2026, 3, 9, 12), at(2025, 3, 9, 12))).toBe(false)
+  })
+
+  it('une borne comparée à minuit de son propre jour → vrai', () => {
+    expect(sameCivilDay(D1_09, dateToMsAtMidnight('2026-03-09'))).toBe(true)
+  })
+
+  it('le cas observé : période du 17/08 face au jour affiché 07/07 → faux', () => {
+    expect(sameCivilDay(at(2026, 8, 17, 12, 37), dateToMsAtMidnight('2026-07-07'))).toBe(false)
   })
 })
 

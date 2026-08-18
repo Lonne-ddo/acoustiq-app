@@ -12,6 +12,13 @@ dist
 dist-ssr
 *.local
 
+# Configuration Power Apps — propre à chaque poste (appId, environnement,
+# URL Local Play). Suivie jusqu'ici, elle générait un diff permanent à chaque
+# développeur. Recréer le fichier localement : `pac code init`, ou copier
+# celui d'un poste déjà configuré.
+power.config.json
+power.config.json.bak
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# Les PDF réglementaires embarqués sont du binaire : jamais de normalisation
+# de fins de ligne, qui les corromprait silencieusement.
+*.pdf binary

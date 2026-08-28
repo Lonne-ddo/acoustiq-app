@@ -13,6 +13,7 @@
 export type RegulationSource =
   | 'REAFIE'
   | 'Lignes directrices MELCCFP'
+  | 'Note 98-01'
   | 'LQE'
   | 'ISO'
   | 'Autre'
@@ -144,6 +145,21 @@ export function searchDocs(
 // ─── Seed initial ───────────────────────────────────────────────────────────
 const SEED_DOCS: Omit<RegulationDoc, 'dateAdded'>[] = [
   {
+    // Cadre DISTINCT des Lignes directrices 2026 : les correctifs Kt / Ki / Kb
+    // (formulaire EQ-09) restent régis par cette note. Voir IndicesPanel.tsx.
+    id: 'seed-note-instruction-98-01',
+    filename: 'note-instruction-98-01.pdf',
+    title: "Note d'instructions 98-01 sur le bruit",
+    source: 'Note 98-01',
+    dateDocument: '2006-06-09',
+    status: 'Remplacé',
+    fullText: '',
+    chunks: [],
+    lienOfficiel:
+      'https://www.environnement.gouv.qc.ca/publications/notes-instructions/98-01/note98-01.pdf',
+    seed: true,
+  },
+  {
     id: 'seed-reafie-2025-11-01',
     filename: 'reafie-q-2-r-17-1.pdf',
     title: 'REAFIE Q-2 r.17.1',
@@ -182,18 +198,37 @@ const SEED_DOCS: Omit<RegulationDoc, 'dateAdded'>[] = [
   },
 ]
 
-/** Au premier lancement, insère les entrées seed (sans contenu). */
-export function ensureSeeded(): RegulationDoc[] {
-  if (localStorage.getItem(SEED_FLAG_KEY) === '1') return loadAll()
-  const existing = loadAll()
+/**
+ * Version du jeu de semis. À INCRÉMENTER à chaque ajout d'entrée seed.
+ *
+ * Le drapeau ne vaut pas « déjà semé » mais « semé jusqu'à cette version ».
+ * Sans cela, un poste dont le localStorage porte déjà l'ancien drapeau ne
+ * recevrait jamais une nouvelle entrée. À l'inverse, une entrée supprimée
+ * volontairement par l'utilisateur ne réapparaît pas aux lancements suivants :
+ * la réconciliation n'a lieu qu'une fois par version.
+ */
+const SEED_VERSION = '2'
+
+/**
+ * Entrées seed manquantes dans une collection donnée, alignées PAR IDENTIFIANT.
+ * Fonction PURE — aucun accès au stockage, testable sous Node.
+ */
+export function seedsAAjouter(existing: RegulationDoc[], now: string): RegulationDoc[] {
   const existingIds = new Set(existing.map((d) => d.id))
-  const now = new Date().toISOString()
-  const toAdd = SEED_DOCS.filter((s) => !existingIds.has(s.id)).map(
+  return SEED_DOCS.filter((s) => !existingIds.has(s.id)).map(
     (s): RegulationDoc => ({ ...s, dateAdded: now }),
   )
+}
+
+/** Au premier lancement — et à chaque montée de SEED_VERSION — insère les
+ *  entrées seed manquantes (sans contenu). */
+export function ensureSeeded(): RegulationDoc[] {
+  if (localStorage.getItem(SEED_FLAG_KEY) === SEED_VERSION) return loadAll()
+  const existing = loadAll()
+  const toAdd = seedsAAjouter(existing, new Date().toISOString())
   const next = [...existing, ...toAdd]
   saveAll(next)
-  localStorage.setItem(SEED_FLAG_KEY, '1')
+  localStorage.setItem(SEED_FLAG_KEY, SEED_VERSION)
   return next
 }
 

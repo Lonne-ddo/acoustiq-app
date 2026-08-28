@@ -1,29 +1,58 @@
 /**
- * Extraction de texte depuis un PDF via PDF.js (chargé depuis CDN à la demande).
+ * PDF.js chargé depuis CDN à la demande : extraction de texte ET rendu.
  *
- * On évite l'ajout d'une dépendance npm : la première extraction injecte
- * le script PDF.js depuis cdnjs et configure le worker correspondant.
+ * On évite l'ajout d'une dépendance npm : le premier appel importe le module
+ * PDF.js depuis cdnjs et configure le worker correspondant.
+ *
+ * Le module cœur `pdf.min.mjs` embarque DÉJÀ la couche de rendu (vérifié :
+ * `getViewport`, `canvasContext`, `RenderTask`, `InternalRenderTask` y sont
+ * présents). Inutile de tirer `pdfjs-dist/web/pdf_viewer`, qui n'apporte que
+ * l'interface de visionneuse complète — hors de notre besoin. Conséquence :
+ * la visionneuse intégrée n'ajoute AUCUN octet au bundle JS.
  */
 
 const PDFJS_VERSION = '4.0.379'
 const PDFJS_URL = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.min.mjs`
 const WORKER_URL = `https://cdnjs.cloudflare.com/ajax/libs/pdf.js/${PDFJS_VERSION}/pdf.worker.min.mjs`
 
-interface PdfJsModule {
-  getDocument: (src: { data: ArrayBuffer }) => { promise: Promise<PdfJsDocument> }
+/** Source d'un document : octets déjà en mémoire, ou URL à récupérer. */
+export type PdfSource = { data: ArrayBuffer } | { url: string }
+
+export interface PdfJsModule {
+  getDocument: (src: PdfSource) => { promise: Promise<PdfJsDocument> }
   GlobalWorkerOptions: { workerSrc: string }
 }
-interface PdfJsDocument {
+export interface PdfJsDocument {
   numPages: number
   getPage: (n: number) => Promise<PdfJsPage>
+  /** Libère le worker et les ressources associées au document. */
+  destroy?: () => Promise<void>
 }
-interface PdfJsPage {
+export interface PdfJsViewport {
+  width: number
+  height: number
+}
+export interface PdfJsRenderTask {
+  promise: Promise<void>
+  cancel: () => void
+}
+export interface PdfJsPage {
   getTextContent: () => Promise<{ items: Array<{ str?: string }> }>
+  getViewport: (params: { scale: number }) => PdfJsViewport
+  render: (params: {
+    canvasContext: CanvasRenderingContext2D
+    viewport: PdfJsViewport
+  }) => PdfJsRenderTask
 }
 
 let pdfjsPromise: Promise<PdfJsModule> | null = null
 
-async function loadPdfJs(): Promise<PdfJsModule> {
+/**
+ * Charge PDF.js une seule fois pour toute la session (mémoïsé).
+ * Exporté : la visionneuse et l'extraction partagent la MÊME instance, donc
+ * le module CDN n'est téléchargé qu'une fois.
+ */
+export async function loadPdfJs(): Promise<PdfJsModule> {
   if (pdfjsPromise) return pdfjsPromise
   pdfjsPromise = (async () => {
     // Import dynamique du module ESM hébergé sur CDN.
@@ -54,4 +83,15 @@ export async function extractPdfText(data: ArrayBuffer): Promise<string> {
     pages.push(text)
   }
   return pages.join('\n\n').replace(/[ \t]+/g, ' ').trim()
+}
+
+/**
+ * Ouvre un document PDF depuis une URL, pour la visionneuse intégrée.
+ *
+ * Chargement PARESSEUX de bout en bout : ni ce module, ni PDF.js, ni le PDF
+ * lui-même ne sont téléchargés avant l'appel.
+ */
+export async function openPdfFromUrl(url: string): Promise<PdfJsDocument> {
+  const pdfjs = await loadPdfJs()
+  return pdfjs.getDocument({ url }).promise
 }

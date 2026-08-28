@@ -10,7 +10,7 @@
  * relevant regulatory context before generating advice. Each chunk should be
  * < 500 tokens for optimal retrieval.
  */
-import { useState, useMemo, useEffect, useCallback } from 'react'
+import { useState, useMemo, useEffect, useCallback, lazy, Suspense } from 'react'
 import {
   Scale,
   Upload,
@@ -20,6 +20,9 @@ import {
   Loader2,
   FileText,
   Link as LinkIcon,
+  BookOpen,
+  Download,
+  Info,
 } from 'lucide-react'
 import {
   ensureSeeded,
@@ -35,6 +38,23 @@ import {
   type SearchHit,
 } from '../modules/regulationDB'
 import { extractPdfText } from '../modules/pdfExtract'
+import {
+  IDS_AVEC_PDF,
+  cheminPdf,
+  urlPdf,
+  nomTelechargement,
+  classerSonde,
+  estConsultable,
+  etatInitial,
+  libelleEtat,
+  motifIndisponibilite,
+  type EtatPdf,
+  type ReponseSonde,
+} from '../modules/regulationAssets'
+
+// Visionneuse en lazy : son code ne part au navigateur qu'au premier clic sur
+// « Consulter ». Le chunk principal reste rigoureusement inchangé.
+const PdfViewer = lazy(() => import('./PdfViewer'))
 
 const SOURCES: RegulationSource[] = [
   'REAFIE',
@@ -49,6 +69,22 @@ const STATUS_BADGE: Record<RegulationStatus, string> = {
   'En vigueur': 'bg-emerald-900/40 text-emerald-300 border-emerald-800/60',
   Remplacé: 'bg-orange-900/40 text-orange-300 border-orange-800/60',
   Archivé: 'bg-gray-800/60 text-gray-400 border-gray-700/60',
+}
+
+// La couleur ne porte jamais l'information seule : chaque pastille est doublée
+// du libellé textuel rendu par `libelleEtat`.
+const ETAT_BADGE: Record<EtatPdf, string> = {
+  disponible: 'bg-emerald-900/40 text-emerald-300 border-emerald-800/60',
+  verification: 'bg-gray-800/60 text-gray-400 border-gray-700/60',
+  'non-embarque': 'bg-gray-800/60 text-gray-400 border-gray-700/60',
+  absent: 'bg-sky-900/40 text-sky-300 border-sky-800/60',
+  'echec-reseau': 'bg-amber-900/40 text-amber-300 border-amber-800/60',
+}
+
+/** Disponibilité d'un PDF embarqué, telle que retenue par la sonde. */
+interface Dispo {
+  etat: EtatPdf
+  detail: string
 }
 
 function guessSourceFromName(name: string): RegulationSource {
@@ -72,8 +108,75 @@ export default function RegulationTab() {
   const [filterSource, setFilterSource] = useState<RegulationSource | 'all'>('all')
   const [activeOnly, setActiveOnly] = useState(false)
 
+  // Disponibilité des PDF embarqués, par identifiant d'entrée.
+  const [dispo, setDispo] = useState<Record<string, Dispo>>({})
+  // Document ouvert dans la visionneuse (null = fermée).
+  const [visionneuse, setVisionneuse] = useState<{
+    url: string
+    titre: string
+    nomFichier: string
+  } | null>(null)
+
   useEffect(() => {
     setDocs(ensureSeeded())
+  }, [])
+
+  /**
+   * Sonde de disponibilité — au montage de l'ONGLET, jamais au démarrage de
+   * l'application : `RegulationTab` n'est monté que si l'onglet est actif
+   * (App.tsx). Un démarrage à froid ne déclenche donc aucune requête (T3).
+   *
+   * Une requête HEAD ne télécharge aucun octet de PDF. Le classement se fait
+   * dans `classerSonde` — fonction pure, testée — qui exige `application/pdf`
+   * et NON le seul statut 200 : un serveur à repli SPA renvoie 200 + text/html
+   * pour un fichier absent (constaté sur le serveur de développement).
+   */
+  useEffect(() => {
+    let annule = false
+    const base = document.baseURI
+
+    setDispo(
+      Object.fromEntries(
+        IDS_AVEC_PDF.map((id) => [id, { etat: 'verification' as EtatPdf, detail: '' }]),
+      ),
+    )
+
+    for (const id of IDS_AVEC_PDF) {
+      const chemin = cheminPdf(id)
+      if (!chemin) continue
+      void (async () => {
+        let reponse: ReponseSonde | null = null
+        try {
+          const r = await fetch(urlPdf(chemin, base), { method: 'HEAD' })
+          reponse = { status: r.status, contentType: r.headers.get('content-type') }
+        } catch {
+          // Échec technique : on ne conclut rien sur l'existence du fichier.
+          reponse = null
+        }
+        if (annule) return
+        setDispo((prev) => ({ ...prev, [id]: classerSonde(reponse) }))
+      })()
+    }
+
+    return () => {
+      annule = true
+    }
+  }, [])
+
+  /** État de disponibilité d'une entrée, avec repli sur l'état initial. */
+  const dispoDe = useCallback(
+    (id: string): Dispo => dispo[id] ?? { etat: etatInitial(id), detail: '' },
+    [dispo],
+  )
+
+  const ouvrirVisionneuse = useCallback((doc: RegulationDoc) => {
+    const chemin = cheminPdf(doc.id)
+    if (!chemin) return
+    setVisionneuse({
+      url: urlPdf(chemin, document.baseURI),
+      titre: doc.title,
+      nomFichier: nomTelechargement(doc.id) ?? doc.filename,
+    })
   }, [])
 
   // ── Upload PDF ────────────────────────────────────────────────────────────
@@ -253,6 +356,8 @@ export default function RegulationTab() {
               <DocCard
                 key={d.id}
                 doc={d}
+                dispo={dispoDe(d.id)}
+                onConsulter={() => ouvrirVisionneuse(d)}
                 onChange={(p) => patch(d.id, p)}
                 onRemove={() => remove(d.id)}
               />
@@ -336,6 +441,28 @@ export default function RegulationTab() {
           </div>
         </section>
       </div>
+
+      {/* Visionneuse intégrée — montée seulement à la demande */}
+      {visionneuse && (
+        <Suspense
+          fallback={
+            <div className="fixed inset-0 z-50 flex items-center justify-center gap-2 bg-black/85">
+              <Loader2 size={18} className="text-emerald-400 animate-spin" />
+              <span className="text-xs text-gray-300">Chargement de la visionneuse…</span>
+            </div>
+          }
+        >
+          <PdfViewer
+            // Clé sur l'URL : changer de document remonte la visionneuse au lieu
+            // de réutiliser un état de pagination appartenant au précédent.
+            key={visionneuse.url}
+            url={visionneuse.url}
+            titre={visionneuse.titre}
+            nomFichier={visionneuse.nomFichier}
+            onClose={() => setVisionneuse(null)}
+          />
+        </Suspense>
+      )}
     </div>
   )
 }
@@ -343,15 +470,27 @@ export default function RegulationTab() {
 // ─── Carte document ─────────────────────────────────────────────────────────
 function DocCard({
   doc,
+  dispo,
+  onConsulter,
   onChange,
   onRemove,
 }: {
   doc: RegulationDoc
+  dispo: Dispo
+  onConsulter: () => void
   onChange: (patch: Partial<RegulationDoc>) => void
   onRemove: () => void
 }) {
+  const consultable = estConsultable(dispo.etat)
+  // Le sort des PDF embarqués ne concerne que les entrées de référence : un
+  // document téléversé par l'utilisateur n'a ni PDF embarqué ni lien officiel,
+  // et n'a donc aucun motif à afficher.
+  const motif = doc.seed ? motifIndisponibilite(dispo.etat, dispo.detail) : ''
+
   const preview = doc.fullText
     ? doc.fullText.slice(0, 200).replace(/\s+/g, ' ').trim() + (doc.fullText.length > 200 ? '…' : '')
+    : consultable
+    ? 'Document normatif embarqué dans l’application — consultable ci-dessous.'
     : doc.seed
     ? 'Entrée de référence — aucun PDF importé. Consulter le lien officiel ci-dessous.'
     : 'Aucun texte extrait.'
@@ -366,6 +505,16 @@ function DocCard({
           className="flex-1 text-xs font-semibold text-gray-100 bg-transparent border-b border-transparent
                      hover:border-gray-700 focus:border-emerald-500 focus:outline-none px-0.5 py-0.5"
         />
+        {doc.seed && (
+          <span
+            className={`shrink-0 px-1.5 py-0.5 text-[9px] font-semibold rounded border ${
+              ETAT_BADGE[dispo.etat]
+            }`}
+            title={motif || 'PDF embarqué dans l’application'}
+          >
+            {libelleEtat(dispo.etat)}
+          </span>
+        )}
         <span
           className={`shrink-0 px-1.5 py-0.5 text-[9px] font-semibold rounded border ${
             STATUS_BADGE[doc.status]
@@ -408,16 +557,49 @@ function DocCard({
 
       <p className="text-[11px] text-gray-500 leading-relaxed">{preview}</p>
 
-      {doc.lienOfficiel && (
-        <a
-          href={doc.lienOfficiel}
-          target="_blank"
-          rel="noopener noreferrer"
-          className="inline-flex items-center gap-1 text-[10px] text-emerald-400 hover:text-emerald-300"
-        >
-          Lien officiel <ExternalLink size={9} />
-        </a>
+      {/* Motif explicite dès que le document embarqué n'est pas consultable.
+          Jamais de bouton mort, jamais de refus silencieux. */}
+      {motif && (
+        <p className="flex items-start gap-1.5 text-[10px] text-gray-400 leading-relaxed">
+          <Info size={10} className="mt-0.5 shrink-0 text-gray-500" />
+          <span>{motif}</span>
+        </p>
       )}
+
+      {/* Actions */}
+      <div className="flex items-center gap-2 flex-wrap">
+        {consultable && (
+          <>
+            <button
+              onClick={onConsulter}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-semibold
+                         text-emerald-300 border border-emerald-800/60 bg-emerald-950/30
+                         hover:bg-emerald-950/60"
+            >
+              <BookOpen size={10} /> Consulter
+            </button>
+            <a
+              href={urlPdf(cheminPdf(doc.id) ?? '', document.baseURI)}
+              download={nomTelechargement(doc.id) ?? doc.filename}
+              className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px]
+                         text-gray-300 border border-gray-700 hover:bg-gray-800/60"
+            >
+              <Download size={10} /> Télécharger
+            </a>
+          </>
+        )}
+
+        {doc.lienOfficiel && (
+          <a
+            href={doc.lienOfficiel}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-[10px] text-emerald-400 hover:text-emerald-300"
+          >
+            Lien officiel <ExternalLink size={9} />
+          </a>
+        )}
+      </div>
     </div>
   )
 }

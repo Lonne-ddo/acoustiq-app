@@ -101,6 +101,7 @@ import { t, setLanguage } from './modules/i18n'
 import TimeSeriesChart from './components/TimeSeriesChart'
 import IndicesPanel from './components/IndicesPanel'
 import PeriodsPanel from './components/PeriodsPanel'
+import { dateToMsAtMidnight as dateMsMidnight } from './utils/periodEdit'
 import EventsPanel from './components/EventsPanel'
 import ConcordanceTable from './components/ConcordanceTable'
 import Spectrogram from './components/Spectrogram'
@@ -1525,6 +1526,40 @@ function MainPanel({
 }: MainPanelProps) {
   const chartFiles = files.filter((f) => !!pointMap[f.id])
   const visibleChartFiles = chartFiles.filter((f) => !hiddenPoints.has(pointMap[f.id]))
+  /** Plage réellement couverte par les mesures du jour affiché, en epoch ms.
+   *  Alimente l'avertissement « période hors plage » de PeriodsPanel.
+   *
+   *  Dérivée des DONNÉES, jamais des métadonnées : `startTime`/`stopTime` ne
+   *  sont pas fiables. Le parser 831C ne sait extraire l'heure que si la
+   *  cellule Summary est une chaîne (parser831C.ts:120-125), or `cellDates:
+   *  false` (ligne 103) fait revenir une cellule bien typée en sériel
+   *  numérique — d'où un repli silencieux sur « 00:00 → 00:00 » qui donnait
+   *  une plage de 24 h au lieu de la plage réelle.
+   *
+   *  Balayage Math.min/Math.max plutôt qu'un accès aux extrémités : rien ne
+   *  garantit que `data` soit trié (parser831C.ts:208 empile dans l'ordre des
+   *  lignes de la feuille, sans tri). Le coût est de l'ordre de la
+   *  microseconde et le résultat est juste quel que soit l'ordre.
+   *
+   *  Null si aucun fichier exploitable → PeriodsPanel n'avertit sur rien, ce
+   *  qui reproduit le comportement d'avant cette fonctionnalité. */
+  const periodsMeasureRange = useMemo(() => {
+    const base = dateMsMidnight(selectedDate)
+    if (!Number.isFinite(base)) return null
+    let minT = Infinity
+    let maxT = -Infinity
+    for (const f of visibleChartFiles) {
+      if (f.date !== selectedDate) continue
+      for (const dp of f.data) {
+        if (dp.t < minT) minT = dp.t
+        if (dp.t > maxT) maxT = dp.t
+      }
+    }
+    // Plage nulle (fichier vide, ou un seul point) → on préfère ne rien
+    // affirmer plutôt que d'avertir sur tout.
+    if (!Number.isFinite(minT) || !Number.isFinite(maxT) || maxT <= minT) return null
+    return { startMs: base + minT * 60_000, endMs: base + maxT * 60_000 }
+  }, [visibleChartFiles, selectedDate])
   const hasChart = chartFiles.length > 0
   const [showRecent, setShowRecent] = useState(false)
   // Liste Dataverse chargée PARESSEUSEMENT : on ne tape Dataverse qu'à la
@@ -2076,6 +2111,7 @@ function MainPanel({
                       onRemove={onPeriodRemove}
                       categories={categories}
                       selectedDate={selectedDate}
+                      measureRange={periodsMeasureRange}
                     />
                   </div>
                   <div className="shrink-0 mt-4">

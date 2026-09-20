@@ -1,5 +1,12 @@
 # AcoustiQ v1.0 — Project Context for Claude Code
 
+## Projet
+- Catégorie : commercial potentiel
+- Domaine : acoustiq-app.pages.dev
+- Backend : non
+- Spécificités : app acoustique TypeScript
+- Conventions globales : ~/.claude/CLAUDE.md (chargé automatiquement)
+
 ## What this is
 Environmental acoustic analysis web app for acoustic engineers.
 Deployed at: acoustiq-app.pages.dev

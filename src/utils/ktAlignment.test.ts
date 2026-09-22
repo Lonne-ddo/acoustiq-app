@@ -17,13 +17,18 @@ import {
  * exports G4 français et 821SE démarrent à 6,3 Hz, soit NEUF bandes de
  * décalage — mauvais seuil, mauvaise pondération A, mauvais test d'exclusion.
  *
- * Chaque bande d'analyse est désormais retrouvée par sa fréquence. Deux règles
+ * Chaque bande d'analyse est désormais retrouvée par sa fréquence. Trois règles
  * verrouillées ici :
  *   - un spectre qui COUVRE la plage d'analyse est exploitable, où qu'il
  *     commence (c'est le correctif) ;
- *   - un spectre à qui MANQUE une bande d'analyse est refusé avec un motif,
- *     jamais analysé sur un jeu troué (les Δ se calculent entre bandes
- *     adjacentes : un trou les fausserait en silence).
+ *   - un spectre TROUÉ est refusé avec un motif, jamais analysé sur un jeu
+ *     incomplet (les Δ se calculent entre bandes adjacentes : un trou les
+ *     fausserait en silence) ;
+ *   - un spectre ÉCOURTÉ — préfixe contigu depuis 50 Hz, sans trou — est
+ *     analysé sur les bandes qu'il a. Distinguer l'écourté du troué est
+ *     nécessaire : l'implémentation par index calculait les écourtés, et les
+ *     refuser aurait été une régression. Cas figés dans
+ *     `ktNonRegression.test.ts`, (f) et (g).
  */
 
 /** Spectre plat 50 dB, émergence de 25 dB sur la bande `freq`. */
@@ -67,7 +72,7 @@ describe('ktLevelsByFrequency — réordonnancement sur les bandes d\'analyse', 
       expect(r.reason).toBe('bande-analyse-absente')
       expect(r.message).toBe(
         'Tonalité non évaluable — la bande d\'analyse 50 Hz est absente du spectre '
-        + '(bandes 50 Hz – 10000 Hz requises).',
+        + '(l\'analyse tonale démarre à 50 Hz).',
       )
     }
   })

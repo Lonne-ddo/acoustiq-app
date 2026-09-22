@@ -715,11 +715,10 @@ const misalignedKt = (detail: string): KtUnavailable => ({
   message: `Tonalité non évaluable — alignement des bandes non vérifiable (${detail}).`,
 })
 
-const missingBandKt = (freq: number): KtUnavailable => ({
+const missingBandKt = (freq: number, detail: string): KtUnavailable => ({
   reason: 'bande-analyse-absente',
   message:
-    `Tonalité non évaluable — la bande d'analyse ${freq} Hz est absente du spectre `
-    + `(bandes ${KT_BAND_FREQS[0]} Hz – ${KT_BAND_FREQS[KT_BAND_FREQS.length - 1]} Hz requises).`,
+    `Tonalité non évaluable — la bande d'analyse ${freq} Hz est absente du spectre (${detail}).`,
 })
 
 /**
@@ -735,16 +734,35 @@ const missingBandKt = (freq: number): KtUnavailable => ({
  * On ne suppose donc plus : chaque bande d'analyse est retrouvée par sa
  * FRÉQUENCE dans `spectraFreqs`, quel que soit l'endroit où elle tombe. Un
  * spectre qui couvre la plage d'analyse est exploitable même s'il commence
- * ailleurs ; un spectre à qui il manque une bande d'analyse est REFUSÉ, car
- * les écarts Δ se calculent entre bandes tiers d'octave adjacentes et un trou
- * les fausserait sans le dire.
+ * ailleurs.
+ *
+ * COUVERTURE PARTIELLE : un PRÉFIXE CONTIGU suffit. La plage analysée n'est
+ * pas la plage exigée. Un spectre qui couvre `KT_BAND_FREQS` depuis 50 Hz et
+ * s'arrête avant 10 kHz — sans trou — est analysé sur les bandes qu'il a ; sa
+ * dernière bande devient bande de bord, faute de voisine haute. C'est ce que
+ * faisait l'implémentation par index (`N = min(24, spectrum.length)`), et le
+ * lui retirer aurait été une régression : ces spectres produisaient un Kt
+ * légitime, chaque bande y étant lue avec le bon seuil et la bonne
+ * pondération. Aucun plancher sur le nombre de bandes — l'ancienne version
+ * n'en avait pas.
+ *
+ * Est en revanche REFUSÉ tout ce qui n'est pas un préfixe contigu :
+ *   · 50 Hz absente — l'analyse tonale ne commence pas ailleurs ;
+ *   · TROU au milieu, c'est-à-dire une bande manquante alors que des bandes
+ *     plus hautes sont présentes. Les Δ se calculent entre bandes tiers
+ *     d'octave ADJACENTES : un trou les fausserait sans le dire. C'est ce
+ *     refus qui justifie l'indexation par fréquence, et il ne bouge pas.
+ *
+ * Les bandes hors `KT_BAND_FREQS` (6,3 – 40 Hz, 12,5 – 20 kHz) sont ignorées :
+ * elles ne comptent ni comme couverture ni comme trou.
  *
  * Fréquences inconnues = non vérifiable = non calculable : ne pas pouvoir
  * vérifier n'autorise pas à supposer.
  *
  * @param spectrum     niveaux par bande, alignés sur `spectraFreqs`
  * @param spectraFreqs fréquences centrales réelles (`MeasurementFile.spectraFreqs`)
- * @returns les niveaux réordonnés sur `KT_BAND_FREQS`, ou le motif de refus
+ * @returns les niveaux réordonnés sur le préfixe couvert de `KT_BAND_FREQS`
+ *          (1 à 24 valeurs), ou le motif de refus
  */
 export function ktLevelsByFrequency(
   spectrum: number[],
@@ -767,12 +785,25 @@ export function ktLevelsByFrequency(
     // dépendre de l'ordre de parcours.
     if (!byFreq.has(spectraFreqs[i])) byFreq.set(spectraFreqs[i], spectrum[i])
   }
-  const levels: number[] = []
-  for (const f of KT_BAND_FREQS) {
-    const v = byFreq.get(f)
-    if (v === undefined) return missingBandKt(f)
-    levels.push(v)
+  // Longueur du préfixe de `KT_BAND_FREQS` effectivement couvert, depuis 50 Hz.
+  let n = 0
+  while (n < KT_BAND_FREQS.length && byFreq.has(KT_BAND_FREQS[n])) n++
+  if (n === 0) {
+    return missingBandKt(KT_BAND_FREQS[0], `l'analyse tonale démarre à ${KT_BAND_FREQS[0]} Hz`)
   }
+  // Au-delà du préfixe, plus AUCUNE bande d'analyse ne doit apparaître : une
+  // bande plus haute présente signe un TROU, pas une plage écourtée.
+  for (let j = n + 1; j < KT_BAND_FREQS.length; j++) {
+    if (byFreq.has(KT_BAND_FREQS[j])) {
+      return missingBandKt(
+        KT_BAND_FREQS[n],
+        `des bandes d'analyse plus hautes sont présentes — la couverture doit être `
+        + `continue depuis ${KT_BAND_FREQS[0]} Hz`,
+      )
+    }
+  }
+  const levels: number[] = []
+  for (let i = 0; i < n; i++) levels.push(byFreq.get(KT_BAND_FREQS[i]) as number)
   return { levels }
 }
 
@@ -790,8 +821,10 @@ export function checkKtAlignment(
 
 /**
  * Analyse complète de la composante tonale Kt — Lignes directrices MELCCFP
- * 2026, Section 3.7.4 et Tableau 2 (méthode 1/3 d'octave). Travaille sur 24
- * bandes 1/3 d'octave de 50 Hz à 10 kHz.
+ * 2026, Section 3.7.4 et Tableau 2 (méthode 1/3 d'octave). Travaille sur les
+ * bandes 1/3 d'octave de 50 Hz à 10 kHz que le spectre couvre : les 24 si
+ * elles y sont, sinon le préfixe contigu depuis 50 Hz (cf.
+ * `ktLevelsByFrequency`). `bands` a donc 1 à 24 lignes.
  *
  * Algorithme par bande :
  *   diffPrev = LZeq[i] − LZeq[i−1]   (null si i = 0)
@@ -828,8 +861,10 @@ export function analyzeKt(
   if (!('levels' in resolved)) return { bands, kt: 0, triggeringIndex: null, unavailable: resolved }
   // Niveaux réordonnés SUR les bandes d'analyse : l'index i désigne désormais
   // KT_BAND_FREQS[i] par construction, quelle que soit la 1ʳᵉ bande du fichier.
+  // `levels` est le préfixe couvert (1 à 24 bandes) : sur une couverture
+  // partielle, la dernière bande analysée devient bande de bord.
   const levels = resolved.levels
-  const N = KT_BAND_FREQS.length
+  const N = levels.length
 
   for (let i = 0; i < N; i++) {
     const freq = KT_BAND_FREQS[i]
@@ -1048,8 +1083,10 @@ export function analyzeKt9801(
   // même défaut d'adressage par index).
   const resolved = ktLevelsByFrequency(spectrum, spectraFreqs)
   if (!('levels' in resolved)) return { bands, kt: 0, triggeringIndex: null, unavailable: resolved }
+  // Préfixe couvert, comme pour le cadre 2026 : indexer sur les 24 bandes
+  // fermement lirait `undefined` dès qu'un spectre s'arrête plus tôt.
   const levels = resolved.levels
-  const N = KT_BAND_FREQS.length
+  const N = levels.length
   for (let i = 0; i < N; i++) {
     const freq = KT_BAND_FREQS[i]
     const lzeq = levels[i]

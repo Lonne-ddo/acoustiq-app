@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { analyzeKt, KT_BAND_FREQS } from './acoustics'
+import { analyzeKt, analyzeKt9801, KT_BAND_FREQS } from './acoustics'
 
 /**
  * NON-RÉGRESSION de `analyzeKt` face à la version de `main` qui indexait les
@@ -50,6 +50,22 @@ function spectre(freqs: number[], base: number, pics: Record<number, number> = {
 /** Booléens des bandes, encodés en chaîne lisible : X = vrai, . = faux. */
 const flags = (v: boolean[]): string => v.map((b) => (b ? 'X' : '.')).join('')
 
+/** Sortie de référence d’une analyse, aplatie colonne par colonne. */
+interface GoldenBandes {
+  kt: number
+  triggeringIndex: number | null
+  triggeringFreq: number | null
+  freq: number[]
+  lzeq: number[]
+  laeqBand: number[]
+  diffPrev: (number | null)[]
+  diffNext: (number | null)[]
+  threshold: number[]
+  isBoundary: string
+  excluded: string
+  isTonal: string
+}
+
 interface CasNonRegression {
   id: string
   titre: string
@@ -58,20 +74,10 @@ interface CasNonRegression {
   base: number
   pics: Record<number, number>
   ba: number
-  golden: {
-    kt: number
-    triggeringIndex: number | null
-    triggeringFreq: number | null
-    freq: number[]
-    lzeq: number[]
-    laeqBand: number[]
-    diffPrev: (number | null)[]
-    diffNext: (number | null)[]
-    threshold: number[]
-    isBoundary: string
-    excluded: string
-    isTonal: string
-  }
+  /** Produit par analyzeKt de main (cadre MELCCFP 2026). */
+  golden: GoldenBandes
+  /** Produit par analyzeKt9801 de main sur la MÊME entrée (cadre Note 98-01). */
+  golden9801: GoldenBandes
 }
 
 const CAS: CasNonRegression[] = [
@@ -94,6 +100,20 @@ const CAS: CasNonRegression[] = [
       diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
       diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null],
       threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      isBoundary: 'X......................X',
+      excluded: 'XXX.....................',
+      isTonal: '........................',
+    },
+    golden9801: {
+      kt: 0,
+      triggeringIndex: null,
+      triggeringFreq: null,
+      freq: [50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000],
+      lzeq: [60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60,60],
+      laeqBand: [29.8,33.8,37.5,40.9,43.9,46.6,49.1,51.4,53.4,55.2,56.8,58.1,59.2,60,60.6,61,61.2,61.3,61.2,61,60.5,59.9,58.9,57.5],
+      diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+      diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null],
+      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X......................X',
       excluded: 'XXX.....................',
       isTonal: '........................',
@@ -122,6 +142,20 @@ const CAS: CasNonRegression[] = [
       excluded: 'XXXXXXX.................',
       isTonal: '.............X..........',
     },
+    golden9801: {
+      kt: 5,
+      triggeringIndex: 13,
+      triggeringFreq: 1000,
+      freq: [50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000],
+      lzeq: [50,50,50,50,50,50,50,50,50,50,50,50,50,70,50,50,50,50,50,50,50,50,50,50],
+      laeqBand: [19.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,70,50.6,51,51.2,51.3,51.2,51,50.5,49.9,48.9,47.5],
+      diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,20,-20,0,0,0,0,0,0,0,0,0],
+      diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,-20,20,0,0,0,0,0,0,0,0,0,null],
+      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      isBoundary: 'X......................X',
+      excluded: 'XXXXXXX.................',
+      isTonal: '.............X..........',
+    },
   },
   {
     id: "c1-limite-egale-au-seuil",
@@ -142,6 +176,20 @@ const CAS: CasNonRegression[] = [
       diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,5,-5,0,0,0,0,0,0,0,0,0],
       diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,-5,5,0,0,0,0,0,0,0,0,0,null],
       threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      isBoundary: 'X......................X',
+      excluded: 'XXXXXXX.................',
+      isTonal: '.............X..........',
+    },
+    golden9801: {
+      kt: 5,
+      triggeringIndex: 13,
+      triggeringFreq: 1000,
+      freq: [50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000],
+      lzeq: [50,50,50,50,50,50,50,50,50,50,50,50,50,55,50,50,50,50,50,50,50,50,50,50],
+      laeqBand: [19.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,55,50.6,51,51.2,51.3,51.2,51,50.5,49.9,48.9,47.5],
+      diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,5,-5,0,0,0,0,0,0,0,0,0],
+      diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,-5,5,0,0,0,0,0,0,0,0,0,null],
+      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X......................X',
       excluded: 'XXXXXXX.................',
       isTonal: '.............X..........',
@@ -170,6 +218,20 @@ const CAS: CasNonRegression[] = [
       excluded: 'XXXXXXX.................',
       isTonal: '........................',
     },
+    golden9801: {
+      kt: 0,
+      triggeringIndex: null,
+      triggeringFreq: null,
+      freq: [50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000],
+      lzeq: [50,50,50,50,50,50,50,50,50,50,50,50,50,54.5,50,50,50,50,50,50,50,50,50,50],
+      laeqBand: [19.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,54.5,50.6,51,51.2,51.3,51.2,51,50.5,49.9,48.9,47.5],
+      diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,4.5,-4.5,0,0,0,0,0,0,0,0,0],
+      diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,-4.5,4.5,0,0,0,0,0,0,0,0,0,null],
+      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      isBoundary: 'X......................X',
+      excluded: 'XXXXXXX.................',
+      isTonal: '........................',
+    },
   },
   {
     id: "d1-bord-50Hz",
@@ -190,6 +252,20 @@ const CAS: CasNonRegression[] = [
       diffPrev: [null,-30,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
       diffNext: [30,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null],
       threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      isBoundary: 'X......................X',
+      excluded: '.XXXXXX.................',
+      isTonal: '........................',
+    },
+    golden9801: {
+      kt: 0,
+      triggeringIndex: null,
+      triggeringFreq: null,
+      freq: [50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000],
+      lzeq: [80,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50],
+      laeqBand: [49.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,50,50.6,51,51.2,51.3,51.2,51,50.5,49.9,48.9,47.5],
+      diffPrev: [null,-30,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+      diffNext: [30,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null],
+      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X......................X',
       excluded: '.XXXXXX.................',
       isTonal: '........................',
@@ -218,6 +294,20 @@ const CAS: CasNonRegression[] = [
       excluded: 'XXXXXXX.................',
       isTonal: '........................',
     },
+    golden9801: {
+      kt: 0,
+      triggeringIndex: null,
+      triggeringFreq: null,
+      freq: [50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000],
+      lzeq: [50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,80],
+      laeqBand: [19.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,50,50.6,51,51.2,51.3,51.2,51,50.5,49.9,48.9,77.5],
+      diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,30],
+      diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-30,null],
+      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      isBoundary: 'X......................X',
+      excluded: 'XXXXXXX.................',
+      isTonal: '........................',
+    },
   },
   {
     id: "e1-premiere-bande-evaluable-63Hz",
@@ -238,6 +328,20 @@ const CAS: CasNonRegression[] = [
       diffPrev: [null,20,-20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
       diffNext: [-20,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null],
       threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      isBoundary: 'X......................X',
+      excluded: 'X.XXXXX.................',
+      isTonal: '.X......................',
+    },
+    golden9801: {
+      kt: 5,
+      triggeringIndex: 1,
+      triggeringFreq: 63,
+      freq: [50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000],
+      lzeq: [50,70,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50],
+      laeqBand: [19.8,43.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,50,50.6,51,51.2,51.3,51.2,51,50.5,49.9,48.9,47.5],
+      diffPrev: [null,20,-20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+      diffNext: [-20,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null],
+      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X......................X',
       excluded: 'X.XXXXX.................',
       isTonal: '.X......................',
@@ -266,6 +370,20 @@ const CAS: CasNonRegression[] = [
       excluded: 'XXXXXXX.................',
       isTonal: '......................X.',
     },
+    golden9801: {
+      kt: 5,
+      triggeringIndex: 22,
+      triggeringFreq: 8000,
+      freq: [50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000,5000,6300,8000,10000],
+      lzeq: [50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,50,70,50],
+      laeqBand: [19.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,50,50.6,51,51.2,51.3,51.2,51,50.5,49.9,68.9,47.5],
+      diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,20,-20],
+      diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-20,20,null],
+      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      isBoundary: 'X......................X',
+      excluded: 'XXXXXXX.................',
+      isTonal: '......................X.',
+    },
   },
   {
     id: "f-prefixe-contigu-20-bandes",
@@ -286,6 +404,20 @@ const CAS: CasNonRegression[] = [
       diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,20,-20,0,0,0,0,0],
       diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,-20,20,0,0,0,0,0,null],
       threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5],
+      isBoundary: 'X..................X',
+      excluded: 'XXXXXXX.............',
+      isTonal: '.............X......',
+    },
+    golden9801: {
+      kt: 5,
+      triggeringIndex: 13,
+      triggeringFreq: 1000,
+      freq: [50,63,80,100,125,160,200,250,315,400,500,630,800,1000,1250,1600,2000,2500,3150,4000],
+      lzeq: [50,50,50,50,50,50,50,50,50,50,50,50,50,70,50,50,50,50,50,50],
+      laeqBand: [19.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,70,50.6,51,51.2,51.3,51.2,51],
+      diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,20,-20,0,0,0,0,0],
+      diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,-20,20,0,0,0,0,0,null],
+      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X..................X',
       excluded: 'XXXXXXX.............',
       isTonal: '.............X......',
@@ -357,6 +489,63 @@ describe('analyzeKt — non-régression stricte vs main (indexation par index)',
     expect(derniere.isBoundary).toBe(true)
     expect(derniere.diffNext).toBeNull()
     expect(derniere.isTonal).toBe(false)
+  })
+})
+
+/**
+ * MÊME golden sur le cadre 98-01. `analyzeKt9801` partage `ktLevelsByFrequency`
+ * avec le cadre 2026 : le critère de préfixe contigu le traverse, et sa boucle a
+ * dû passer de `KT_BAND_FREQS.length` à `levels.length` — sans quoi un spectre
+ * écourté aurait produit des `NaN` silencieux. Rien ne couvrait cette fonction
+ * sur une couverture partielle : les tests existants (acoustics.test.ts:331-360,
+ * ktAlignment.test.ts:172-186) travaillent tous sur 24 bandes complètes.
+ *
+ * Les seuils diffèrent du cadre 2026 (160 Hz relève de 15 dB, exclusion à
+ * > 14,5 au lieu de >= 15) : les golden sont donc distincts, et c’est normal.
+ */
+describe('analyzeKt9801 — non-régression stricte vs main (cadre 98-01)', () => {
+  for (const c of CAS) {
+    it(c.titre, () => {
+      const spectrum = spectre(c.freqs, c.base, c.pics)
+      const r = analyzeKt9801(spectrum, c.ba, c.freqs)
+      const g = c.golden9801
+
+      expect(r.unavailable).toBeNull()
+      expect(r.bands.map((b) => b.freq)).toEqual(g.freq)
+      expect(r.kt).toBe(g.kt)
+      expect(r.triggeringIndex).toBe(g.triggeringIndex)
+      const fT = r.triggeringIndex === null ? null : r.bands[r.triggeringIndex].freq
+      expect(fT).toBe(g.triggeringFreq)
+
+      expect(r.bands.map((b) => b.lzeq)).toEqual(g.lzeq)
+      expect(r.bands.map((b) => b.laeqBand)).toEqual(g.laeqBand)
+      expect(r.bands.map((b) => b.diffPrev)).toEqual(g.diffPrev)
+      expect(r.bands.map((b) => b.diffNext)).toEqual(g.diffNext)
+      expect(r.bands.map((b) => b.threshold)).toEqual(g.threshold)
+      expect(flags(r.bands.map((b) => b.isBoundary))).toBe(g.isBoundary)
+      expect(flags(r.bands.map((b) => b.excluded))).toBe(g.excluded)
+      expect(flags(r.bands.map((b) => b.isTonal))).toBe(g.isTonal)
+    })
+  }
+
+  it('(f) préfixe écourté : 20 bandes, pas de NaN, 4 kHz en bande de bord', () => {
+    // La régression qu’aurait produite un N figé à 24 : levels[20] undefined,
+    // laeqBand = NaN, et un verdict rendu sur des valeurs qui ne sont pas des nombres.
+    const freqs = KT_BAND_FREQS.slice(0, 20)
+    const r = analyzeKt9801(spectre(freqs, 50, { 1000: 70 }), 55, freqs)
+    expect(r.unavailable).toBeNull()
+    expect(r.bands).toHaveLength(20)
+    expect(r.bands.every((b) => Number.isFinite(b.lzeq) && Number.isFinite(b.laeqBand))).toBe(true)
+    expect(r.bands[19].freq).toBe(4000)
+    expect(r.bands[19].isBoundary).toBe(true)
+    expect(r.kt).toBe(5)
+  })
+
+  it('(g) spectre troué → bande-analyse-absente, comme le cadre 2026', () => {
+    const freqs = FREQS_831C.filter((f) => f !== 1000)
+    const r = analyzeKt9801(spectre(freqs, 50, { 1250: 70 }), 55, freqs)
+    expect(r.unavailable?.reason).toBe('bande-analyse-absente')
+    expect(r.bands).toEqual([])
   })
 })
 

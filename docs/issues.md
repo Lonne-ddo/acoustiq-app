@@ -43,7 +43,7 @@ jour.
 3. `date` devient la clé de jointure de toute l'analyse de conformité :
    - `src/components/Conformite2026.tsx:201` —
      `files.filter((f) => pointMap[f.id] === pt && f.date === selectedDate)` ;
-   - `src/utils/spectraProvenance.ts:56` —
+   - `src/utils/spectraProvenance.ts:55` —
      `if (pointMap[f.id] !== point || f.date !== date) continue`.
 
 ### Conséquences
@@ -78,7 +78,7 @@ au-delà d'une tolérance.
 
 ### Observation connexe (même lecture, à instruire avec)
 
-`readMeta` (`formatDetectors.ts:171-196`) lit le Sommaire à des lignes FIXES
+`readMeta` (`formatDetectors.ts:171-197`) lit le Sommaire à des lignes FIXES
 (modèle en `(1,1)`, série en `(2,1)`, début en `(3,1)`, fin en `(4,1)`). Sur
 l'export français examiné, la disposition réelle est décalée : `(3,1)` contient
 le **numéro de série** (`12782`) et `(4,1)` le modèle. `excelDateToISO(12782)`
@@ -101,7 +101,7 @@ aujourd'hui parce que les détecteurs français sont en `data-first` et ignorent
 d'octave, de **50 Hz à 10 kHz**. `analyzeKt` calcule les émergences entre
 bandes adjacentes **de cette table** : la première et la dernière n'ont qu'un
 seul voisin, donc `diffPrev` ou `diffNext` vaut `null`, donc `isBoundary` est
-vrai, donc `isTonal` est **faux par construction** (`acoustics.ts:842-850`).
+vrai, donc `isTonal` est **faux par construction** (`acoustics.ts:879-888`).
 
 **Une tonalité pure à 50 Hz ou à 10 kHz ne peut donc jamais déclencher Kt**,
 quelle que soit son émergence. Vérifié : un pic à 80 dB sur fond 50 dB dans ces
@@ -129,7 +129,7 @@ fois**, et c'est la confusion des deux qui donne l'impression d'un dilemme :
 
 1. **plage analysée** — les bandes pour lesquelles on cherche une tonalité ;
 2. **plage exigée** — les bandes dont l'absence fait refuser le calcul
-   (`bande-analyse-absente`, `ktLevelsByFrequency`, `acoustics.ts:771-774`).
+   (`bande-analyse-absente`, `ktLevelsByFrequency`, `acoustics.ts:795-808`).
 
 Les séparer lève la tension. **Élargir l'analyse à 12,5 – 20 kHz sans élargir
 l'exigence** : les bandes au-delà de 10 kHz servent uniquement de **voisines**
@@ -144,7 +144,7 @@ pour les Δ, utilisées **quand elles sont présentes**, jamais requises. Effets
   puisque sa voisine est réellement absente de la mesure.
 
 Aucun format ne devient non calculable. La note d'en-tête de `KT_BAND_FREQS`
-(`acoustics.ts:605-623`) présente l'élargissement comme un compromis entre
+(`acoustics.ts:615-622`) présente l'élargissement comme un compromis entre
 couverture et calculabilité : **ce compromis n'existe pas** dès lors que les
 deux rôles sont séparés. Cette entrée remplace cette lecture.
 
@@ -191,3 +191,46 @@ concluent « non tonal ».
 
 Hypothèse initiale : le gabarit encode un arrondi au dB entier — à trancher
 contre la note 98-01. Tranché ci-dessus.
+
+---
+
+## #4 — 821SE xlsx : `branche=n/a` dans la synthèse de kt-recon, fenêtre d'évaluation vide
+
+**Statut** : ouvert, non corrigé. Aucun correctif ici.
+
+### Constat
+
+Dans la SYNTHÈSE de `scripts/kt-recon.mjs`, les six 821SE xlsx de
+`.local-data/` datés du 2025-03-11 (`40488-250311000/002/003/005/006`,
+`40489-250311003`) sortent `branche=n/a` : aucun Kt, et la ligne de synthèse ne
+dit pas pourquoi.
+
+### Ce que montre le détail par fichier (même exécution)
+
+Le motif existe, il n'est simplement pas repris dans la synthèse :
+
+- **le parseur les prend en charge** : 302 à 1083 lignes, date parsée
+  2025-03-11, `spectraSource` A-déponderé, 36 bandes 6,3 Hz → 20 kHz ;
+- **la fenêtre [14:00, 15:00[ est vide** (0 point) : ce sont des mesures
+  courtes du matin (heures de début dans les noms : 09:43 → 12:08). Le script
+  impose la fenêtre par défaut de l'UI (`evalHour = '14:00'`,
+  `src/components/Conformite2026.tsx:169`) et s'arrête là, comme l'UI
+  (`Conformite2026.tsx:247`).
+
+Ce n'est donc pas, en l'état, une classe de fichiers que le parseur rejette :
+c'est une fenêtre d'évaluation qui ne recoupe pas la mesure.
+
+### À vérifier
+
+1. **Synthèse kt-recon** (`scripts/kt-recon.body.mjs`, boucle SYNTHÈSE) :
+   `n/a` confond « fenêtre vide », « aucun spectre » et « ref git
+   introuvable ». Elle devrait reprendre le motif du détail.
+2. **Comportement de l'app sur fenêtre vide** : `Conformite2026.tsx:247-268`
+   rend `bpReason: 'noData'`, `pass: null`, `ktAnalysis: null` — mais aussi
+   `kt: 0`. Vérifier que l'UI affiche bien « pas de données dans la fenêtre »
+   et jamais un « Kt = 0 » lisible comme « pas de tonalité ». Non vérifié.
+3. **Les trois 821SE xlsx de plus de 100 Mo** n'ont pas été passés dans
+   kt-recon (chargement SheetJS de plus de 25 min) : leur prise en charge
+   reste non vérifiée par cette voie.
+4. Relancer ces six fichiers sur une fenêtre qui recoupe la mesure (p. ex.
+   `evalHour` = heure de début) pour obtenir un vrai verdict Kt.

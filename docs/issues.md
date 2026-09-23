@@ -306,6 +306,32 @@ jour à faire malgré tout, avec vérification des deux cartes.
 `npm audit` signale aussi, en « high » avec correctif disponible : vite,
 postcss, nanoid, form-data, brace-expansion.
 
+### Analyse de la migration 5.23 → 6.11.1 (recon du 2026-09-23, rien de mis à jour)
+
+Toutes les ruptures sont en **6.0.0** (aucune entrée ⚠️ de 6.1 à 6.11.1 ;
+CHANGELOG et guide de migration lus au tag v6.11.1).
+
+| Rupture 6.0.0 | Affecte l'app ? | Où |
+|---|---|---|
+| Distribution ESM seule, **plus d'export par défaut** | **Oui — casse le build** | `import maplibregl from 'maplibre-gl'` : `MeteoMap.tsx:2`, `Vue3DTab.tsx:6` → `import * as maplibregl` |
+| Worker : plus de `blob:` intégré ; sous Vite, `setWorkerUrl()` requis | **Oui — casse l'exécution** | aucun `setWorkerUrl` dans le dépôt → `import workerUrl from 'maplibre-gl/dist/maplibre-gl-worker.mjs?url'` |
+| CSP `worker-src` du player Power Apps (worker devenu fichier de même origine) | Incertain | à vérifier en Local Play puis publié |
+| WebGL2 obligatoire (`GPUInitializationError`) | Incertain, faible | `MeteoMap.tsx:45`, `Vue3DTab.tsx:529` (sans try/catch) ; postes VDI |
+| style-spec v25 : erreurs sur expressions héritées | Incertain, faible | filtres `['==', '$type', …]` `Vue3DTab.tsx:731-750` (conversion encore présente en 6.11.1) |
+| `zoomLevelsToOverscale` = 4 par défaut | Incertain, faible | `queryRenderedFeatures` `Vue3DTab.tsx:643`, `:908` à très fort zoom |
+| Lignes semi-transparentes superposées sans cumul | Visuel mineur | `MeteoMap.tsx:159`, contours de `Vue3DTab` |
+| Autres (ES2022, `map.transform`, classes d'événements, `setData` sans 2ᵉ argument, GeoJSON imbriqué, Hash, lumière, icônes) | Non | API non utilisées ou usage compatible |
+
+**Exposition réelle à GHSA-jrc7-96c5-q579 : nulle.** `DOM.sanitize` ne sert
+qu'aux chaînes d'attribution des sources (`AttributionControl`) ; celles de
+l'app sont des constantes (`MeteoMap.tsx:28`, `Vue3DTab.tsx:56`).
+`Popup.setHTML` n'appelle jamais `sanitize` (ni en v5 ni en v6) : sa sûreté
+repose sur `escapeHtml`, vérifié sur toutes les interpolations.
+
+**Effort : faible à moyen** — deux corrections mécaniques (import, worker) ;
+l'essentiel est la recette manuelle des deux cartes (marqueurs, popups,
+terrain, extrusions, sélection), qu'aucun test ne couvre.
+
 ---
 
 ## #7 — Note : fins de ligne (`core.autocrlf`)
@@ -318,3 +344,35 @@ déjà un `.gitattributes` avec `* text=auto` : l'index est normalisé en LF
 quel que soit le réglage du poste, donc aucun diff fantôme de fins de ligne
 dans les commits. Seules les copies de travail peuvent alterner CRLF/LF
 selon l'outil qui écrit le fichier ; c'est sans effet sur l'historique.
+
+---
+
+## #8 — `parseEcmeFile` accepte n'importe quel classeur, en silence
+
+**Statut** : ouvert, non corrigé.
+**Sévérité** : moyenne — résultat faux sans message d'erreur.
+
+### Constat
+
+Passé à `parseEcmeFile`, un export 831C (feuille 1 « Sommaire », au format
+libellé / valeur) est accepté et produit **107 « occupations »** : chaque
+libellé devient une `refBv`, chaque valeur un `modele` — dont des durées
+(« Durée », « Pause ») converties en date de 1899.
+
+La lecture POSITIONNELLE (`src/utils/ecmeParser.ts:155` col A → `refBv`,
+`:157` col B → `modele`) est conforme au format ECME documenté
+(`:6-8`) : ce n'est pas un décalage de colonnes. Le défaut est l'absence de
+validation du format :
+
+- `:135-142` — si aucune des 8 premières lignes n'a une date en colonne E,
+  `headerRow` reste à 0 **sans erreur** ;
+- `:145-149` — aucune colonne de date détectée : non vérifié, le parseur
+  continue ;
+- aucune vérification des libellés d'en-tête (Réf. BV, Modèle…).
+
+### Piste
+
+Refuser explicitement (« ce fichier n'est pas un classeur ECME ») quand
+aucune ligne d'en-tête datée n'est trouvée ou que `dateColumns` est vide.
+
+Découvert lors du golden SheetJS (831C passé à tous les parseurs).

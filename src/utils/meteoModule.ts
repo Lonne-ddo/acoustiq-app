@@ -7,6 +7,8 @@ import { makeMeteoPoint, type MeteoPoint } from '../components/meteo/PointsList'
 import {
   isError,
   formatStationTrace,
+  lstVersHeureToronto,
+  FUSEAU_ECCC_LST_HISTORIQUE,
   type SourceId,
   type SourceOutcome,
   type SourceResult,
@@ -120,6 +122,31 @@ export function serializeMeteoModule(
   return base
 }
 
+/** Provinces dont l'heure NORMALE est UTC−5 (écart LST connu pour la correction). */
+const PROVINCES_LST_UTC_MOINS_5 = new Set(['QC', 'ON'])
+
+/**
+ * CORRECTION À LA LECTURE (pas de migration, pas de changement de version) des
+ * résultats ECCC figés AVANT la correction de l'heure ECCC : leurs heures sont
+ * en LST brut (marqueur timezone 'local (LST)'), donc une heure trop tôt en
+ * été. Pour une station QC/ON (LST = UTC−5), chaque heure est ramenée en heure
+ * légale America/Toronto. Autre province, ou province inconnue : laissé tel
+ * quel (écart LST non sûr) — cf. docs/issues.md. Les échecs n'ont pas d'heures.
+ */
+export function corrigerEcccLstALaLecture(o: SourceOutcome): SourceOutcome {
+  if (isError(o) || o.source !== 'eccc' || o.timezone !== FUSEAU_ECCC_LST_HISTORIQUE) return o
+  const province =
+    o.candidates?.find((c) => c.climateId === o.station.climateId)?.province ??
+    /\(([A-Z]{2})\)\s*$/.exec(o.station.name)?.[1] ??
+    null
+  if (!province || !PROVINCES_LST_UTC_MOINS_5.has(province)) return o
+  return {
+    ...o,
+    rows: o.rows.map((r) => ({ ...r, datetime: lstVersHeureToronto(r.datetime, 5) ?? r.datetime })),
+    timezone: 'America/Toronto (corrigé à la lecture depuis LST)',
+  }
+}
+
 /** Reconstruit un MeteoModuleState depuis la forme persistée (results restaurés tels quels s'ils y sont). */
 export function deserializeMeteoModule(p: PersistedMeteoModule): MeteoModuleState {
   const base = makeDefaultMeteoState()
@@ -128,7 +155,9 @@ export function deserializeMeteoModule(p: PersistedMeteoModule): MeteoModuleStat
     startDate: p.startDate ?? base.startDate,
     endDate: p.endDate ?? base.endDate,
     selectedSources: new Set<SourceId>(p.selectedSources ?? Array.from(base.selectedSources)),
-    results: Array.isArray(p.results) ? p.results : [],
+    results: Array.isArray(p.results)
+      ? p.results.map((pr) => ({ ...pr, outcomes: pr.outcomes.map(corrigerEcccLstALaLecture) }))
+      : [],
     asphalt: p.asphalt ?? base.asphalt,
     eccStationByPoint: p.eccStationByPoint ?? {},
     recevabiliteConfig: { ...DEFAUT_MELCCFP, ...(p.recevabiliteConfig ?? {}) },

@@ -272,7 +272,51 @@ export function openMeteoEstArchive(endDate: string, model: string | null, now: 
 }
 
 const FUSEAU_OPEN_METEO = 'America/Toronto'
-const FUSEAU_ECCC = 'local (LST)'
+/**
+ * Heure dans laquelle les lignes ECCC sont EXPRIMÉES : l'heure légale
+ * America/Toronto (heure d'été comprise), dérivée de UTC_DATE — la même que
+ * celle demandée à Open-Meteo. Avant correction : 'local (LST)'.
+ */
+const FUSEAU_ECCC = 'America/Toronto'
+/** Marqueur des résultats ECCC antérieurs à la correction (heures LST brutes). */
+export const FUSEAU_ECCC_LST_HISTORIQUE = 'local (LST)'
+
+const PARTS_TORONTO = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Toronto',
+  year: 'numeric', month: '2-digit', day: '2-digit',
+  hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
+})
+
+/**
+ * Instant UTC (« YYYY-MM-DDTHH:MM[:SS] », sans suffixe de fuseau, forme de
+ * UTC_DATE) → heure légale America/Toronto « YYYY-MM-DD HH:MM:SS ».
+ * Été : UTC−4 (HAE) ; hiver : UTC−5 (HNE). null si illisible.
+ */
+export function utcVersHeureToronto(utc: string): string | null {
+  const m = String(utc).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/)
+  if (!m) return null
+  const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +(m[6] ?? 0))
+  const parts = Object.fromEntries(PARTS_TORONTO.formatToParts(new Date(ms)).map((x) => [x.type, x.value]))
+  return `${parts.year}-${parts.month}-${parts.day} ${parts.hour}:${parts.minute}:${parts.second}`
+}
+
+/**
+ * Heure normale (LST) ECCC → heure légale America/Toronto. `ecartUtcH` : écart
+ * de l'heure normale de la station à UTC (Québec, Ontario de l'Est : 5).
+ * LST ne connaît pas l'heure d'été : ajouter l'écart donne l'instant UTC.
+ */
+export function lstVersHeureToronto(lst: string, ecartUtcH = 5): string | null {
+  const m = String(lst).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2}):(\d{2})(?::(\d{2}))?/)
+  if (!m) return null
+  const ms = Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4] + ecartUtcH, +m[5], +(m[6] ?? 0))
+  return utcVersHeureToronto(new Date(ms).toISOString().slice(0, 19))
+}
+
+/** Jour ISO décalé de `n` jours (arithmétique de calendrier, sans fuseau). */
+function decalerJour(iso: string, n: number): string {
+  const [y, mo, d] = iso.split('-').map(Number)
+  return new Date(Date.UTC(y, mo - 1, d + n)).toISOString().slice(0, 10)
+}
 
 async function fetchOpenMeteoBase({
   lat,
@@ -520,8 +564,13 @@ export async function fetchECCCHourly(
   candidates: ECStationCandidate[],
 ): Promise<SourceResult> {
   if (!stn.climateId) throw new EcccError('unknown', { detail: `${stn.name} : identifiant climatologique manquant.` })
-  const startIso = startDate + 'T00:00:00Z'
-  const endIso = endDate + 'T23:59:59Z'
+  // Le filtre `datetime` de l'API porte sur LOCAL_DATE (heure NORMALE, LST),
+  // malgré le suffixe Z (vérifié : 17:00Z renvoie LOCAL_DATE 17:00). Les
+  // journées légales demandées débordent donc des journées LST (été : 00:00
+  // HAE = 23:00 LST la veille) : on élargit d'un jour de chaque côté, puis on
+  // filtre APRÈS conversion en heure légale.
+  const startIso = decalerJour(startDate, -1) + 'T00:00:00Z'
+  const endIso = decalerJour(endDate, 1) + 'T23:59:59Z'
   const hourlyUrl =
     `https://api.weather.gc.ca/collections/climate-hourly/items` +
     `?CLIMATE_IDENTIFIER=${encodeURIComponent(stn.climateId)}` +
@@ -537,7 +586,15 @@ export async function fetchECCCHourly(
       const p = f.properties || {}
       const windDir10 = num(p.WIND_DIRECTION ?? p.WIND_DIR)
       return {
-        datetime: (p.LOCAL_DATE as string) || (p.UTC_DATE as string),
+        // Heure LÉGALE America/Toronto, dérivée de UTC_DATE. LOCAL_DATE est en
+        // heure normale toute l'année (vérifié : 12:00 LST = 17:00 UTC en
+        // juillet comme en janvier) : l'utiliser tel quel décalait chaque heure
+        // d'été d'une heure. Repli sur LOCAL_DATE (LST de l'Est) si UTC_DATE
+        // manquait — l'API le fournit toujours (vérifié).
+        datetime:
+          (p.UTC_DATE ? utcVersHeureToronto(p.UTC_DATE as string) : null) ??
+          lstVersHeureToronto(p.LOCAL_DATE as string) ??
+          (p.LOCAL_DATE as string),
         temperature: num(p.TEMP),
         humidity: num(p.REL_HUM ?? p.RELATIVE_HUMIDITY),
         precipitation: num(p.PRECIP_AMOUNT ?? p.PRECIPITATION),
@@ -550,6 +607,8 @@ export async function fetchECCCHourly(
         pressureHpa: num(p.STATION_PRESSURE) != null ? (num(p.STATION_PRESSURE) as number) * 10 : null,
       } as MeteoHourRow
     })
+    // Journées légales demandées seulement (la requête a été élargie).
+    .filter((r: MeteoHourRow) => r.datetime >= `${startDate} 00:00:00` && r.datetime <= `${endDate} 23:59:59`)
     .sort((a: MeteoHourRow, b: MeteoHourRow) =>
       String(a.datetime).localeCompare(String(b.datetime)),
     )
@@ -569,7 +628,7 @@ export async function fetchECCCHourly(
     sourceUrl: hourlyUrl,
     sourceLabel: `Env. Canada · ${stn.name} (id ${stn.climateId})`,
     isArchive: true,
-    timezone: 'local (LST)',
+    timezone: FUSEAU_ECCC,
     candidates: candidates.slice(0, ECCC_CANDIDATE_LIMIT),
   }
 }

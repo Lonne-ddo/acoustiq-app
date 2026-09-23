@@ -87,7 +87,7 @@ import MeteoSection from './components/MeteoSection'
 import ComparisonModal from './components/ComparisonModal'
 import { parseWorkbook } from './modules/formatDetectors'
 import { pairResume, isResumeName } from './modules/csvParser'
-import { saveProject, loadProject, buildIndicesSnapshot, buildFullProjectData, buildProjectNotes } from './modules/projectManager'
+import { saveProject, loadProject, buildIndicesSnapshot, buildFullProjectData, buildProjectNotes, recentStateJson } from './modules/projectManager'
 import { getDataverseClient } from './modules/dataverseClient'
 import {
   serializeProject, deserializeProject,
@@ -115,8 +115,8 @@ import {
   makeDefaultMeteoState,
   recevabiliteForDate,
   fenetresAExclure,
+  meteoModuleAuChargement,
   serializeMeteoModule,
-  deserializeMeteoModule,
   ecccStationsUsed,
   ecccFailuresUsed,
   type MeteoModuleState,
@@ -3190,12 +3190,11 @@ export default function App() {
   }
 
   // ---- Sérialisation état courant ----
+  // Projets récents (localStorage) : JAMAIS de résultats météo (cf. recentStateJson).
   const serializeCurrentState = useCallback(() => {
-    return JSON.stringify({
-      files: files.map((f) => ({ id: f.id, name: f.name, model: f.model, serial: f.serial, date: f.date, startTime: f.startTime, stopTime: f.stopTime, rowCount: f.rowCount })),
-      pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods,
-      meteoModule: serializeMeteoModule(meteoModule),
-      projectNumber,
+    return recentStateJson({
+      files, pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods,
+      meteoModule, projectNumber,
     })
   }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods, meteoModule, projectNumber])
 
@@ -3216,7 +3215,7 @@ export default function App() {
   // Export fichier JSON (voie secondaire explicite, déclenchée par « Exporter en
   // fichier » — jamais par « Sauvegarder », qui va dans Dataverse).
   const handleSaveProject = useCallback(() => {
-    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D, categories, periods, serializeMeteoModule(meteoModule), projectNumber)
+    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D, categories, periods, serializeMeteoModule(meteoModule, { withResults: true }), projectNumber)
     cacheToRecents()
   }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, projectNumber, checklist, scene3D, categories, periods, meteoModule, cacheToRecents])
 
@@ -3232,7 +3231,8 @@ export default function App() {
       const project = buildFullProjectData({
         files, pointMap, events, concordance, mapImage, mapMarkers, meteo,
         projectName, projectNumber, checklist, scene3D, categories, periods,
-        meteoModule: serializeMeteoModule(meteoModule),
+        // Résultats météo FIGÉS dans le blob (données telles que récupérées).
+        meteoModule: serializeMeteoModule(meteoModule, { withResults: true }),
       })
       const gz = serializeProject(project)
       const client = getDataverseClient()
@@ -3303,7 +3303,7 @@ export default function App() {
       setMapImage(project.mapImage ?? null)
       setMapMarkers(project.mapMarkers ?? {})
       setMeteo(project.meteo ?? DEFAULT_METEO)
-      setMeteoModule(project.meteoModule ? deserializeMeteoModule(project.meteoModule) : makeDefaultMeteoState())
+      setMeteoModule(meteoModuleAuChargement(project.meteoModule))
       setChecklist(project.checklist ?? DEFAULT_CHECKLIST)
       if (project.scene3D) setScene3D(project.scene3D)
       {
@@ -3345,7 +3345,7 @@ export default function App() {
       if (project.mapImage !== undefined) setMapImage(project.mapImage ?? null)
       if (project.mapMarkers) setMapMarkers(project.mapMarkers)
       if (project.meteo) setMeteo(project.meteo)
-      if (project.meteoModule) setMeteoModule(deserializeMeteoModule(project.meteoModule))
+      setMeteoModule(meteoModuleAuChargement(project.meteoModule))
       if (project.checklist) setChecklist(project.checklist)
       if (project.scene3D) setScene3D(project.scene3D)
       setProjectNumber(project.projectNumber ?? '')
@@ -3386,6 +3386,7 @@ export default function App() {
     setAnnotations([]); setPendingAnnotationText(null)
     setPeriods([]); setCategories(makeDefaultCategories())
     setMeteo(DEFAULT_METEO)
+    setMeteoModule(meteoModuleAuChargement(null))
     setChecklist(DEFAULT_CHECKLIST)
     setProjectId(crypto.randomUUID()); setProjectName(t('project.untitled')); setProjectNumber('')
     setCurrentDataverseId(null)
@@ -3425,7 +3426,7 @@ export default function App() {
         setPeriods(norm.periods)
       }
       setMeteo(parsed.meteo ?? DEFAULT_METEO)
-      setMeteoModule(parsed.meteoModule ? deserializeMeteoModule(parsed.meteoModule) : makeDefaultMeteoState())
+      setMeteoModule(meteoModuleAuChargement(parsed.meteoModule))
       setChecklist(parsed.checklist ?? DEFAULT_CHECKLIST)
       if (parsed.files?.length > 0) {
         setErrors([`${t('project.missingFiles')} : ${parsed.files.map((f: { name: string }) => f.name).join(', ')}`])

@@ -22,8 +22,12 @@ export const DV_CFG = {
   fields: { name: 'acq_name', num: 'acq_numeroprojet', notes: 'acq_notes' },
 } as const
 
-/** Version du format de blob (pour migrations futures). */
-export const SCHEMA_VERSION = 1
+/**
+ * Version du format de blob. 2 : le module météo peut porter ses `results`
+ * figés. Un blob v1 (ou nu, v0) se charge toujours : les champs ajoutés sont
+ * optionnels (results absent ⇒ module sans résultats).
+ */
+export const SCHEMA_VERSION = 2
 
 // ───────────────────────────────────────────────────────────────────────────
 // Sérialisation (versionnée)

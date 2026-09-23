@@ -15,7 +15,7 @@ import type {
   Category,
   ChecklistState,
 } from '../types'
-import type { PersistedMeteoModule } from '../utils/meteoModule'
+import { serializeMeteoModule, type PersistedMeteoModule, type MeteoModuleState } from '../utils/meteoModule'
 import { filterDataByPeriods } from '../utils/acoustics'
 import { computeIndexRow } from '../utils/reportIndices'
 
@@ -49,7 +49,8 @@ export function buildIndicesSnapshot(
   return out
 }
 
-const PROJECT_VERSION = '1.1'
+/** 1.2 : le module météo peut porter ses `results` figés (fetchedAt, request). */
+const PROJECT_VERSION = '1.2'
 
 /**
  * Sauvegarde le projet courant en fichier JSON
@@ -210,6 +211,38 @@ export function buildFullProjectData(input: FullProjectInput): ProjectData {
     periods: input.periods,
     meteoModule: input.meteoModule,
   }
+}
+
+/**
+ * État écrit dans les PROJETS RÉCENTS (localStorage). Jamais de `results`
+ * météo : le JSON n'est pas compressé et le quota (~5 Mo) serait atteint en
+ * quelques projets ; les résultats figés vivent dans le blob Dataverse et dans
+ * l'export fichier. Fonction PURE : ce qu'elle renvoie est exactement ce qui
+ * est écrit.
+ */
+export function recentStateJson(input: {
+  files: MeasurementFile[]
+  pointMap: Record<string, string>
+  events: SourceEvent[]
+  concordance: Record<string, ConcordanceState>
+  mapImage: string | null
+  mapMarkers: Record<string, MarkerPos>
+  meteo: MeteoData
+  checklist: ChecklistState
+  categories: Category[]
+  periods: Period[]
+  meteoModule: MeteoModuleState
+  projectNumber: string
+}): string {
+  const { files, meteoModule, ...rest } = input
+  return JSON.stringify({
+    files: files.map((f) => ({ id: f.id, name: f.name, model: f.model, serial: f.serial, date: f.date, startTime: f.startTime, stopTime: f.stopTime, rowCount: f.rowCount })),
+    pointMap: rest.pointMap, events: rest.events, concordance: rest.concordance, mapImage: rest.mapImage,
+    mapMarkers: rest.mapMarkers, meteo: rest.meteo, checklist: rest.checklist, categories: rest.categories,
+    periods: rest.periods,
+    meteoModule: serializeMeteoModule(meteoModule), // SANS results (withResults absent)
+    projectNumber: rest.projectNumber,
+  })
 }
 
 /**

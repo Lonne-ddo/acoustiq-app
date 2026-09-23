@@ -38,11 +38,11 @@ function makeProject(dataPointsPerFile = 3): ProjectData {
 }
 
 describe('dataverseProjectStore — sérialisation (round-trip versionné, chaîne octets)', () => {
-  it('1. round-trip intégrité : ProjectData réaliste conservé + schemaVersion=1', () => {
+  it('1. round-trip intégrité : ProjectData réaliste conservé + schemaVersion=2', () => {
     const p = makeProject(3)
     const gz = serializeProject(p)
     const { schemaVersion, project } = deserializeProject(gz)
-    expect(schemaVersion).toBe(1)
+    expect(schemaVersion).toBe(2)
     expect(schemaVersion).toBe(SCHEMA_VERSION)
     expect(project).toEqual(p) // deep equal
   })

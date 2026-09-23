@@ -7,11 +7,60 @@ import {
   ecccFailuresUsed,
   fenetresAExclure,
   NIVEAUX_EXCLUS_PAR_METEO,
+  meteoModuleAuChargement,
   type MeteoModuleState,
 } from './meteoModule'
 import type { PointMeteoResults } from './meteoModule'
 import type { SourceResult, SourceError } from './meteoSources'
 import { evaluateRecevabilite, isMelccfpDefault } from './recevabilite'
+
+describe('meteoModuleAuChargement — création et 3 voies de chargement, même règle', () => {
+  it('projet SANS module → module vierge (jamais l’état du projet précédent)', () => {
+    for (const absent of [undefined, null]) {
+      const m = meteoModuleAuChargement(absent)
+      const vierge = makeDefaultMeteoState()
+      expect(m.results).toEqual([])
+      expect(m.eccStationByPoint).toEqual({})
+      expect(m.recevabiliteConfig).toEqual(vierge.recevabiliteConfig)
+      expect([...m.selectedSources]).toEqual([...vierge.selectedSources])
+      expect(m.points).toHaveLength(1)
+    }
+  })
+
+  it('projet AVEC module → ce module, désérialisé', () => {
+    const s = makeDefaultMeteoState()
+    s.eccStationByPoint = { [s.points[0].id]: '7025251' }
+    s.recevabiliteConfig = { ...s.recevabiliteConfig, windMaxKmh: 25 }
+    const m = meteoModuleAuChargement(serializeMeteoModule(s))
+    expect(m.eccStationByPoint).toEqual(s.eccStationByPoint)
+    expect(m.recevabiliteConfig.windMaxKmh).toBe(25)
+  })
+
+  it('App.tsx : la création ET les 3 voies de chargement passent par cette règle, et rien d’autre', async () => {
+    const fs = await import('node:fs')
+    const app = fs.readFileSync(new URL('../App.tsx', import.meta.url), 'utf8')
+    const corps = (nom: string) => {
+      const i = app.indexOf(`const ${nom} = useCallback(`)
+      expect(i, `${nom} introuvable`).toBeGreaterThan(-1)
+      return app.slice(i, app.indexOf('\n  }, [', i))
+    }
+    const voies = {
+      handleNewProject: 'meteoModuleAuChargement(null)',
+      handleOpenDataverseProject: 'meteoModuleAuChargement(project.meteoModule)',
+      handleLoadProject: 'meteoModuleAuChargement(project.meteoModule)',
+      handleSwitchProject: 'meteoModuleAuChargement(parsed.meteoModule)',
+    }
+    for (const [h, appel] of Object.entries(voies)) {
+      // Appel INCONDITIONNEL : pas de « if (…) setMeteoModule » qui garderait l'ancien état.
+      const echappe = `setMeteoModule(${appel})`.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+      expect(corps(h), h).toMatch(new RegExp(`^\\s+${echappe}`, 'm')) // en début de ligne : inconditionnel
+      expect(corps(h), h).not.toMatch(/if \([^)]*\) setMeteoModule/)
+    }
+    // Aucun autre setMeteoModule(…) que ces 4 appels (hors la page Météo elle-même).
+    const appels = app.match(/setMeteoModule\(/g) ?? []
+    expect(appels).toHaveLength(4)
+  })
+})
 
 describe('fenetresAExclure — « Exclure les heures non recevables »', () => {
   const H = 3_600_000

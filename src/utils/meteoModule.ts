@@ -77,10 +77,18 @@ export function makeDefaultMeteoState(): MeteoModuleState {
 }
 
 /**
- * Forme persistée du module météo (dans ProjectData). On sauvegarde la config
- * REPRODUCTIBLE — points, plage, sources, asphalte, et surtout le choix de
- * station ECCC par point — mais PAS les `results` (données lourdes, re-fetchées
- * à la réouverture). Le choix de station devient ainsi défendable/reproductible.
+ * Forme persistée du module météo (dans ProjectData).
+ *
+ * Toujours : la config reproductible — points, plage, sources, asphalte, choix
+ * de station ECCC par point, seuils/filtres/critère d'humidité.
+ *
+ * `results` : les données horaires TELLES QUE RÉCUPÉRÉES, FIGÉES — succès
+ * (lignes, dont dewpoint/pressureHpa tels quels), échecs (SourceError,
+ * ecccFailure), et pour chacun `fetchedAt` + `request`. ERA5 est une
+ * réanalyse révisée et ECCC corrige ses historiques : on fige, on ne
+ * re-interroge pas, on ne recalcule rien au chargement. Écrits UNIQUEMENT sur
+ * demande (`withResults`) : blob Dataverse et export fichier, JAMAIS les
+ * projets récents du localStorage (quota).
  */
 export interface PersistedMeteoModule {
   points: MeteoPoint[]
@@ -90,10 +98,15 @@ export interface PersistedMeteoModule {
   asphalt: boolean
   eccStationByPoint: Record<string, string>
   recevabiliteConfig: RecevabiliteConfig
+  /** Absent : projet antérieur au figeage, ou projet récent (localStorage). */
+  results?: PointMeteoResults[]
 }
 
-export function serializeMeteoModule(state: MeteoModuleState): PersistedMeteoModule {
-  return {
+export function serializeMeteoModule(
+  state: MeteoModuleState,
+  opts: { withResults?: boolean } = {},
+): PersistedMeteoModule {
+  const base: PersistedMeteoModule = {
     points: state.points,
     startDate: state.startDate,
     endDate: state.endDate,
@@ -102,9 +115,12 @@ export function serializeMeteoModule(state: MeteoModuleState): PersistedMeteoMod
     eccStationByPoint: { ...state.eccStationByPoint },
     recevabiliteConfig: { ...state.recevabiliteConfig },
   }
+  // Copie profonde : le blob ne doit pas partager de références avec l'état vivant.
+  if (opts.withResults) base.results = structuredClone(state.results)
+  return base
 }
 
-/** Reconstruit un MeteoModuleState depuis la forme persistée (results vidés). */
+/** Reconstruit un MeteoModuleState depuis la forme persistée (results restaurés tels quels s'ils y sont). */
 export function deserializeMeteoModule(p: PersistedMeteoModule): MeteoModuleState {
   const base = makeDefaultMeteoState()
   return {
@@ -112,11 +128,21 @@ export function deserializeMeteoModule(p: PersistedMeteoModule): MeteoModuleStat
     startDate: p.startDate ?? base.startDate,
     endDate: p.endDate ?? base.endDate,
     selectedSources: new Set<SourceId>(p.selectedSources ?? Array.from(base.selectedSources)),
-    results: [],
+    results: Array.isArray(p.results) ? p.results : [],
     asphalt: p.asphalt ?? base.asphalt,
     eccStationByPoint: p.eccStationByPoint ?? {},
     recevabiliteConfig: { ...DEFAUT_MELCCFP, ...(p.recevabiliteConfig ?? {}) },
   }
+}
+
+/**
+ * État du module Météo à l'ouverture d'un projet — RÈGLE UNIQUE pour la
+ * création et les trois voies de chargement (Dataverse, fichier JSON, projet
+ * récent) : le module du projet s'il en a un, sinon un module VIERGE. Jamais
+ * l'état du projet précédent (qui fuirait, config et résultats, dans le suivant).
+ */
+export function meteoModuleAuChargement(persisted?: PersistedMeteoModule | null): MeteoModuleState {
+  return persisted ? deserializeMeteoModule(persisted) : makeDefaultMeteoState()
 }
 
 /**

@@ -69,7 +69,37 @@ export interface ECStationCandidate {
   lastYear: number | null
 }
 
-export interface SourceResult {
+/**
+ * Paramètres d'une requête météo, FIGÉS au moment où elle part : la plage et
+ * les coordonnées peuvent être modifiées ensuite dans l'UI, et la frontière
+ * archive (ERA5) / prévision d'Open-Meteo bouge avec la date du jour — il faut
+ * savoir de quel côté on était.
+ */
+export interface MeteoRequest {
+  lat: number
+  lng: number
+  startDate: string
+  endDate: string
+  /** Station ECCC imposée (choix manuel), sinon null (sélection auto). */
+  chosenClimateId: string | null
+  /** Archive (ERA5 / station ECCC) ou prévision/passé récent, au moment de la requête. */
+  isArchive: boolean
+  /** Fuseau DEMANDÉ à la source. */
+  timezone: string
+}
+
+/** Trace d'acquisition portée par chaque issue (succès OU échec). */
+export interface AcquisitionTrace {
+  /**
+   * Horodatage ISO posé à la RÉSOLUTION de la requête réseau. Un résultat
+   * resservi par le cache garde cet horodatage d'origine. Absent pour une
+   * issue antérieure à cette traçabilité.
+   */
+  fetchedAt?: string
+  request?: MeteoRequest
+}
+
+export interface SourceResult extends AcquisitionTrace {
   source: SourceId
   rows: MeteoHourRow[]
   station: StationInfo
@@ -84,7 +114,7 @@ export interface SourceResult {
   candidates?: ECStationCandidate[]
 }
 
-export interface SourceError {
+export interface SourceError extends AcquisitionTrace {
   source: SourceId
   error: string
   /** ECCC : cause d'échec typée (message honnête ≠ « aucune donnée » systématique). */
@@ -228,6 +258,22 @@ interface OpenMeteoOptions {
   model: string | null
 }
 
+/**
+ * Open-Meteo best_match : archive ERA5 si la fin de plage date d'au moins 7
+ * jours, sinon API de prévision (passé récent). Frontière MOBILE : dépend de
+ * la date du jour. Un modèle nommé (GEM) passe toujours par la prévision.
+ */
+export function openMeteoEstArchive(endDate: string, model: string | null, now: Date = new Date()): boolean {
+  if (model !== null) return false
+  const today = new Date(now)
+  today.setHours(0, 0, 0, 0)
+  const daysSinceEnd = Math.floor((today.getTime() - toDate(endDate).getTime()) / DAY_MS)
+  return daysSinceEnd >= 7
+}
+
+const FUSEAU_OPEN_METEO = 'America/Toronto'
+const FUSEAU_ECCC = 'local (LST)'
+
 async function fetchOpenMeteoBase({
   lat,
   lng,
@@ -239,10 +285,9 @@ async function fetchOpenMeteoBase({
   today.setHours(0, 0, 0, 0)
   const start = toDate(startDate)
   const end = toDate(endDate)
-  const daysSinceEnd = Math.floor((today.getTime() - end.getTime()) / DAY_MS)
   // Si un modèle est demandé OU si on est dans le futur/passé récent : forecast.
-  // Sinon : archive ERA5.
-  const useForecast = model !== null || daysSinceEnd < 7
+  // Sinon : archive ERA5. (Règle unique : openMeteoEstArchive.)
+  const useForecast = !openMeteoEstArchive(endDate, model)
 
   const params = new URLSearchParams({
     latitude: String(lat),
@@ -257,7 +302,7 @@ async function fetchOpenMeteoBase({
       'dew_point_2m',
       'surface_pressure',
     ].join(','),
-    timezone: 'America/Toronto',
+    timezone: FUSEAU_OPEN_METEO,
     wind_speed_unit: 'kmh',
     precipitation_unit: 'mm',
     temperature_unit: 'celsius',
@@ -597,15 +642,34 @@ export function fetchSource(
   const cached = cache.get(key)
   if (cached) return cached
 
+  // Paramètres FIGÉS au départ de la requête.
+  const request: MeteoRequest = {
+    lat,
+    lng,
+    startDate,
+    endDate,
+    chosenClimateId: source === 'eccc' ? (chosenClimateId ?? null) : null,
+    isArchive: source === 'eccc' ? true : openMeteoEstArchive(endDate, source === 'gem' ? 'gem_seamless' : null),
+    timezone: source === 'eccc' ? FUSEAU_ECCC : FUSEAU_OPEN_METEO,
+  }
+
   const fetcher = (): Promise<SourceResult> => {
     if (source === 'openmeteo') return fetchOpenMeteo(lat, lng, startDate, endDate)
     if (source === 'gem') return fetchGEM(lat, lng, startDate, endDate)
     return fetchECCC(lat, lng, startDate, endDate, chosenClimateId)
   }
 
+  // fetchedAt est posé ICI, à la résolution de la requête réseau — une seule
+  // fois : la promesse mise en cache resservira ce même objet, horodatage compris.
   const promise: Promise<SourceOutcome> = fetcher()
-    .then((r) => r as SourceOutcome)
+    .then((r): SourceOutcome => ({
+      ...r,
+      fetchedAt: new Date().toISOString(),
+      // Le côté archive/prévision EFFECTIVEMENT interrogé fait foi (succès).
+      request: { ...request, isArchive: r.isArchive },
+    }))
     .catch((e: unknown): SourceOutcome => {
+      const trace = { fetchedAt: new Date().toISOString(), request }
       // ECCC : cause typée + candidats survivants (message honnête, pas figé).
       if (source === 'eccc') {
         const f = classifyEcccFailure(e)
@@ -614,9 +678,10 @@ export function fetchSource(
           error: ecccFailureMessage(f),
           ecccFailure: f,
           candidates: e instanceof EcccError ? e.candidates : undefined,
+          ...trace,
         }
       }
-      return { source, error: e instanceof Error ? e.message || 'Erreur inconnue' : 'Erreur inconnue' }
+      return { source, error: e instanceof Error ? e.message || 'Erreur inconnue' : 'Erreur inconnue', ...trace }
     })
 
   // On cache les erreurs aussi mais brièvement (5 min).

@@ -40,6 +40,7 @@ import {
   DEFAUT_MELCCFP,
   seuilsUtilisesLine,
   isMelccfpDefault,
+  filtresValiditeParDefaut,
   type RecevabiliteHour,
   type RecevabiliteConfig,
 } from '../utils/recevabilite'
@@ -505,6 +506,13 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         Valeur: `> ${cfg.precipMaxMm} mm ⇒ non recevable (et chaussée non sèche)`,
       },
       { Champ: 'HR chaussée sèche', Valeur: `≤ ${cfg.hrDryPct} %` },
+      {
+        Champ: 'Filtres de validité',
+        Valeur:
+          `T ∈ [${cfg.validiteTempMinC} ; ${cfg.validiteTempMaxC}] °C, précip. ≤ ${cfg.validitePrecipMaxMm} mm — ` +
+          'hors plage ⇒ indéterminé (donnée aberrante)' +
+          (filtresValiditeParDefaut(cfg) ? '' : ' — FILTRES MODIFIÉS'),
+      },
       {
         Champ: 'Seuils',
         Valeur: isMelccfpDefault(cfg) ? 'MELCCFP (défaut)' : 'MODIFIÉS — non MELCCFP',
@@ -1041,6 +1049,45 @@ function RecevabiliteConfigEditor({
           max={100}
           step={1}
           onValid={(v) => onChange({ ...config, hrDryPct: v })}
+        />
+      </div>
+      <div className="flex items-center gap-2 flex-wrap pt-1">
+        <span
+          className="text-[11px] font-medium text-gray-400"
+          title="Ce ne sont pas des seuils §3.6 : une valeur hors plage rend l'heure « indéterminée » (donnée aberrante), jamais « non recevable »."
+        >
+          Filtres de validité des données
+        </span>
+        {!filtresValiditeParDefaut(config) && (
+          <span className="text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider text-gray-300 bg-gray-700/40 border border-gray-600">
+            filtres modifiés
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <NumField
+          label="T min valide (°C)"
+          value={config.validiteTempMinC}
+          min={-90}
+          max={0}
+          step={1}
+          onValid={(v) => onChange({ ...config, validiteTempMinC: v })}
+        />
+        <NumField
+          label="T max valide (°C)"
+          value={config.validiteTempMaxC}
+          min={0}
+          max={70}
+          step={1}
+          onValid={(v) => onChange({ ...config, validiteTempMaxC: v })}
+        />
+        <NumField
+          label="Précip. max valide (mm/h)"
+          value={config.validitePrecipMaxMm}
+          min={1}
+          max={500}
+          step={1}
+          onValid={(v) => onChange({ ...config, validitePrecipMaxMm: v })}
         />
       </div>
     </div>

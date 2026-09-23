@@ -6,6 +6,8 @@ import {
   chausseeSeche,
   chausseeSecheDetail,
   verdictHeure,
+  computeStats,
+  filtresValiditeParDefaut,
   seuilsUtilisesLine,
   isMelccfpDefault,
   DEFAUT_MELCCFP,
@@ -200,7 +202,7 @@ describe('verdictHeure — une seule fonction de verdict', () => {
 
   const configs: RecevabiliteConfig[] = [
     DEFAUT_MELCCFP,
-    { windMaxKmh: 30, precipMaxMm: 0.2, hrDryPct: 95 },
+    { ...DEFAUT_MELCCFP, windMaxKmh: 30, precipMaxMm: 0.2, hrDryPct: 95 },
   ]
   const winds = [null, 5, 20, 25, 30, 31]
   const precips = [null, 0, 0.1, 0.2, 0.3]
@@ -263,6 +265,63 @@ describe('verdictHeure — une seule fonction de verdict', () => {
   it('chausseeSeche = chausseeSecheDetail(...).state', () => {
     for (const t of temps) for (const hr of hrs) for (const p of precips)
       expect(chausseeSeche(t, hr, p)).toBe(chausseeSecheDetail(t, hr, p).state)
+  })
+})
+
+describe('filtres de validité — donnée aberrante ⇒ indéterminé, jamais non recevable', () => {
+  const r = (over: Partial<MeteoHourRow>): MeteoHourRow => ({
+    datetime: '2026-01-15T08:00', temperature: 5, humidity: 60, precipitation: 0, windSpeed: 5, windDirection: null, ...over,
+  })
+
+  it('bornes STRICTES : −50 et +50 °C valides, −50,1 et +50,1 indéterminés', () => {
+    expect(verdictHeure(r({ temperature: -50 })).level).not.toBe('indetermine')
+    expect(verdictHeure(r({ temperature: 50 })).level).toBe('ok')
+    expect(verdictHeure(r({ temperature: -50.1 })).level).toBe('indetermine')
+    expect(verdictHeure(r({ temperature: 50.1 })).level).toBe('indetermine')
+  })
+
+  it('HIVER QUÉBÉCOIS : −30 °C n’est pas aberrant (le −10 °C du standalone l’aurait été)', () => {
+    const v = verdictHeure(r({ temperature: -30, humidity: 80 }))
+    expect(v.level).toBe('ok')
+    expect(v.steps[0].result).toBe('données valides')
+  })
+
+  it('précip. : 100 mm valide (donc non recevable §3.6), 100,1 mm indéterminé', () => {
+    expect(verdictHeure(r({ precipitation: 100 })).level).toBe('bad')
+    expect(verdictHeure(r({ precipitation: 100.1 })).level).toBe('indetermine')
+  })
+
+  it('PRIORITÉ : donnée aberrante l’emporte sur un vent non recevable ; aucun critère §3.6 évalué', () => {
+    const v = verdictHeure(r({ temperature: 80, windSpeed: 40 }))
+    expect(v.level).toBe('indetermine')
+    expect(v.reasons).toEqual(['T 80.0 °C hors plage de validité [-50 ; 50] — donnée aberrante'])
+    expect(v.steps.some((s) => s.label.startsWith('Vent'))).toBe(false)
+    expect(v.chaussee).toBeNull()
+  })
+
+  it('T et précip. aberrantes : deux motifs, deux étapes', () => {
+    const v = verdictHeure(r({ temperature: -60, precipitation: 150 }))
+    expect(v.level).toBe('indetermine')
+    expect(v.reasons).toHaveLength(2)
+    expect(v.steps.filter((s) => s.cls === 'indetermine')).toHaveLength(2)
+  })
+
+  it('indéterminé n’est ni recevable ni compté non recevable dans les stats', () => {
+    const ev = evaluateRecevabilite([r({ temperature: 99 }), r({ windSpeed: 30, datetime: '2026-01-15T09:00' })])
+    expect(ev[0].level).toBe('indetermine')
+    expect(ev[0].recevable).toBe(false)
+    const s = computeStats(ev)
+    expect(s.indetermine).toBe(1)
+    expect(s.bad).toBe(1)
+    expect(s.recevables + s.warn + s.bad + s.indetermine).toBe(s.total)
+  })
+
+  it('filtres modifiés : tracés dans seuilsUtilisesLine, sans toucher au drapeau MELCCFP', () => {
+    const cfg: RecevabiliteConfig = { ...DEFAUT_MELCCFP, validiteTempMinC: -40 }
+    expect(isMelccfpDefault(cfg)).toBe(true)
+    expect(filtresValiditeParDefaut(cfg)).toBe(false)
+    expect(seuilsUtilisesLine(cfg)).toContain('FILTRES MODIFIÉS')
+    expect(seuilsUtilisesLine(DEFAUT_MELCCFP)).not.toContain('FILTRES MODIFIÉS')
   })
 })
 

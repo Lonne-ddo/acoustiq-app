@@ -10,6 +10,19 @@ import {
 import type { PointMeteoResults } from './meteoModule'
 import type { SourceResult, SourceError } from './meteoSources'
 
+describe('persistance meteoModule — config d’avant les filtres de validité', () => {
+  it('un projet sans champs de validité se charge avec les défauts −50/+50 °C, 100 mm', () => {
+    const p = serializeMeteoModule(makeDefaultMeteoState())
+    // Forme d'un projet sauvegardé AVANT l'ajout des filtres : 3 seuils seulement.
+    const ancien = { ...p, recevabiliteConfig: { windMaxKmh: 25, precipMaxMm: 0, hrDryPct: 90 } }
+    const cfg = deserializeMeteoModule(ancien as typeof p).recevabiliteConfig
+    expect(cfg.windMaxKmh).toBe(25) // seuil persisté conservé
+    expect(cfg.validiteTempMinC).toBe(-50)
+    expect(cfg.validiteTempMaxC).toBe(50)
+    expect(cfg.validitePrecipMaxMm).toBe(100)
+  })
+})
+
 describe('persistance meteoModule — eccStationByPoint (save/load)', () => {
   function stateWithChoice(): MeteoModuleState {
     const base = makeDefaultMeteoState()

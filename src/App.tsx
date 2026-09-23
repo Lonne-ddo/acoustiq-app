@@ -121,6 +121,7 @@ import {
   type MeteoModuleState,
   type ProjectPointHint,
 } from './utils/meteoModule'
+import type { RecevabiliteLevel } from './utils/recevabilite'
 import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
 import StreamAudioPlayer from './components/audio/AudioPlayer'
@@ -1488,7 +1489,7 @@ interface MainPanelProps {
   meteoModule: MeteoModuleState
   onMeteoModuleChange: (state: MeteoModuleState) => void
   meteoProjectPoints: ProjectPointHint[]
-  recevabiliteOverlay: { startMs: number; endMs: number; recevable: boolean }[]
+  recevabiliteOverlay: { startMs: number; endMs: number; recevable: boolean; level: RecevabiliteLevel }[]
   showMeteoRecevabilite: boolean
 }
 
@@ -2905,13 +2906,16 @@ export default function App() {
       startMs: anchor + h.startMin * 60_000,
       endMs: anchor + h.endMin * 60_000,
       recevable: h.recevable,
+      level: h.level,
     }))
   }, [meteoModule, selectedDate])
 
   // Crée des périodes "exclude" pour chaque heure non recevable de la date courante,
   // en fusionnant les heures contiguës pour limiter le nombre de périodes.
   const handleExcludeNonRecevable = useCallback(() => {
-    const non = recevabiliteOverlay.filter((h) => !h.recevable)
+    // Indéterminé (donnée aberrante) n'est PAS un verdict « non recevable » :
+    // jamais exclu automatiquement. (warn reste exclu comme avant.)
+    const non = recevabiliteOverlay.filter((h) => h.level === 'bad' || h.level === 'warn')
     if (non.length === 0) {
       showToast('Aucune heure non recevable à exclure.', 'info')
       return

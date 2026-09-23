@@ -31,7 +31,12 @@ export interface MeteoHourRow {
   weatherText?: string | null
 }
 
-export type RecevabiliteLevel = 'ok' | 'warn' | 'bad'
+/**
+ * Niveaux §3.6. `indetermine` = donnée météo aberrante (capteur défaillant ?) :
+ * un échec de DONNÉE, pas un verdict réglementaire — l'heure n'est déclarée
+ * ni recevable ni non recevable.
+ */
+export type RecevabiliteLevel = 'ok' | 'warn' | 'bad' | 'indetermine'
 
 export interface RecevabiliteHour extends MeteoHourRow {
   date: Date
@@ -59,12 +64,35 @@ export interface RecevabiliteConfig {
   precipMaxMm: number
   /** HR seuil chaussée sèche (%) : ≤ ce seuil (sans précip, gel) ⇒ sèche. */
   hrDryPct: number
+  /**
+   * Filtres de VALIDITÉ (anti-aberration) — ne sont pas des seuils §3.6 :
+   * une valeur hors plage rend l'heure `indetermine`, prioritairement à tout
+   * critère. Bornes STRICTES (−50 °C est valide, −50,1 °C ne l'est pas).
+   */
+  validiteTempMinC: number
+  validiteTempMaxC: number
+  /** Précipitation horaire au-delà de laquelle la donnée est jugée aberrante (mm/h). */
+  validitePrecipMaxMm: number
 }
 
 export const DEFAUT_MELCCFP: RecevabiliteConfig = {
   windMaxKmh: 20,
   precipMaxMm: 0,
   hrDryPct: 90,
+  // −50 / +50 °C : un hiver québécois (−30 °C) reste valide ; le −10 °C du
+  // standalone l'aurait déclaré aberrant.
+  validiteTempMinC: -50,
+  validiteTempMaxC: 50,
+  validitePrecipMaxMm: 100,
+}
+
+/** Vrai si les filtres de validité sont ceux par défaut. */
+export function filtresValiditeParDefaut(c: RecevabiliteConfig): boolean {
+  return (
+    c.validiteTempMinC === DEFAUT_MELCCFP.validiteTempMinC &&
+    c.validiteTempMaxC === DEFAUT_MELCCFP.validiteTempMaxC &&
+    c.validitePrecipMaxMm === DEFAUT_MELCCFP.validitePrecipMaxMm
+  )
 }
 
 /** Vrai si la config est strictement les valeurs MELCCFP par défaut. */
@@ -86,7 +114,10 @@ export function seuilsUtilisesLine(c: RecevabiliteConfig): string {
     `Seuils utilisés — vent ≥ ${c.windMaxKmh} km/h · ` +
     `précip > ${c.precipMaxMm} mm (recevabilité ET chaussée) · ` +
     `HR chaussée ≤ ${c.hrDryPct} %` +
-    (isMelccfpDefault(c) ? ' (MELCCFP)' : ' — SEUILS MODIFIÉS (non MELCCFP)')
+    (isMelccfpDefault(c) ? ' (MELCCFP)' : ' — SEUILS MODIFIÉS (non MELCCFP)') +
+    ` · validité T ∈ [${c.validiteTempMinC} ; ${c.validiteTempMaxC}] °C, ` +
+    `précip. ≤ ${c.validitePrecipMaxMm} mm` +
+    (filtresValiditeParDefaut(c) ? '' : ' (FILTRES MODIFIÉS)')
   )
 }
 
@@ -95,6 +126,7 @@ export const RECEVABILITE_LABEL: Record<RecevabiliteLevel, string> = {
   ok: 'recevable',
   warn: 'à signaler',
   bad: 'non recevable',
+  indetermine: 'indéterminé',
 }
 
 /** Période réglementaire (jour/soir/nuit) d'un instant — via la source unique. */
@@ -142,8 +174,11 @@ export function parseHourTimestamp(s: string): Date {
 // qui a produit le verdict.
 // ─────────────────────────────────────────────────────────────────────────
 
-/** Effet d'une étape sur le verdict. `skip` = critère non évalué (sans effet). */
-export type StepCls = 'ok' | 'warn' | 'bad' | 'skip'
+/**
+ * Effet d'une étape sur le verdict. `skip` = critère non évalué (sans effet) ;
+ * `indetermine` = donnée aberrante, prioritaire sur tout le reste.
+ */
+export type StepCls = 'ok' | 'warn' | 'bad' | 'indetermine' | 'skip'
 
 /** Une étape de l'arbre de décision, telle qu'affichée à l'utilisateur. */
 export interface VerdictStep {
@@ -174,8 +209,9 @@ export interface Verdict {
 
 type CriteresHeure = Pick<MeteoHourRow, 'temperature' | 'humidity' | 'precipitation' | 'windSpeed'>
 
-/** Niveau porté par une liste d'étapes : bad > warn > ok ; `skip` est neutre. */
+/** Niveau porté par une liste d'étapes : indetermine > bad > warn > ok ; `skip` est neutre. */
 export function levelFromSteps(steps: VerdictStep[]): RecevabiliteLevel {
+  if (steps.some((s) => s.cls === 'indetermine')) return 'indetermine'
   if (steps.some((s) => s.cls === 'bad')) return 'bad'
   if (steps.some((s) => s.cls === 'warn')) return 'warn'
   return 'ok'
@@ -246,6 +282,27 @@ export function verdictHeure(
   const steps: VerdictStep[] = []
   const reasons: string[] = []
   let n = 1
+
+  // Validité des données — PRIORITAIRE : une donnée aberrante rend l'heure
+  // indéterminée, et aucun critère §3.6 n'est évalué sur elle.
+  const t = row.temperature
+  const p0 = row.precipitation
+  const { validiteTempMinC: tMin, validiteTempMaxC: tMax, validitePrecipMaxMm: pAb } = config
+  const tAberrante = t != null && (t < tMin || t > tMax)
+  const pAberrante = p0 != null && p0 > pAb
+  if (tAberrante || pAberrante) {
+    if (tAberrante) {
+      reasons.push(`T ${t.toFixed(1)} °C hors plage de validité [${tMin} ; ${tMax}] — donnée aberrante`)
+      steps.push({ n: n++, label: `Validité : T ∈ [${tMin} ; ${tMax}] °C ?`, detail: `${t.toFixed(1)} °C hors plage physique`, result: 'DONNÉE ABERRANTE', cls: 'indetermine' })
+    }
+    if (pAberrante) {
+      reasons.push(`précip. ${p0.toFixed(1)} mm > ${pAb} — donnée aberrante`)
+      steps.push({ n: n++, label: `Validité : précip. ≤ ${pAb} mm ?`, detail: `${p0.toFixed(1)} mm > ${pAb}`, result: 'DONNÉE ABERRANTE', cls: 'indetermine' })
+    }
+    steps.push({ n: n++, label: 'Critères §3.6', detail: 'non évalués sur une donnée aberrante (capteur défaillant ?)', result: 'critères non évalués', cls: 'skip' })
+    return { level: levelFromSteps(steps), reasons, steps, chaussee: null }
+  }
+  steps.push({ n: n++, label: 'Validité des données ?', detail: `T ∈ [${tMin} ; ${tMax}] °C et précip. ≤ ${pAb} mm (ou absentes)`, result: 'données valides', cls: 'ok' })
 
   const w = row.windSpeed
   const wLabel = `Vent < ${config.windMaxKmh} km/h ?`
@@ -329,6 +386,8 @@ export interface RecevabiliteStats {
   recevables: number
   warn: number
   bad: number
+  /** Heures à donnée aberrante — ni recevables ni non recevables. */
+  indetermine: number
   /** Pourcentage de recevables (ok) sur le total. */
   pourcentage: number
   jourTotal: number
@@ -343,6 +402,7 @@ export function computeStats(hours: RecevabiliteHour[]): RecevabiliteStats {
   let recevables = 0
   let warn = 0
   let bad = 0
+  let indetermine = 0
   let jourTotal = 0
   let jourRecevable = 0
   let soirTotal = 0
@@ -352,6 +412,7 @@ export function computeStats(hours: RecevabiliteHour[]): RecevabiliteStats {
   for (const h of hours) {
     if (h.level === 'ok') recevables++
     else if (h.level === 'warn') warn++
+    else if (h.level === 'indetermine') indetermine++
     else bad++
     if (h.period === 'jour') {
       jourTotal++
@@ -370,6 +431,7 @@ export function computeStats(hours: RecevabiliteHour[]): RecevabiliteStats {
     recevables,
     warn,
     bad,
+    indetermine,
     pourcentage: total === 0 ? 0 : (recevables / total) * 100,
     jourTotal,
     jourRecevable,

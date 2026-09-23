@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Check, AlertTriangle, X } from 'lucide-react'
+import { Check, AlertTriangle, X, HelpCircle } from 'lucide-react'
 import {
   type RecevabiliteHour,
   type RecevabiliteLevel,
@@ -108,11 +108,12 @@ export default function SourceTable({ sources, recevabiliteBySource, config }: P
         </div>
       )}
 
-      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2">
+      <div className="grid grid-cols-2 sm:grid-cols-6 gap-2">
         <Stat label="Heures (filtré)" value={`${stats.total} / ${hours.length}`} />
         <Stat label="Recevables" value={String(stats.recevables)} accent="emerald" />
         <Stat label="À signaler" value={String(stats.warn)} accent="amber" />
         <Stat label="Non recevables" value={String(stats.bad)} accent="rose" />
+        <Stat label="Indéterminées (donnée aberrante)" value={String(stats.indetermine)} />
         <Stat
           label="% recevable"
           value={`${stats.pourcentage.toFixed(0)}%`}
@@ -172,7 +173,9 @@ export default function SourceTable({ sources, recevabiliteBySource, config }: P
                   ? 'text-gray-200'
                   : h.level === 'warn'
                     ? 'text-amber-300'
-                    : 'text-gray-500'
+                    : h.level === 'indetermine'
+                      ? 'text-gray-400 italic'
+                      : 'text-gray-500'
               return (
                 <tr
                   key={i}
@@ -251,8 +254,17 @@ function Stat({
   )
 }
 
-/** Pastille de recevabilité §3.6 : recevable / à signaler / non recevable. */
+/** Pastille de recevabilité §3.6 : recevable / à signaler / non recevable / indéterminé. */
 function RecevabiliteBadge({ level }: { level: RecevabiliteLevel }) {
+  if (level === 'indetermine') {
+    return (
+      <HelpCircle
+        size={14}
+        className="inline text-gray-400"
+        aria-label={RECEVABILITE_LABEL.indetermine}
+      />
+    )
+  }
   if (level === 'ok') {
     return <Check size={14} className="inline text-emerald-400" aria-label={RECEVABILITE_LABEL.ok} />
   }

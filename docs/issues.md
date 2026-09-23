@@ -464,3 +464,53 @@ Au chargement, si `schemaVersion > SCHEMA_VERSION` (ou `version` >
 `PROJECT_VERSION`) : avertissement non bloquant (« projet enregistré par une
 version plus récente d'AcoustiQ — l'enregistrer ici peut perdre des
 données ») et, au minimum, confirmation avant d'écraser le blob.
+
+---
+
+## #10 — Heures ECCC décalées d'une heure en été (LST pris pour l'heure légale)
+
+**Statut** : **corrigé** le 2026-09-23 (`fix/eccc-heure-locale`).
+**Sévérité** : haute — défaut réglementaire : verdicts §3.6 attribués à la
+mauvaise heure l'été.
+
+### Constat (vérifié sur l'API réelle)
+
+- `LOCAL_DATE` d'ECCC `climate-hourly` est en **heure normale (LST) toute
+  l'année** : `LOCAL_DATE 12:00` ↔ `UTC_DATE 17:00`, en juillet comme en
+  janvier. L'app l'interprétait comme l'heure légale : chaque heure ECCC
+  d'été était placée **une heure trop tôt** — tableaux, comparaison entre
+  sources (l'ECCC de 12 h face à l'Open-Meteo de 12 h, qui est 13 h LST),
+  détection de désaccord, exclusion des heures, résultats figés (G3).
+- Le filtre `datetime` de l'API porte sur `LOCAL_DATE` (LST), malgré le
+  suffixe `Z` : la requête couvrait des journées LST, pas des journées
+  légales.
+
+### Correction
+
+`src/utils/meteoSources.ts` : `datetime` = `UTC_DATE` converti en heure
+légale `America/Toronto` (`utcVersHeureToronto`) — la même heure que celle
+demandée à Open-Meteo ; requête élargie d'un jour de chaque côté puis
+filtrage sur les journées légales demandées. `timezone` des résultats ECCC :
+`America/Toronto`. Tests : une heure d'été, une heure d'hiver, journée
+complète, alignement ECCC/Open-Meteo (`src/utils/ecccHeure.test.ts`).
+
+### Résultats déjà figés : correction À LA LECTURE (sans migration)
+
+Décompte au moment de la correction : **zéro** projet connu contenant de la
+météo ECCC figée — `results` n'est persisté que depuis G3 (`b922ade`, même
+jour) ; aucun export JSON sur le poste ; l'authentification `pac` de ce poste
+est révoquée depuis le 2026-08-31, donc aucune publication Power Apps de G3
+depuis ce poste. Réserve : une publication depuis un autre poste ne peut pas
+être exclue d'ici.
+
+`corrigerEcccLstALaLecture` (`src/utils/meteoModule.ts`) : un résultat ECCC
+marqué `timezone: 'local (LST)'` voit ses heures ramenées en heure légale au
+chargement (+1 h l'été), si la station est au QC ou en ON (LST = UTC−5).
+Pas de migration, pas de changement de version ; la trace d'acquisition
+(`fetchedAt`, `request`) n'est pas modifiée.
+
+**Limites** : (1) station d'une autre province — écart LST non sûr — laissée
+telle quelle ; (2) un résultat figé avant correction couvrait des journées
+LST : corrigé à la lecture, il lui manque l'heure 00:00 légale du premier jour
+d'été et il déborde sur 00:00 du lendemain (données non récupérables sans
+nouvelle requête).

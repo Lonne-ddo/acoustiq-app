@@ -77,7 +77,7 @@ describe('fetchedAt — posé à la RÉSOLUTION réseau, conservé par le cache'
     // 503 sur la liste des stations : classé « no-stations » par fetchECCCStations, statut conservé.
     expect(ec.ecccFailure).toEqual({ kind: 'no-stations', httpStatus: 503 })
     expect(ec.fetchedAt).toBe(T0.toISOString())
-    expect(ec.request).toMatchObject({ chosenClimateId: '7025251', isArchive: true, timezone: 'local (LST)' })
+    expect(ec.request).toMatchObject({ chosenClimateId: '7025251', isArchive: true, timezone: 'America/Toronto' })
   })
 })
 

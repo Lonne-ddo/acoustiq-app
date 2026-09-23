@@ -27,11 +27,13 @@ import { analyzeKt, analyzeKt9801, KT_BAND_FREQS } from './acoustics'
  * critère de PRÉFIXE CONTIGU (`ktLevelsByFrequency`) rétablit ce calcul sans
  * rouvrir la porte aux spectres TROUÉS, qui restent refusés — cas (g).
  *
- * PROVENANCE DES GOLDEN. Valeurs produites par l’`analyzeKt` de `main` (f8035d0),
- * extraite par `git show` dans un harnais temporaire hors du dépôt, exécutée
- * sur ces entrées exactes. Égalité STRICTE constatée sur les 9 cas : `kt`,
- * `triggeringIndex` et toutes les `KtBandRow`, champ par champ, sans
- * tolérance. Les littéraux sont recopiés à pleine précision — le bruit flottant
+ * PROVENANCE DES GOLDEN. Valeurs produites par l’`analyzeKt` (`golden`) et
+ * l’`analyzeKt9801` (`golden9801`) de `main` (f8035d0), extraites par
+ * `git show` dans un harnais temporaire hors du dépôt, exécutées sur ces
+ * entrées exactes. Égalité STRICTE constatée sur les 9 cas calculés, pour
+ * chacune des deux fonctions : `kt`, `triggeringIndex` et toutes les
+ * `KtBandRow`, champ par champ, sans tolérance. Le 10ᵉ cas (spectre troué,
+ * (g)) est un refus sur la branche, testé à part. Les littéraux sont recopiés à pleine précision — le bruit flottant
  * visible (p. ex. 43.800000000000004) est la valeur RÉELLE de `main`, pas une
  * coquille : l’arrondir relâcherait le critère.
  *

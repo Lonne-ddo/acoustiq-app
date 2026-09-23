@@ -4,3 +4,6 @@
 # Les PDF réglementaires embarqués sont du binaire : jamais de normalisation
 # de fins de ligne, qui les corromprait silencieusement.
 *.pdf binary
+
+# Tarballs vendorisés (vendor/, cf. docs/sheetjs.md) : binaires, jamais normalisés.
+*.tgz binary

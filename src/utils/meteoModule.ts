@@ -120,6 +120,16 @@ export function deserializeMeteoModule(p: PersistedMeteoModule): MeteoModuleStat
 }
 
 /**
+ * État du module Météo à l'ouverture d'un projet — RÈGLE UNIQUE pour la
+ * création et les trois voies de chargement (Dataverse, fichier JSON, projet
+ * récent) : le module du projet s'il en a un, sinon un module VIERGE. Jamais
+ * l'état du projet précédent (qui fuirait, config et résultats, dans le suivant).
+ */
+export function meteoModuleAuChargement(persisted?: PersistedMeteoModule | null): MeteoModuleState {
+  return persisted ? deserializeMeteoModule(persisted) : makeDefaultMeteoState()
+}
+
+/**
  * Heures de recevabilité du premier point / première source non-erreur,
  * filtrées sur `selectedDate` (YYYY-MM-DD).
  */

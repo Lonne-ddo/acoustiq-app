@@ -115,8 +115,8 @@ import {
   makeDefaultMeteoState,
   recevabiliteForDate,
   fenetresAExclure,
+  meteoModuleAuChargement,
   serializeMeteoModule,
-  deserializeMeteoModule,
   ecccStationsUsed,
   ecccFailuresUsed,
   type MeteoModuleState,
@@ -3303,7 +3303,7 @@ export default function App() {
       setMapImage(project.mapImage ?? null)
       setMapMarkers(project.mapMarkers ?? {})
       setMeteo(project.meteo ?? DEFAULT_METEO)
-      setMeteoModule(project.meteoModule ? deserializeMeteoModule(project.meteoModule) : makeDefaultMeteoState())
+      setMeteoModule(meteoModuleAuChargement(project.meteoModule))
       setChecklist(project.checklist ?? DEFAULT_CHECKLIST)
       if (project.scene3D) setScene3D(project.scene3D)
       {
@@ -3345,7 +3345,7 @@ export default function App() {
       if (project.mapImage !== undefined) setMapImage(project.mapImage ?? null)
       if (project.mapMarkers) setMapMarkers(project.mapMarkers)
       if (project.meteo) setMeteo(project.meteo)
-      if (project.meteoModule) setMeteoModule(deserializeMeteoModule(project.meteoModule))
+      setMeteoModule(meteoModuleAuChargement(project.meteoModule))
       if (project.checklist) setChecklist(project.checklist)
       if (project.scene3D) setScene3D(project.scene3D)
       setProjectNumber(project.projectNumber ?? '')
@@ -3386,6 +3386,7 @@ export default function App() {
     setAnnotations([]); setPendingAnnotationText(null)
     setPeriods([]); setCategories(makeDefaultCategories())
     setMeteo(DEFAULT_METEO)
+    setMeteoModule(meteoModuleAuChargement(null))
     setChecklist(DEFAULT_CHECKLIST)
     setProjectId(crypto.randomUUID()); setProjectName(t('project.untitled')); setProjectNumber('')
     setCurrentDataverseId(null)
@@ -3425,7 +3426,7 @@ export default function App() {
         setPeriods(norm.periods)
       }
       setMeteo(parsed.meteo ?? DEFAULT_METEO)
-      setMeteoModule(parsed.meteoModule ? deserializeMeteoModule(parsed.meteoModule) : makeDefaultMeteoState())
+      setMeteoModule(meteoModuleAuChargement(parsed.meteoModule))
       setChecklist(parsed.checklist ?? DEFAULT_CHECKLIST)
       if (parsed.files?.length > 0) {
         setErrors([`${t('project.missingFiles')} : ${parsed.files.map((f: { name: string }) => f.name).join(', ')}`])

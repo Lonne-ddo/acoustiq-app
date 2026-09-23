@@ -424,6 +424,26 @@ export function verdictHeure(
   return { level: levelFromSteps(steps), reasons, steps, chaussee }
 }
 
+/** Phrase de conclusion d'un verdict (panneau d'inspection, rapports). */
+export function conclusionVerdict(v: Pick<Verdict, 'level' | 'reasons'>): string {
+  switch (v.level) {
+    case 'ok':
+      return 'RECEVABLE — tous les critères évalués sont respectés'
+    case 'warn':
+      return 'À SIGNALER — chaussée non sèche (recevable §3.6, à mentionner au rapport)'
+    case 'bad':
+      return `NON RECEVABLE — ${v.reasons.join(' ; ')}`
+    case 'indetermine':
+      return `INDÉTERMINÉ — donnée aberrante (capteur défaillant ?) : ni recevable ni non recevable — ${v.reasons.join(' ; ')}`
+  }
+}
+
+/** Clé horaire « YYYY-MM-DDTHH » d'un horodatage Open-Meteo ou ECCC (null si illisible). */
+export function hourKeyOf(datetime: string): string | null {
+  const m = String(datetime).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2})/)
+  return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}` : null
+}
+
 /**
  * Calcule la recevabilité §3.6 heure par heure (via `verdictHeure`).
  * @param rows    lignes horaires (n'ont pas besoin d'être triées)

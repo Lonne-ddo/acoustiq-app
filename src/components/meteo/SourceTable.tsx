@@ -7,8 +7,10 @@ import {
   RECEVABILITE_LABEL,
   computeStats,
   parseHourTimestamp,
+  hourKeyOf,
 } from '../../utils/recevabilite'
-import { SOURCES, type SourceResult } from '../../utils/meteoSources'
+import { SOURCES, type SourceResult, type SourceId } from '../../utils/meteoSources'
+import { conditionsLabel } from '../../utils/wmo'
 
 interface Props {
   /** Résultats triés par source pour le point actif. */
@@ -17,6 +19,12 @@ interface Props {
   recevabiliteBySource: Record<string, RecevabiliteHour[]>
   /** Seuils effectifs (pour le surlignage vent/précip). */
   config: RecevabiliteConfig
+  /** Clic sur une ligne : ouvre le panneau d'inspection pour (heure, source). */
+  onSelectHour?: (hourKey: string, source: SourceId) => void
+  /** Heure actuellement inspectée (surlignée). */
+  selectedHourKey?: string | null
+  /** Page de consultation de la source (lien « voir à la source »). */
+  viewerUrlFor?: (s: SourceResult) => string
 }
 
 type PeriodFilter = 'all' | 'jour' | 'soir' | 'nuit'
@@ -48,7 +56,14 @@ function fmtDateLabel(d: Date): string {
   ).padStart(2, '0')}`
 }
 
-export default function SourceTable({ sources, recevabiliteBySource, config }: Props) {
+export default function SourceTable({
+  sources,
+  recevabiliteBySource,
+  config,
+  onSelectHour,
+  selectedHourKey,
+  viewerUrlFor,
+}: Props) {
   const [activeSourceIdx, setActiveSourceIdx] = useState(0)
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('all')
   const [recevableOnly, setRecevableOnly] = useState(false)
@@ -105,6 +120,20 @@ export default function SourceTable({ sources, recevabiliteBySource, config }: P
         <div className="text-[11px] text-gray-500">
           {activeSource.sourceLabel} · station {activeSource.station.name} ·{' '}
           {activeSource.station.distanceKm.toFixed(1)} km
+          {viewerUrlFor && (
+            <>
+              {' · '}
+              <a
+                href={viewerUrlFor(activeSource)}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-emerald-400 hover:underline"
+                title="Ouvrir la page de consultation de cette source (nouvel onglet)"
+              >
+                voir à la source ↗
+              </a>
+            </>
+          )}
         </div>
       )}
 
@@ -160,12 +189,14 @@ export default function SourceTable({ sources, recevabiliteBySource, config }: P
               <th className="text-right px-2 py-1.5 font-medium">Précip mm</th>
               <th className="text-right px-2 py-1.5 font-medium">Vent km/h</th>
               <th className="text-right px-2 py-1.5 font-medium">Dir °</th>
+              <th className="text-left px-2 py-1.5 font-medium">Conditions</th>
               <th className="text-center px-2 py-1.5 font-medium">Recev.</th>
             </tr>
           </thead>
           <tbody>
             {filtered.map((h, i) => {
               const d = h.date instanceof Date ? h.date : parseHourTimestamp(h.datetime)
+              const hk = hourKeyOf(h.datetime)
               const precipBad = h.precipitation != null && h.precipitation > config.precipMaxMm
               const windBad = h.windSpeed != null && h.windSpeed >= config.windMaxKmh
               const rowText =
@@ -179,8 +210,9 @@ export default function SourceTable({ sources, recevabiliteBySource, config }: P
               return (
                 <tr
                   key={i}
-                  className={`border-t border-gray-800 ${rowText}`}
-                  title={h.reasons.join(' · ') || RECEVABILITE_LABEL[h.level]}
+                  className={`border-t border-gray-800 ${rowText} ${onSelectHour ? 'cursor-pointer hover:bg-gray-800/60' : ''} ${hk && hk === selectedHourKey ? 'bg-gray-800' : ''}`}
+                  title={(h.reasons.join(' · ') || RECEVABILITE_LABEL[h.level]) + (onSelectHour ? ' — cliquer pour le détail du calcul' : '')}
+                  onClick={onSelectHour && hk && activeSource ? () => onSelectHour(hk, activeSource.source) : undefined}
                 >
                   <td className="px-2 py-1 whitespace-nowrap">{fmtDateLabel(d)}</td>
                   <td className="px-2 py-1">
@@ -207,6 +239,7 @@ export default function SourceTable({ sources, recevabiliteBySource, config }: P
                   <td className="px-2 py-1 text-right">
                     {fmtNum(h.windDirection, 0)}
                   </td>
+                  <td className="px-2 py-1 text-gray-400 whitespace-nowrap">{conditionsLabel(h)}</td>
                   <td className="px-2 py-1 text-center">
                     <RecevabiliteBadge level={h.level} />
                   </td>
@@ -215,7 +248,7 @@ export default function SourceTable({ sources, recevabiliteBySource, config }: P
             })}
             {filtered.length === 0 && (
               <tr>
-                <td colSpan={8} className="px-2 py-4 text-center text-gray-500 italic">
+                <td colSpan={9} className="px-2 py-4 text-center text-gray-500 italic">
                   Aucune heure ne correspond aux filtres.
                 </td>
               </tr>

@@ -13,6 +13,10 @@ import {
 
 interface Props {
   sources: SourceResult[]
+  /** Clic sur une ligne : panneau d'inspection multi-sources pour l'heure. */
+  onSelectHour?: (hourKey: string) => void
+  /** Heure actuellement inspectée (surlignée). */
+  selectedHourKey?: string | null
 }
 
 interface ComparisonRow {
@@ -44,7 +48,7 @@ function hourKey(s: string): string {
 const fmt = (v: number | null, decimals = 1) =>
   v == null || !Number.isFinite(v) ? '—' : v.toFixed(decimals)
 
-export default function ComparisonTable({ sources }: Props) {
+export default function ComparisonTable({ sources, onSelectHour, selectedHourKey }: Props) {
   const { rows, sourceIds, summary } = useMemo(() => {
     const map = new Map<string, ComparisonRow>()
     const ids: SourceId[] = []
@@ -140,7 +144,12 @@ export default function ComparisonTable({ sources }: Props) {
           {rows.map((row) => {
             const disc = row.discord
             return (
-              <tr key={row.hourKey} className="border-t border-gray-800 text-gray-300">
+              <tr
+                key={row.hourKey}
+                className={`border-t border-gray-800 text-gray-300 ${onSelectHour ? 'cursor-pointer hover:bg-gray-800/60' : ''} ${row.hourKey === selectedHourKey ? 'bg-gray-800' : ''}`}
+                onClick={onSelectHour ? () => onSelectHour(row.hourKey) : undefined}
+                title={onSelectHour ? 'Cliquer pour le détail multi-sources de cette heure' : undefined}
+              >
                 <td className="px-2 py-1 whitespace-nowrap border-r border-gray-800">
                   {fmtDateLabel(row.date)}
                   {disc.anyDisagree && (

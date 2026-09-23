@@ -18,6 +18,9 @@ import PointsList, {
 import MeteoMap from '../components/meteo/MeteoMap'
 import SourceTable from '../components/meteo/SourceTable'
 import ComparisonTable from '../components/meteo/ComparisonTable'
+import MeteoInspector, { type InspectorSelection } from '../components/meteo/MeteoInspector'
+import MeteoTutorial from '../components/meteo/MeteoTutorial'
+import { externalLinks, viewerUrl } from '../utils/meteoLinks'
 import {
   SOURCES,
   fetchSource,
@@ -74,6 +77,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
     Record<string, Record<string, EcccFailure>>
   >({})
   const lastFetchKeyRef = useRef<string | null>(null)
+  // Heure inspectée (clic sur une ligne de tableau). Fermée au changement de point.
+  const [inspection, setInspection] = useState<InspectorSelection | null>(null)
 
   /**
    * Mémorise l'issue ECCC d'un point : candidats (survivent au succès OU à
@@ -119,6 +124,10 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
       setActivePointId(state.results[0].pointId)
     }
   }, [state.results, activePointId])
+
+  useEffect(() => {
+    setInspection(null)
+  }, [activePointId, state.results])
 
   function setPoints(points: MeteoPoint[]) {
     update({ points })
@@ -586,6 +595,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
           </div>
         </div>
 
+        <MeteoTutorial />
+
         {/* SECTION 1 — POINTS */}
         <section className="space-y-3 no-print">
           <SectionHeader index={1} title="Points de mesure" />
@@ -795,7 +806,46 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
               sources={activeSources}
               recevabiliteBySource={recevabiliteBySource}
               config={state.recevabiliteConfig}
+              onSelectHour={(hourKey, source) => setInspection({ mode: 'detail', hourKey, source })}
+              selectedHourKey={inspection?.mode === 'detail' ? inspection.hourKey : null}
+              viewerUrlFor={
+                activePoint?.lat != null && activePoint.lng != null
+                  ? (s) => viewerUrl(s, activePoint.lat!, activePoint.lng!, state.startDate, state.endDate)
+                  : undefined
+              }
             />
+            {inspection?.mode === 'detail' && activeResult && (
+              <MeteoInspector
+                selection={inspection}
+                outcomes={activeResult.outcomes}
+                pointLabel={activePoint?.label ?? ''}
+                asphalt={state.asphalt ?? true}
+                config={state.recevabiliteConfig}
+                onClose={() => setInspection(null)}
+              />
+            )}
+            {activePoint?.lat != null && activePoint.lng != null && (
+              <details className="rounded border border-gray-800 bg-gray-900/40 px-3 py-2 no-print">
+                <summary className="text-xs text-gray-400 cursor-pointer">
+                  Sources de référence externes — consultation manuelle (3 sites)
+                </summary>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2">
+                  {externalLinks(activePoint.lat, activePoint.lng).map((l) => (
+                    <a
+                      key={l.name}
+                      href={l.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block rounded border border-gray-800 px-2 py-1.5 hover:border-gray-600"
+                    >
+                      <div className="text-xs text-gray-200">{l.name} ↗</div>
+                      <div className="text-[10px] text-gray-500">{l.desc}</div>
+                      <div className="text-[10px] text-gray-600">lien direct sur les coordonnées</div>
+                    </a>
+                  ))}
+                </div>
+              </details>
+            )}
             <div className="flex flex-wrap gap-2 pt-1">
               <button
                 onClick={exportCsvSource}
@@ -838,7 +888,21 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         {activeSources.length >= 2 && (
           <section className="space-y-3">
             <SectionHeader index={5} title="Vue comparaison (sources côte à côte)" />
-            <ComparisonTable sources={activeSources} />
+            <ComparisonTable
+              sources={activeSources}
+              onSelectHour={(hourKey) => setInspection({ mode: 'comparison', hourKey })}
+              selectedHourKey={inspection?.mode === 'comparison' ? inspection.hourKey : null}
+            />
+            {inspection?.mode === 'comparison' && activeResult && (
+              <MeteoInspector
+                selection={inspection}
+                outcomes={activeResult.outcomes}
+                pointLabel={activePoint?.label ?? ''}
+                asphalt={state.asphalt ?? true}
+                config={state.recevabiliteConfig}
+                onClose={() => setInspection(null)}
+              />
+            )}
           </section>
         )}
       </div>

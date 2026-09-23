@@ -13,11 +13,17 @@ dist-ssr
 *.local
 
 # Configuration Power Apps — propre à chaque poste (appId, environnement,
-# URL Local Play). Suivie jusqu'ici, elle générait un diff permanent à chaque
-# développeur. Recréer le fichier localement : `pac code init`, ou copier
-# celui d'un poste déjà configuré.
+# URL Local Play). Suivie jusqu'ici, elle écrasait la configuration locale à
+# chaque changement de branche : git traite un fichier ignoré comme jetable et
+# le remplace sans prévenir. Recréer le fichier localement : `pac code init`,
+# ou copier celui d'un poste déjà configuré.
 power.config.json
 power.config.json.bak
+
+# Fichiers de mesure réels, non versionnés (volumineux, souvent clients).
+# Les scripts de reconnaissance (scripts/kt-recon.mjs) et les tests "oracle"
+# les lisent ici : chemin relatif au dépôt, donc identique sur tous les postes.
+.local-data/
 
 # Editor directories and files
 .vscode/*

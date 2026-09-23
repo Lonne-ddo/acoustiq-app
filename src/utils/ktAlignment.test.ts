@@ -3,155 +3,206 @@ import {
   analyzeKt,
   analyzeKt9801,
   checkKtAlignment,
+  ktLevelsByFrequency,
   detectKt,
   computeKt,
   KT_BAND_FREQS,
 } from './acoustics'
 
 /**
- * GARDE-FOU D'ALIGNEMENT DES BANDES (G1/G2/G3).
+ * INDEXATION DES BANDES D'ANALYSE TONALE — par FRÉQUENCE, plus par index.
  *
- * `analyzeKt` associe `spectrum[i]` à `KT_BAND_FREQS[i]` par INDEX. Un spectre
- * qui ne commence pas à 50 Hz produisait donc un Kt numérique calculé sur les
- * mauvaises bandes — un échec technique déguisé en fait de donnée. Sur le 821SE,
- * la régression était pire qu'un chiffre faux : avant le support du spectre A,
- * Kt était visiblement non calculable ; après, il devenait faux en silence.
+ * `analyzeKt` associait `spectrum[i]` à `KT_BAND_FREQS[i]`. Le seul spectre
+ * naturellement aligné était le bloc positionnel 831C (1ʳᵉ bande 50 Hz) ; les
+ * exports G4 français et 821SE démarrent à 6,3 Hz, soit NEUF bandes de
+ * décalage — mauvais seuil, mauvaise pondération A, mauvais test d'exclusion.
  *
- * Règle verrouillée ici : AUCUN spectre désaligné ne produit de Kt numérique.
+ * Chaque bande d'analyse est désormais retrouvée par sa fréquence. Trois règles
+ * verrouillées ici :
+ *   - un spectre qui COUVRE la plage d'analyse est exploitable, où qu'il
+ *     commence (c'est le correctif) ;
+ *   - un spectre TROUÉ est refusé avec un motif, jamais analysé sur un jeu
+ *     incomplet (les Δ se calculent entre bandes adjacentes : un trou les
+ *     fausserait en silence) ;
+ *   - un spectre ÉCOURTÉ — préfixe contigu depuis 50 Hz, sans trou — est
+ *     analysé sur les bandes qu'il a. Distinguer l'écourté du troué est
+ *     nécessaire : l'implémentation par index calculait les écourtés, et les
+ *     refuser aurait été une régression. Cas figés dans
+ *     `ktNonRegression.test.ts`, (f) et (g).
  */
 
-/** Spectre plat 24 bandes avec une émergence de 10 dB sur la 6ᵉ (160 Hz). */
-const tonalSpectrum = (n = 24) => {
-  const s = new Array(n).fill(50)
-  s[5] = 60
-  return s
+/** Spectre plat 50 dB, émergence de 25 dB sur la bande `freq`. */
+function spectrumWithPeak(freqs: number[], peakFreq: number): number[] {
+  return freqs.map((f) => (f === peakFreq ? 75 : 50))
 }
 
-/** Les 36 bandes réelles d'un export G4 (821SE CSV / G4 FR) : démarre à 6,3 Hz. */
+/** Les 36 bandes d'un export G4 FR / 821SE : démarre à 6,3 Hz. */
 const FREQS_36 = [
   6.3, 8, 10, 12.5, 16, 20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250, 315,
   400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500, 3150, 4000, 5000, 6300, 8000,
   10000, 12500, 16000, 20000,
 ]
 
-/** Les 27 bandes du bloc positionnel 831C : démarre à 50 Hz = KT_BAND_FREQS[0]. */
-const FREQS_831C = [
-  50, 63, 80, 100, 125, 160, 200, 250, 315, 400, 500, 630, 800, 1000, 1250, 1600,
-  2000, 2500, 3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000, 20000,
-]
+/** Les 27 bandes du bloc positionnel 831C : démarre à 50 Hz. */
+const FREQS_831C = FREQS_36.slice(FREQS_36.indexOf(50))
 
-describe('checkKtAlignment', () => {
-  it('bandes 831C (1ʳᵉ bande 50 Hz) → aligné', () => {
-    expect(checkKtAlignment(new Array(27).fill(50), FREQS_831C)).toBeNull()
+describe('ktLevelsByFrequency — réordonnancement sur les bandes d\'analyse', () => {
+  it('831C (50 Hz →) : les 24 bandes sont retrouvées', () => {
+    const r = ktLevelsByFrequency(new Array(27).fill(50), FREQS_831C)
+    expect('levels' in r && r.levels).toHaveLength(24)
   })
 
-  it('bandes d\'analyse elles-mêmes → aligné', () => {
-    expect(checkKtAlignment(new Array(24).fill(50), KT_BAND_FREQS)).toBeNull()
+  it('821SE / G4 FR (6,3 Hz →) : les 24 bandes sont retrouvées MALGRÉ le décalage', () => {
+    const spectrum = FREQS_36.map((f) => f) // niveau = fréquence, traçable
+    const r = ktLevelsByFrequency(spectrum, FREQS_36)
+    expect('levels' in r).toBe(true)
+    if ('levels' in r) {
+      // Chaque niveau doit être celui de SA fréquence, pas celui de l'index.
+      expect(r.levels).toEqual(KT_BAND_FREQS)
+      expect(r.levels[0]).toBe(50)      // et non 6.3 (ancien comportement)
+      expect(r.levels[23]).toBe(10000)
+    }
   })
 
-  it('spectre démarrant à 6,3 Hz (821SE / G4 FR) → refusé, motif nommant la fréquence', () => {
-    const u = checkKtAlignment(new Array(36).fill(50), FREQS_36)
-    expect(u?.reason).toBe('alignement-non-verifiable')
-    expect(u?.message).toBe(
-      'Tonalité non évaluable — alignement des bandes non vérifiable '
-      + '(spectre débute à 6.3 Hz, analyse attendue à 50 Hz).',
-    )
+  it('bande d\'analyse absente → motif la nommant', () => {
+    const freqs = FREQS_36.slice(FREQS_36.indexOf(100)) // 50, 63, 80 manquent
+    const r = ktLevelsByFrequency(new Array(freqs.length).fill(50), freqs)
+    expect('levels' in r).toBe(false)
+    if (!('levels' in r)) {
+      expect(r.reason).toBe('bande-analyse-absente')
+      expect(r.message).toBe(
+        'Tonalité non évaluable — la bande d\'analyse 50 Hz est absente du spectre '
+        + '(l\'analyse tonale démarre à 50 Hz).',
+      )
+    }
   })
 
-  it('spectre démarrant à 100 Hz (G4 FR avant le support de la virgule) → refusé', () => {
-    const freqs = FREQS_36.slice(FREQS_36.indexOf(100))
-    const u = checkKtAlignment(new Array(freqs.length).fill(50), freqs)
-    expect(u?.reason).toBe('alignement-non-verifiable')
-    expect(u?.message).toContain('spectre débute à 100 Hz')
+  it('trou AU MILIEU de la plage → refusé (les Δ seraient faussés en silence)', () => {
+    const freqs = FREQS_36.filter((f) => f !== 1000)
+    const r = ktLevelsByFrequency(new Array(freqs.length).fill(50), freqs)
+    expect('levels' in r).toBe(false)
+    if (!('levels' in r)) {
+      expect(r.reason).toBe('bande-analyse-absente')
+      expect(r.message).toContain('1000 Hz est absente')
+    }
   })
 
-  it('fréquences absentes → refusé (ne pas pouvoir vérifier n\'autorise pas à supposer)', () => {
-    const u = checkKtAlignment(new Array(24).fill(50), undefined)
-    expect(u?.reason).toBe('alignement-non-verifiable')
-    expect(u?.message).toContain('fréquences des bandes inconnues')
+  it('fréquences inconnues → refusé (ne pas pouvoir vérifier n\'autorise pas à supposer)', () => {
+    const r = ktLevelsByFrequency(new Array(24).fill(50), undefined)
+    expect('levels' in r).toBe(false)
+    if (!('levels' in r)) {
+      expect(r.reason).toBe('alignement-non-verifiable')
+      expect(r.message).toContain('fréquences des bandes inconnues')
+    }
   })
 
   it('nombre de fréquences ≠ nombre de niveaux → refusé', () => {
-    const u = checkKtAlignment(new Array(24).fill(50), FREQS_831C)
-    expect(u?.message).toContain('24 niveaux pour 27 fréquences')
+    const r = ktLevelsByFrequency(new Array(24).fill(50), FREQS_831C)
+    expect('levels' in r).toBe(false)
+    if (!('levels' in r)) {
+      expect(r.reason).toBe('alignement-non-verifiable')
+      expect(r.message).toContain('24 niveaux pour 27 fréquences')
+    }
   })
 
-  it('bonne 1ʳᵉ bande mais découpage divergent ensuite → refusé, bande nommée', () => {
-    const freqs = [...KT_BAND_FREQS]
-    freqs[3] = 110 // au lieu de 100
-    const u = checkKtAlignment(new Array(24).fill(50), freqs)
-    expect(u?.message).toContain('bande n°4 : 110 Hz dans le spectre, 100 Hz attendu')
+  it('checkKtAlignment reste cohérent avec ktLevelsByFrequency', () => {
+    expect(checkKtAlignment(new Array(27).fill(50), FREQS_831C)).toBeNull()
+    expect(checkKtAlignment(new Array(36).fill(50), FREQS_36)).toBeNull()
+    expect(checkKtAlignment(new Array(24).fill(50), undefined)?.reason)
+      .toBe('alignement-non-verifiable')
   })
 })
 
-describe('analyzeKt — aucun Kt numérique sur un spectre désaligné (G1)', () => {
-  it('831C aligné → Kt calculé', () => {
-    const a = analyzeKt(tonalSpectrum(27), 50, FREQS_831C)
+describe('analyzeKt — le décalage de 9 bandes est corrigé', () => {
+  it('821SE (6,3 Hz →) : Kt calculé, et la bande tonale est la BONNE', () => {
+    const a = analyzeKt(spectrumWithPeak(FREQS_36, 160), 50, FREQS_36)
     expect(a.unavailable).toBeNull()
+    expect(a.bands).toHaveLength(24)
     expect(a.kt).toBe(5)
-    expect(a.bands.length).toBeGreaterThan(0)
+    expect(a.bands[a.triggeringIndex as number].freq).toBe(160)
   })
 
-  it('821SE (6,3 Hz) → non calculable, aucune bande, motif explicite', () => {
-    const a = analyzeKt(tonalSpectrum(36), 50, FREQS_36)
-    expect(a.unavailable?.reason).toBe('alignement-non-verifiable')
-    expect(a.bands).toEqual([])
-    expect(a.triggeringIndex).toBeNull()
+  it('même spectre, indexé par fréquence ≡ ses 24 bandes 50 Hz – 10 kHz extraites', () => {
+    const spectrum = spectrumWithPeak(FREQS_36, 160)
+    const extrait = KT_BAND_FREQS.map((f) => spectrum[FREQS_36.indexOf(f)])
+    const parFreq = analyzeKt(spectrum, 50, FREQS_36)
+    const direct = analyzeKt(extrait, 50, KT_BAND_FREQS)
+    expect(parFreq.bands).toEqual(direct.bands)
+    expect(parFreq.kt).toBe(direct.kt)
+    expect(parFreq.triggeringIndex).toBe(direct.triggeringIndex)
   })
 
-  it('G4 FR (100 Hz) → non calculable', () => {
-    const freqs = FREQS_36.slice(FREQS_36.indexOf(100))
-    expect(analyzeKt(tonalSpectrum(freqs.length), 50, freqs).unavailable?.reason)
-      .toBe('alignement-non-verifiable')
+  it('l\'ancien adressage par index aurait désigné une AUTRE bande', () => {
+    // Émergence posée sur 160 Hz, à l'index 14 du spectre 36 bandes. L'ancien
+    // code lisait KT_BAND_FREQS[14] = 1250 Hz : bande fausse, seuil faux.
+    expect(FREQS_36.indexOf(160)).toBe(14)
+    expect(KT_BAND_FREQS[14]).toBe(1250)
+    const a = analyzeKt(spectrumWithPeak(FREQS_36, 160), 50, FREQS_36)
+    expect(a.bands[a.triggeringIndex as number].freq).not.toBe(1250)
   })
 
-  it('spectre vide → motif DISTINCT de l\'alignement', () => {
+  it('831C bloc positionnel (50 Hz →) : inchangé', () => {
+    const a = analyzeKt(spectrumWithPeak(FREQS_831C, 160), 50, FREQS_831C)
+    expect(a.unavailable).toBeNull()
+    expect(a.bands).toHaveLength(24)
+    expect(a.bands[a.triggeringIndex as number].freq).toBe(160)
+  })
+
+  it('spectre vide → motif DISTINCT', () => {
     const a = analyzeKt([], 50, KT_BAND_FREQS)
     expect(a.unavailable?.reason).toBe('aucune-donnee-spectrale')
     expect(a.unavailable?.message).toBe('Tonalité non évaluable — aucune donnée spectrale.')
   })
 
-  it('un spectre désaligné ne produit JAMAIS de bande tonale', () => {
-    for (const freqs of [FREQS_36, FREQS_36.slice(4), undefined]) {
-      const a = analyzeKt(tonalSpectrum(freqs?.length ?? 24), 50, freqs)
+  it('aucun spectre refusé ne produit de bande tonale', () => {
+    const troue = FREQS_36.filter((f) => f !== 1000)
+    for (const [spec, freqs] of [
+      [new Array(24).fill(50), undefined],
+      [new Array(troue.length).fill(50), troue],
+      [new Array(24).fill(50), FREQS_831C],
+    ] as Array<[number[], number[] | undefined]>) {
+      const a = analyzeKt(spec, 50, freqs)
       expect(a.unavailable).not.toBeNull()
-      expect(a.bands.some((b) => b.isTonal)).toBe(false)
+      expect(a.bands).toEqual([])
+      expect(a.kt).toBe(0)
     }
   })
 })
 
-describe('analyzeKt9801 — même garde-fou (G3)', () => {
-  it('aligné → calculé', () => {
-    const a = analyzeKt9801(tonalSpectrum(27), 50, FREQS_831C)
+describe('analyzeKt9801 — même indexation', () => {
+  it('821SE (6,3 Hz →) : calculé sur les bonnes bandes', () => {
+    const a = analyzeKt9801(spectrumWithPeak(FREQS_36, 160), 50, FREQS_36)
     expect(a.unavailable).toBeNull()
-    expect(a.bands.length).toBeGreaterThan(0)
+    expect(a.bands).toHaveLength(24)
+    expect(a.bands[5].freq).toBe(160)
   })
 
-  it('désaligné → non calculable, pas de résultat numérique', () => {
-    const a = analyzeKt9801(tonalSpectrum(36), 50, FREQS_36)
-    expect(a.unavailable?.reason).toBe('alignement-non-verifiable')
+  it('bande d\'analyse absente → refusé, pas de résultat numérique', () => {
+    const freqs = FREQS_36.slice(FREQS_36.indexOf(100))
+    const a = analyzeKt9801(new Array(freqs.length).fill(50), 50, freqs)
+    expect(a.unavailable?.reason).toBe('bande-analyse-absente')
     expect(a.bands).toEqual([])
   })
 })
 
-describe('detectKt / computeKt — le motif remonte au lieu d\'un 0 muet', () => {
-  it('aligné → détection normale', () => {
-    const d = detectKt(tonalSpectrum(27), 50, FREQS_831C)
+describe('detectKt / computeKt', () => {
+  it('821SE : détection sur la bonne fréquence', () => {
+    const d = detectKt(spectrumWithPeak(FREQS_36, 160), 50, FREQS_36)
     expect(d.unavailable).toBeNull()
     expect(d.detected).toBe(true)
     expect(d.fc).toBe(160)
-    expect(computeKt(tonalSpectrum(27), 50, FREQS_831C)).toBe(5)
+    expect(computeKt(spectrumWithPeak(FREQS_36, 160), 50, FREQS_36)).toBe(5)
   })
 
-  it('désaligné → detected=false MAIS motif porté (≠ « pas de tonalité »)', () => {
-    const d = detectKt(tonalSpectrum(36), 50, FREQS_36)
+  it('spectre refusé → detected=false MAIS motif porté (≠ « pas de tonalité »)', () => {
+    const d = detectKt(new Array(24).fill(50), 50, undefined)
     expect(d.detected).toBe(false)
     expect(d.kt).toBe(0)
     expect(d.unavailable?.reason).toBe('alignement-non-verifiable')
   })
 
-  it('aligné et non tonal → detected=false SANS motif (vraie absence de tonalité)', () => {
-    const d = detectKt(new Array(27).fill(50), 50, FREQS_831C)
+  it('couvert et non tonal → detected=false SANS motif (vraie absence de tonalité)', () => {
+    const d = detectKt(new Array(36).fill(50), 50, FREQS_36)
     expect(d.detected).toBe(false)
     expect(d.unavailable).toBeNull()
   })

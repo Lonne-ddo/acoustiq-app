@@ -122,7 +122,7 @@ import {
   type MeteoModuleState,
   type ProjectPointHint,
 } from './utils/meteoModule'
-import type { RecevabiliteLevel } from './utils/recevabilite'
+import { meteoPourCourbe, type MeteoSelection, type MeteoCourbe } from './utils/meteoCourbe'
 import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
 import StreamAudioPlayer from './components/audio/AudioPlayer'
@@ -1490,8 +1490,12 @@ interface MainPanelProps {
   onOpenChangelog: () => void
   meteoModule: MeteoModuleState
   onMeteoModuleChange: (state: MeteoModuleState) => void
+  /** Sélection de l'onglet Météo (point actif, source) — état d'interface, non persisté. */
+  meteoSelection: MeteoSelection
+  onMeteoSelectionChange: (s: MeteoSelection) => void
+  /** Bandes de recevabilité pour la courbe (null : pas de données météo). */
+  meteoCourbe: MeteoCourbe | null
   meteoProjectPoints: ProjectPointHint[]
-  recevabiliteOverlay: { startMs: number; endMs: number; recevable: boolean; level: RecevabiliteLevel }[]
   showMeteoRecevabilite: boolean
 }
 
@@ -1524,8 +1528,8 @@ function MainPanel({
   onProjectNameChange, onProjectNumberChange, onNewProject, onSwitchProject,
   fetchDataverseProjects, onOpenDataverseProject, dataverseLoadingId,
   onOpenSettings, onOpenShortcuts, onOpenOnboarding, onOpenChangelog,
-  meteoModule, onMeteoModuleChange, meteoProjectPoints,
-  recevabiliteOverlay, showMeteoRecevabilite,
+  meteoModule, onMeteoModuleChange, meteoProjectPoints, meteoSelection, onMeteoSelectionChange, meteoCourbe,
+  showMeteoRecevabilite,
 }: MainPanelProps) {
   const chartFiles = files.filter((f) => !!pointMap[f.id])
   const visibleChartFiles = chartFiles.filter((f) => !hiddenPoints.has(pointMap[f.id]))
@@ -1968,7 +1972,7 @@ function MainPanel({
                   chartRangePickArmed={chartRangePickArmed}
                   onChartRangePicked={onChartRangePicked}
                   chartHighlightRange={chartHighlightRange}
-                  recevabiliteOverlay={showMeteoRecevabilite ? recevabiliteOverlay : undefined}
+                  meteoCourbe={showMeteoRecevabilite ? meteoCourbe : null}
                 />
               </div>
 
@@ -2260,6 +2264,8 @@ function MainPanel({
               state={meteoModule}
               onChange={onMeteoModuleChange}
               projectPoints={meteoProjectPoints}
+              selection={meteoSelection}
+              onSelectionChange={onMeteoSelectionChange}
             />
           </Suspense>
         </div>
@@ -2535,6 +2541,10 @@ export default function App() {
   const [meteoModule, setMeteoModule] = useState<MeteoModuleState>(() =>
     makeDefaultMeteoState(),
   )
+  // Point et source sélectionnés dans l'onglet Météo : pilotent les bandes de
+  // la courbe LAeq. État d'interface, NON persisté (aucun changement du modèle).
+  const [meteoSelection, setMeteoSelection] = useState<MeteoSelection>({ pointId: null, source: null })
+  const meteoCourbe = useMemo(() => meteoPourCourbe(meteoModule, meteoSelection), [meteoModule, meteoSelection])
   // Affichage de la recevabilité météo en overlay sur le graphique LAeq
   const [showMeteoRecevabilite, setShowMeteoRecevabilite] = useState(false)
 
@@ -3826,7 +3836,9 @@ export default function App() {
         meteoModule={meteoModule}
         onMeteoModuleChange={setMeteoModule}
         meteoProjectPoints={meteoProjectPoints}
-        recevabiliteOverlay={recevabiliteOverlay}
+        meteoSelection={meteoSelection}
+        onMeteoSelectionChange={setMeteoSelection}
+        meteoCourbe={meteoCourbe}
         showMeteoRecevabilite={showMeteoRecevabilite}
       />
 

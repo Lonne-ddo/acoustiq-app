@@ -47,6 +47,7 @@ import {
   type RecevabiliteConfig,
 } from '../utils/recevabilite'
 import { detectDiscord, formatDiscord, type HourDiscord } from '../utils/meteoDiscord'
+import type { MeteoSelection } from '../utils/meteoCourbe'
 import type {
   MeteoModuleState,
   PointMeteoResults,
@@ -58,11 +59,21 @@ interface Props {
   onChange: (state: MeteoModuleState) => void
   /** Points assignés du projet, avec coordonnées si disponibles (Scene3D). */
   projectPoints: ProjectPointHint[]
+  /** Sélection remontée dans App (pilote les bandes de la courbe LAeq). */
+  selection?: MeteoSelection
+  onSelectionChange?: (s: MeteoSelection) => void
 }
 
-export default function MeteoPage({ state, onChange, projectPoints }: Props) {
+export default function MeteoPage({ state, onChange, projectPoints, selection, onSelectionChange }: Props) {
   const [fetching, setFetching] = useState(false)
-  const [activePointId, setActivePointId] = useState<string | null>(null)
+  // Point et source actifs : repartent de la sélection d'App (la page est
+  // démontée à chaque changement d'onglet) et y remontent à chaque changement.
+  const [activePointId, setActivePointId] = useState<string | null>(selection?.pointId ?? null)
+  const [activeSourceId, setActiveSourceId] = useState<SourceId | null>(selection?.source ?? null)
+  useEffect(() => {
+    onSelectionChange?.({ pointId: activePointId, source: activeSourceId })
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- remonter seulement quand la sélection change
+  }, [activePointId, activeSourceId])
   // Candidats ECCC par point, DÉCOUPLÉS du SourceResult : ils survivent à un
   // échec horaire (obtenus avant la requête) → le sélecteur reste affiché.
   // Session-only (données réseau volatiles, non persistées avec le projet).
@@ -723,6 +734,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
             )}
             <SourceTable
               sources={activeSources}
+              initialSource={activeSourceId}
+              onActiveSourceChange={setActiveSourceId}
               recevabiliteBySource={recevabiliteBySource}
               config={state.recevabiliteConfig}
               onSelectHour={(hourKey, source) => setInspection({ mode: 'detail', hourKey, source })}

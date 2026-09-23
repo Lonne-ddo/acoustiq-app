@@ -28,6 +28,7 @@ import type {
 } from '../types'
 import { computeReportIndices } from '../utils/reportIndices'
 import { tableauExclusionsMeteo } from '../utils/exclusionMeteo'
+import { blocCouvertureRapport } from '../utils/conformiteFenetre'
 import {
   seuilsUtilisesLine,
   DEFAUT_MELCCFP,
@@ -251,6 +252,8 @@ export default function ReportGenerator({
           res
         )
       })
+      // Couverture réelle de la fenêtre, citée au même titre que le motif météo.
+      const couverture = blocCouvertureRapport(cs.points)
       const passCount = cs.points.filter((p) => p.pass === true).length
       const failCount = cs.points.filter((p) => p.pass === false).length
 
@@ -281,6 +284,7 @@ export default function ReportGenerator({
         `${head}\n${separator}\n${rows.join('\n')}\n\n` +
         `Synthèse : ${passCount} point(s) conforme(s), ${failCount} non conforme(s) ` +
         `sur ${cs.points.length} évalué(s).` +
+        (couverture.length ? `\n\n${couverture.join('\n')}` : '') +
         uncertaintyBlock
       )
     }

@@ -48,6 +48,8 @@ import {
   type ReceptorType,
   type Period,
   type PointResult,
+  libelleCouverture,
+  fenetreIncomplete,
 } from '../utils/conformiteFenetre'
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -205,6 +207,7 @@ export default function Conformite2026({
           pass: r.pass,
           larPlusU,
           margeNonConforme: larPlusU !== null && larPlusU > r.criterion,
+          couverture: r.couverture,
         }
       }),
     })
@@ -248,6 +251,8 @@ export default function Conformite2026({
             : 'CONFORME AVEC MARGE',
         Dépassement:
           r.pass === false && r.lar !== null ? (r.lar - r.criterion).toFixed(1) : '',
+        'Couverture (min / 60)': r.couverture.retenuesMin,
+        'Couverture — détail': libelleCouverture(r.couverture),
       }
     })
     XLSX.utils.book_append_sheet(
@@ -548,11 +553,15 @@ export default function Conformite2026({
                       <tr key={r.point} className="border-b border-gray-800/50">
                         <td className="px-3 py-2 text-gray-200 font-medium">
                           {r.point}
-                          {r.count > 0 && (
-                            <span className="ml-2 text-[10px] text-gray-600">
-                              {r.count} pts
-                            </span>
-                          )}
+                          {/* Couverture RÉELLE de la fenêtre (minutes retenues / 60) :
+                              glyphe + texte, jamais la couleur seule. */}
+                          <span
+                            className={`ml-2 text-[10px] ${fenetreIncomplete(r.couverture) ? 'text-amber-300' : 'text-gray-600'}`}
+                            title={`${libelleCouverture(r.couverture)} · ${r.count} échantillon(s)`}
+                          >
+                            {fenetreIncomplete(r.couverture) ? '⚠ ' : ''}
+                            {r.couverture.retenuesMin}/60 min
+                          </span>
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums text-gray-200">
                           {fmt(r.ba)}
@@ -658,6 +667,14 @@ export default function Conformite2026({
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums font-semibold text-gray-100">
                           {fmt(r.lar)}
+                          {r.lar !== null && fenetreIncomplete(r.couverture) && (
+                            <span
+                              className="block text-[10px] font-normal text-amber-300"
+                              title={`Calculé sur ${libelleCouverture(r.couverture)} — pas un niveau horaire complet ; validité à juger (§3.7.1).`}
+                            >
+                              ⚠ sur {r.couverture.retenuesMin} min
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums text-gray-400">
                           {r.criterion.toFixed(1)}

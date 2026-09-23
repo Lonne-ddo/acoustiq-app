@@ -362,6 +362,8 @@ export interface ConformiteSummary {
     larPlusU?: number | null
     /** Vrai si la marge d'incertitude conduit au dépassement */
     margeNonConforme?: boolean
+    /** Couverture réelle de la fenêtre (recalculée, jamais figée). */
+    couverture?: import('../utils/conformiteFenetre').CouvertureFenetre
   }>
 }
 

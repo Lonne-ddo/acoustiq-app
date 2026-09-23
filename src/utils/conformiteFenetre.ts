@@ -8,7 +8,7 @@
  */
 import { spectraFreqsForPoint } from './spectraProvenance'
 import type { MeasurementFile, DataPoint, Period as NamedPeriod, Category } from '../types'
-import { laeqAvg, extractBp, analyzeKt, computeKb, computeKi, computeLar1h, filterDataByPeriods } from './acoustics'
+import { laeqAvg, extractBp, analyzeKt, computeKb, computeKi, computeLar1h, filterDataByPeriods, dpTimestampMs } from './acoustics'
 import type { KtAnalysis } from './acoustics'
 
 export type ReceptorType = 'I' | 'II' | 'III' | 'IV'
@@ -60,6 +60,12 @@ export interface PointResult {
   criterion: number               // max(Br, limite tableau)
   pass: boolean | null
   count: number                   // nombre de points dans la fenêtre
+  /**
+   * Couverture RÉELLE de la fenêtre (minutes retenues sur 60, causes des
+   * minutes manquantes). Le LAr,1h reste calculé : c'est au responsable de
+   * juger de sa validité (§3.7.1) ; l'app lui donne le chiffre.
+   */
+  couverture: CouvertureFenetre
 }
 
 export function fmt(n: number | null, digits = 1): string {
@@ -131,12 +137,17 @@ export function evaluerFenetres(e: EntreeFenetre): PointResult[] {
   const { files, pointMap, selectedDate, periods, categories, evalHour, period, brJour, brNuit, receptor, ktManual, kiManual, ksEnabled, ksValue, ksReason } = e
   const pointNames = pointsActifs(files, pointMap, selectedDate)
   const dataByPoint = donneesParPoint(files, pointMap, selectedDate, pointNames, periods, categories)
+  const evalStartMin = hhmmToMinutes(evalHour)
+  const avecCouverture = (r: Omit<PointResult, 'couverture'>): PointResult => ({
+    ...r,
+    couverture: couvertureFenetre(files, pointMap, selectedDate, r.point, periods, categories, evalStartMin),
+  })
   return (() => {
     const evalStart = hhmmToMinutes(evalHour)
     const evalEnd = evalStart + 60
     const br = period === 'jour' ? num(brJour) : num(brNuit)
 
-    return pointNames.map<PointResult>((pt) => {
+    return pointNames.map<Omit<PointResult, 'couverture'>>((pt) => {
       const dps = dataByPoint.get(pt) ?? []
       const inWindow = dps.filter((d) => {
         const m = ((d.t % 1440) + 1440) % 1440
@@ -269,5 +280,152 @@ export function evaluerFenetres(e: EntreeFenetre): PointResult[] {
         count: inWindow.length,
       }
     })
-  })()
+  })().map(avecCouverture)
+}
+
+// ────────────────────────────────────────────────────────────────────────────
+// Couverture réelle de la fenêtre LAr,1h
+// ────────────────────────────────────────────────────────────────────────────
+
+/** Les quatre causes de minutes manquantes dans une fenêtre. */
+export type CauseManque = 'exclusionMeteo' | 'exclusionManuelle' | 'horsInclusion' | 'absenceDonnees'
+
+export const LIBELLE_CAUSE: Record<CauseManque, string> = {
+  exclusionMeteo: 'exclusion météo',
+  exclusionManuelle: 'exclusion manuelle',
+  horsInclusion: 'hors période d’inclusion',
+  absenceDonnees: 'absence de données',
+}
+
+/**
+ * Minutes RÉELLEMENT couvertes par des données retenues sur les 60 de la
+ * fenêtre, et ventilation des minutes manquantes par cause. Résolution : la
+ * seconde. Recalculée à chaque rendu (jamais figée) : elle décrit l'état
+ * ACTUEL des périodes. `retenuesMin + Σ manquantesMin = 60`.
+ */
+export interface CouvertureFenetre {
+  retenuesMin: number
+  manquantesMin: Record<CauseManque, number>
+}
+
+/** Pas d'échantillonnage d'un fichier (minutes) : médiane des écarts positifs de t. */
+export function pasFichierMin(data: DataPoint[]): number {
+  const ecarts: number[] = []
+  for (let i = 1; i < data.length; i++) {
+    const d = data[i].t - data[i - 1].t
+    if (d > 0) ecarts.push(d)
+  }
+  if (ecarts.length === 0) return 1 / 60
+  ecarts.sort((a, b) => a - b)
+  return ecarts[Math.floor(ecarts.length / 2)]
+}
+
+// Statuts d'une seconde de fenêtre, par PRIORITÉ croissante : une seconde
+// couverte par une donnée retenue est retenue, quoi qu'en disent les autres
+// échantillons qui la recouvrent.
+const ABSENCE = 0
+const HORS_INCLUSION = 1
+const EXCL_MANUELLE = 2
+const EXCL_METEO = 3
+const RETENUE = 4
+
+/**
+ * Couverture de la fenêtre [evalStart, evalStart + 60 min[ pour un point.
+ *
+ * Mêmes conventions que le calcul de Ba (evaluerFenetres) : un échantillon
+ * appartient à la fenêtre si son instant `t` (modulo 1440) y tombe ; il couvre
+ * `[t, t + pas[` tronqué à la fin de la fenêtre. Le pas est déduit PAR FICHIER
+ * (médiane des écarts de t) : des fichiers à des pas différents comptent chacun
+ * leur vraie durée, et deux fichiers qui se recouvrent ne comptent pas deux fois
+ * les mêmes secondes.
+ *
+ * Attribution des causes : EXACTEMENT les règles de filterDataByPeriods
+ * (catégories visibles ; bornes [début, fin[ ; l'exclusion prime ; dès qu'une
+ * période d'inclusion existe, ce qui est hors inclusion est retiré). Une
+ * exclusion est « météo » si la période porte un motifMeteo.
+ */
+export function couvertureFenetre(
+  files: MeasurementFile[],
+  pointMap: Record<string, string>,
+  selectedDate: string,
+  point: string,
+  periods: NamedPeriod[] | undefined,
+  categories: Category[] | undefined,
+  evalStart: number,
+): CouvertureFenetre {
+  const secondes = new Uint8Array(3600)
+  const cats = categories ?? []
+  const pers = periods ?? []
+  const incIds = new Set(cats.filter((c) => c.visible && (c.mode === 'include' || c.mode === 'reference')).map((c) => c.id))
+  const excIds = new Set(cats.filter((c) => c.visible && c.mode === 'exclude').map((c) => c.id))
+  const inclusions = pers.filter((p) => incIds.has(p.categoryId))
+  const exclusions = pers.filter((p) => excIds.has(p.categoryId))
+  const dans = (p: NamedPeriod, ts: number) => ts >= p.startMs && ts < p.endMs
+
+  for (const f of files) {
+    if (pointMap[f.id] !== point || f.date !== selectedDate || f.data.length === 0) continue
+    const pas = pasFichierMin(f.data)
+    const base = dpTimestampMs(f.date, 0)
+    for (const d of f.data) {
+      const m = ((d.t % 1440) + 1440) % 1440
+      const offset = (m - evalStart + 1440) % 1440
+      if (offset >= 60) continue
+      let statut = RETENUE
+      const ts = base + d.t * 60_000
+      if (Number.isFinite(base)) {
+        const excl = exclusions.filter((p) => dans(p, ts))
+        if (excl.length > 0) statut = excl.some((p) => p.motifMeteo) ? EXCL_METEO : EXCL_MANUELLE
+        else if (inclusions.length > 0 && !inclusions.some((p) => dans(p, ts))) statut = HORS_INCLUSION
+      }
+      const a = Math.floor(offset * 60 + 1e-9)
+      const b = Math.min(3600, Math.ceil(Math.min(offset + pas, 60) * 60 - 1e-9))
+      for (let s = a; s < b; s++) if (statut > secondes[s]) secondes[s] = statut
+    }
+  }
+
+  const compte = [0, 0, 0, 0, 0]
+  for (let s = 0; s < 3600; s++) compte[secondes[s]]++
+  const min = (n: number) => Math.round((n / 60) * 10) / 10
+  return {
+    retenuesMin: min(compte[RETENUE]),
+    manquantesMin: {
+      exclusionMeteo: min(compte[EXCL_METEO]),
+      exclusionManuelle: min(compte[EXCL_MANUELLE]),
+      horsInclusion: min(compte[HORS_INCLUSION]),
+      absenceDonnees: min(compte[ABSENCE]),
+    },
+  }
+}
+
+/** « 35/60 min — 20 min exclusion manuelle, 5 min absence de données » */
+export function libelleCouverture(c: CouvertureFenetre): string {
+  const detail = (Object.keys(LIBELLE_CAUSE) as CauseManque[])
+    .filter((k) => c.manquantesMin[k] > 0)
+    .map((k) => `${c.manquantesMin[k]} min ${LIBELLE_CAUSE[k]}`)
+  return `${c.retenuesMin}/60 min` + (detail.length ? ` — ${detail.join(', ')}` : '')
+}
+
+/** Vrai si la fenêtre n'est pas entièrement couverte par des données retenues. */
+export const fenetreIncomplete = (c: CouvertureFenetre) => c.retenuesMin < 60
+
+/**
+ * Bloc « couverture » de la section Conformité du rapport : une ligne par
+ * point, la cause de chaque minute manquante, et le rappel que le LAr,1h est
+ * calculé sur les seules minutes retenues — le responsable juge (§3.7.1).
+ */
+export function blocCouvertureRapport(points: { point: string; couverture?: CouvertureFenetre }[]): string[] {
+  const avec = points.filter((p) => p.couverture)
+  if (avec.length === 0) return []
+  const lignes = ["Couverture de la fenêtre d'évaluation (minutes de données retenues sur 60) :"]
+  for (const p of avec) {
+    const c = p.couverture!
+    lignes.push(`  ${fenetreIncomplete(c) ? '⚠' : '✓'} ${p.point} : ${libelleCouverture(c)}`)
+  }
+  if (avec.some((p) => fenetreIncomplete(p.couverture!))) {
+    lignes.push(
+      "Sur une fenêtre incomplète, le LAr,1h est calculé sur les seules minutes retenues et n'est pas " +
+        'un niveau horaire complet ; sa validité relève du jugement du responsable (§3.7.1).',
+    )
+  }
+  return lignes
 }

@@ -27,7 +27,7 @@ export const DV_CFG = {
  * figés. Un blob v1 (ou nu, v0) se charge toujours : les champs ajoutés sont
  * optionnels (results absent ⇒ module sans résultats).
  */
-export const SCHEMA_VERSION = 2
+export const SCHEMA_VERSION = 3
 
 // ───────────────────────────────────────────────────────────────────────────
 // Sérialisation (versionnée)

@@ -5,7 +5,6 @@ import {
   deserializeMeteoModule,
   ecccStationsUsed,
   ecccFailuresUsed,
-  fenetresAExclure,
   NIVEAUX_EXCLUS_PAR_METEO,
   meteoModuleAuChargement,
   type MeteoModuleState,
@@ -62,32 +61,9 @@ describe('meteoModuleAuChargement — création et 3 voies de chargement, même 
   })
 })
 
-describe('fenetresAExclure — « Exclure les heures non recevables »', () => {
-  const H = 3_600_000
-  const h = (i: number, level: 'ok' | 'warn' | 'bad' | 'indetermine') => ({ startMs: i * H, endMs: (i + 1) * H, level })
-
-  it('RÈGLE : retire non recevable et indéterminé, garde recevable et à signaler', () => {
-    expect(NIVEAUX_EXCLUS_PAR_METEO.has('bad')).toBe(true)
-    expect(NIVEAUX_EXCLUS_PAR_METEO.has('indetermine')).toBe(true)
-    expect(NIVEAUX_EXCLUS_PAR_METEO.has('warn')).toBe(false)
-    expect(NIVEAUX_EXCLUS_PAR_METEO.has('ok')).toBe(false)
-    expect(fenetresAExclure([h(0, 'ok')])).toEqual([])
-    expect(fenetresAExclure([h(0, 'warn')])).toEqual([])
-    expect(fenetresAExclure([h(0, 'bad')])).toEqual([{ startMs: 0, endMs: H }])
-    expect(fenetresAExclure([h(0, 'indetermine')])).toEqual([{ startMs: 0, endMs: H }])
-  })
-
-  it('fusionne les heures exclues contiguës, jamais par-dessus une heure conservée', () => {
-    const hours = [h(0, 'bad'), h(1, 'indetermine'), h(2, 'warn'), h(3, 'bad'), h(4, 'ok'), h(5, 'indetermine')]
-    expect(fenetresAExclure(hours)).toEqual([
-      { startMs: 0, endMs: 2 * H },
-      { startMs: 3 * H, endMs: 4 * H },
-      { startMs: 5 * H, endMs: 6 * H },
-    ])
-  })
-
-  it('ordre d’entrée indifférent', () => {
-    expect(fenetresAExclure([h(1, 'bad'), h(0, 'bad')])).toEqual([{ startMs: 0, endMs: 2 * H }])
+describe('NIVEAUX_EXCLUS_PAR_METEO — ce que la météo peut SUGGÉRER d’exclure', () => {
+  it('non recevable et indéterminé ; jamais recevable ni « à signaler » (recevable au §3.6)', () => {
+    expect([...NIVEAUX_EXCLUS_PAR_METEO].sort()).toEqual(['bad', 'indetermine'])
   })
 })
 

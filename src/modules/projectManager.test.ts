@@ -92,7 +92,7 @@ describe('buildFullProjectData — ProjectData COMPLET (voie Dataverse)', () => 
       mapImage: 'data:img', mapMarkers: { 'BV-1': { x: 0.5, y: 0.5 } },
       categories: cats, periods: pers, savedAt: '2026-07-22T00:00:00.000Z',
     })
-    expect(pd.version).toBe('1.2') // 1.2 : results météo figés (G3)
+    expect(pd.version).toBe('1.3') // 1.3 : motifMeteo des périodes (exclusion ↔ météo)
     expect(pd.savedAt).toBe('2026-07-22T00:00:00.000Z')
     expect(pd.pointAssignments).toEqual(pointMap)
     expect(pd.concordance).toEqual({ 'e1|BV-1': 'confirmed' })

@@ -113,8 +113,6 @@ const IsolementPage = lazy(() => import('./pages/IsolementPage'))
 const MeteoPage = lazy(() => import('./pages/MeteoPage'))
 import {
   makeDefaultMeteoState,
-  recevabiliteForDate,
-  fenetresAExclure,
   meteoModuleAuChargement,
   serializeMeteoModule,
   ecccStationsUsed,
@@ -123,6 +121,13 @@ import {
   type ProjectPointHint,
 } from './utils/meteoModule'
 import { meteoPourCourbe, type MeteoSelection, type MeteoCourbe } from './utils/meteoCourbe'
+import {
+  suggererExclusions,
+  periodesDepuisSuggestions,
+  plagesMesureDepuisFichiers,
+  type ResultatSuggestion,
+} from './utils/exclusionMeteo'
+import SuggestionsExclusionMeteo from './components/meteo/SuggestionsExclusionMeteo'
 import ReportGenerator from './components/ReportGenerator'
 import AudioPlayer from './components/AudioPlayer'
 import StreamAudioPlayer from './components/audio/AudioPlayer'
@@ -761,7 +766,9 @@ interface SidebarProps {
   hasMeteoResults: boolean
   showMeteoRecevabilite: boolean
   onToggleMeteoRecevabilite: (v: boolean) => void
-  onExcludeNonRecevable: () => void
+  /** Suggestions d'exclusion météo (sélection de l'onglet Météo) — null sans données. */
+  suggestionsMeteo: ResultatSuggestion | null
+  onAppliquerSuggestionsMeteo: (keys: string[]) => void
   // Catégories de périodes (gérées dans la sidebar)
   categories: Category[]
   periods: Period[]
@@ -848,7 +855,7 @@ function Sidebar({
   groupSuggestions, onAcceptSuggestion, onDismissSuggestion, onAcceptAllSuggestions,
   hiddenPoints, onTogglePointVisibility,
   detectParams, onDetectParamsChange,
-  hasMeteoResults, showMeteoRecevabilite, onToggleMeteoRecevabilite, onExcludeNonRecevable,
+  hasMeteoResults, showMeteoRecevabilite, onToggleMeteoRecevabilite, suggestionsMeteo, onAppliquerSuggestionsMeteo,
   categories, periods, onCategoryAdd, onCategoryUpdate, onCategoryRemove,
 }: SidebarProps) {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -1332,15 +1339,10 @@ function Sidebar({
                   Afficher la recevabilité météo
                 </label>
                 {showMeteoRecevabilite && (
-                  <button
-                    onClick={onExcludeNonRecevable}
-                    className="w-full px-2 py-1.5 rounded bg-gray-800 text-gray-300 border border-gray-700
-                               hover:bg-rose-900/30 hover:text-rose-300 hover:border-rose-700
-                               text-[11px] transition-colors"
-                    title="Retire les heures « non recevable » et « indéterminé » (donnée aberrante). Les heures « à signaler », recevables au §3.6, sont conservées."
-                  >
-                    Exclure les heures non recevables
-                  </button>
+                  <SuggestionsExclusionMeteo
+                    resultat={suggestionsMeteo}
+                    onAppliquer={onAppliquerSuggestionsMeteo}
+                  />
                 )}
               </div>
             )}
@@ -2907,45 +2909,28 @@ export default function App() {
     })
   }, [assignedPoints, pointLabels, scene3D])
 
-  // Overlay de recevabilité météo pour le graphique LAeq de la date courante.
-  const recevabiliteOverlay = useMemo(() => {
-    const hours = recevabiliteForDate(meteoModule, selectedDate)
-    // chartAnchorMs = midnight de la date courante : convertir minutes → epoch ms.
-    const [y, m, d] = selectedDate.split('-').map(Number)
-    if (!y || !m || !d) return []
-    const anchor = new Date(y, m - 1, d, 0, 0, 0, 0).getTime()
-    return hours.map((h) => ({
-      startMs: anchor + h.startMin * 60_000,
-      endMs: anchor + h.endMin * 60_000,
-      recevable: h.recevable,
-      level: h.level,
-    }))
-  }, [meteoModule, selectedDate])
-
-  // Crée des périodes "exclude" pour les heures non recevables OU indéterminées
-  // de la date courante (règle : fenetresAExclure), heures contiguës fusionnées.
-  const handleExcludeNonRecevable = useCallback(() => {
-    const merged = fenetresAExclure(recevabiliteOverlay)
-    if (merged.length === 0) {
-      showToast('Aucune heure non recevable ou indéterminée à exclure.', 'info')
-      return
-    }
-    let n = 0
-    for (const w of merged) {
-      setPeriods((prev) => [
-        ...prev,
-        {
-          id: `meteo-excl-${w.startMs}`,
-          name: 'Météo non recevable / indéterminée',
-          startMs: w.startMs,
-          endMs: w.endMs,
-          categoryId: DEFAULT_CATEGORY_IDS.exclure,
-        } as Period,
-      ])
-      n++
-    }
-    showToast(`${n} période(s) « exclude » créée(s) depuis la météo.`, 'success')
-  }, [recevabiliteOverlay])
+  // Exclusion ↔ météo : la météo SUGGÈRE (même point et même source que les
+  // bandes de la courbe), l'utilisateur VALIDE. Les périodes validées portent
+  // leur motif ; aucune période existante n'est modifiée ni supprimée.
+  const plagesMesure = useMemo(() => plagesMesureDepuisFichiers(files, pointMap), [files, pointMap])
+  const suggestionsMeteo = useMemo(
+    () => suggererExclusions(meteoModule, meteoSelection, periods, categories, plagesMesure),
+    [meteoModule, meteoSelection, periods, categories, plagesMesure],
+  )
+  const handleAppliquerSuggestionsMeteo = useCallback((keys: string[]) => {
+    if (!suggestionsMeteo) return
+    const choisies = suggestionsMeteo.suggestions.filter((s) => keys.includes(s.key))
+    if (choisies.length === 0) return
+    const nouvelles = periodesDepuisSuggestions(choisies, suggestionsMeteo.contexte, meteoModule, new Date())
+    // La catégorie « À exclure » doit exister (elle a pu être supprimée).
+    setCategories((prev) =>
+      prev.some((c) => c.id === DEFAULT_CATEGORY_IDS.exclure)
+        ? prev
+        : [...prev, makeDefaultCategories().find((c) => c.id === DEFAULT_CATEGORY_IDS.exclure)!],
+    )
+    setPeriods((prev) => [...prev, ...nouvelles.filter((n) => !prev.some((p) => p.id === n.id))])
+    showToast(`${nouvelles.length} période(s) d'exclusion météo appliquée(s).`, 'success')
+  }, [suggestionsMeteo, meteoModule])
 
   // Suggestion de regroupement en attente (bannière dans la sidebar).
   const [groupSuggestions, setGroupSuggestions] = useState<GroupSuggestion[]>([])
@@ -3738,7 +3723,8 @@ export default function App() {
         hasMeteoResults={meteoModule.results.length > 0}
         showMeteoRecevabilite={showMeteoRecevabilite}
         onToggleMeteoRecevabilite={setShowMeteoRecevabilite}
-        onExcludeNonRecevable={handleExcludeNonRecevable}
+        suggestionsMeteo={suggestionsMeteo}
+        onAppliquerSuggestionsMeteo={handleAppliquerSuggestionsMeteo}
         categories={categories}
         periods={periods}
         onCategoryAdd={handleCategoryAdd}

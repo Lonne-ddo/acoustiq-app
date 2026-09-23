@@ -129,6 +129,36 @@ export function makeDefaultCategories(): Category[] {
  * Période nommée — assignée à une catégorie. Les timestamps sont stockés en
  * epoch ms pour gérer les plages qui traversent minuit.
  */
+/**
+ * Motif d'une exclusion SUGGÉRÉE par la recevabilité météo, puis VALIDÉE par
+ * l'utilisateur. Persisté avec la période : un rapport doit pouvoir dire,
+ * longtemps après, pourquoi elle a été écartée — et d'après QUELLE météo.
+ * Les périodes valent pour TOUS les points de mesure ; le motif le dit
+ * (« d'après la météo du point … »).
+ */
+export interface MotifMeteo {
+  /** 'bad' = non recevable §3.6 ; 'indetermine' = donnée météo aberrante. Jamais 'warn'. */
+  niveau: 'bad' | 'indetermine'
+  /** Heures météo couvertes, telles que dans la source (« YYYY-MM-DD HH:MM[:SS] »). */
+  heures: string[]
+  /** Raisons du verdict, dédupliquées, dans l'ordre d'apparition. */
+  raisons: string[]
+  /** SourceId (openmeteo | gem | eccc) et libellé lisible. */
+  source: string
+  sourceLabel: string
+  pointId: string
+  pointLabel: string
+  /** Horodatage de la requête réseau de la source (null si antérieure à G3). */
+  fetchedAt: string | null
+  /** Paramètres figés de la requête (MeteoRequest), s'ils sont connus. */
+  request: import('../utils/meteoSources').MeteoRequest | null
+  /** Seuils EN VIGUEUR au moment de la validation (ils peuvent changer ensuite). */
+  seuils: import('../utils/recevabilite').RecevabiliteConfig
+  asphalte: boolean
+  /** Horodatage ISO de la validation par l'utilisateur. */
+  valideLe: string
+}
+
 export interface Period {
   id: string
   name: string
@@ -140,6 +170,17 @@ export interface Period {
   categoryId: string
   /** Commentaire / note libre (optionnel) */
   notes?: string
+  /** Présent seulement pour une exclusion issue d'une suggestion météo validée. */
+  motifMeteo?: MotifMeteo
+}
+
+/** Motif météo relu d'un projet : recopié s'il a la forme attendue, sinon ignoré. */
+function lireMotifMeteo(v: unknown): MotifMeteo | undefined {
+  if (!v || typeof v !== 'object') return undefined
+  const m = v as Record<string, unknown>
+  if (m.niveau !== 'bad' && m.niveau !== 'indetermine') return undefined
+  if (!Array.isArray(m.heures) || !Array.isArray(m.raisons)) return undefined
+  return m as unknown as MotifMeteo
 }
 
 /** Migre une période ancien format (status) vers le format catégorie. */
@@ -151,8 +192,11 @@ function migratePeriodRaw(p: Record<string, unknown>): Period | null {
   const name = typeof p.name === 'string' ? p.name : 'Période'
   const notes = typeof p.notes === 'string' ? p.notes
     : typeof p.comment === 'string' ? p.comment : undefined
+  // Reconstruction CHAMP PAR CHAMP : tout champ non repris ici est perdu au
+  // chargement (issue #13). motifMeteo est donc recopié explicitement.
+  const motifMeteo = lireMotifMeteo(p.motifMeteo)
   if (typeof p.categoryId === 'string' && p.categoryId) {
-    return { id, name, startMs, endMs, categoryId: p.categoryId, notes }
+    return { id, name, startMs, endMs, categoryId: p.categoryId, notes, ...(motifMeteo ? { motifMeteo } : {}) }
   }
   const map: Record<string, string> = {
     include: DEFAULT_CATEGORY_IDS.ambiant,

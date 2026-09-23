@@ -1,0 +1,288 @@
+{
+  "provenance": "Figé sur main@f01b6d9 le 2026-09-23 : code de Conformite2026.tsx EXTRAIT TEL QUEL (helpers + corps des useMemo pointNames/dataByPoint/results) et exécuté avec les dépendances de main, sur les cas de conformiteFenetre.fixtures.ts. Empreinte = SHA-256 de la sérialisation canonique (serialisationCanonique.ts) du PointResult[] d'origine. NE PAS régénérer depuis le code courant.",
+  "cas": {
+    "complet": {
+      "sha256": "d6d2ace71a98436efabbbcbcfda134b1c9c7791807dff5ce39f89c5d0433e4c9",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.42850987670283,
+          "bp": 57.34928003409226,
+          "bpReason": "ok",
+          "kt": 5,
+          "ki": 2.500000000000057,
+          "kb": 0,
+          "ks": 0,
+          "lar": 62.34928003409226,
+          "pass": false,
+          "count": 3600
+        }
+      ]
+    },
+    "exclusion-manuelle": {
+      "sha256": "5b2647391115bda034901df58e31edf4b254ccdbdd658b63835e35384be02772",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.560088665855844,
+          "bp": 57.48324430595546,
+          "bpReason": "ok",
+          "kt": 5,
+          "ki": 2.4999999999999787,
+          "kb": 0,
+          "ks": 0,
+          "lar": 62.48324430595546,
+          "pass": false,
+          "count": 2400
+        }
+      ]
+    },
+    "exclusion-meteo": {
+      "sha256": "04035a784f3517794e34fc4f71ad3a9c35ae9e087823d88951b620076950919f",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.30669821618501,
+          "bp": 57.22519338393422,
+          "bpReason": "ok",
+          "kt": 5,
+          "ki": 2.500000000000057,
+          "kb": 0,
+          "ks": 0,
+          "lar": 62.22519338393422,
+          "pass": false,
+          "count": 2400
+        }
+      ]
+    },
+    "hors-inclusion": {
+      "sha256": "f7d74160a7f7f505c949656f97fcf5b28c5994f19062e324b6410f5830619370",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 56.21780410622123,
+          "bp": 56.1127908847051,
+          "bpReason": "ok",
+          "kt": 5,
+          "ki": 2.499999999999986,
+          "kb": 0,
+          "ks": 0,
+          "lar": 61.1127908847051,
+          "pass": false,
+          "count": 1800
+        }
+      ]
+    },
+    "causes-mixtes": {
+      "sha256": "d1cd8dcf35ba591189a19f2a269da7c07437dc60c4c9305f8f35de7e4be93b3e",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 56.82084608737077,
+          "bp": 56.729591555869206,
+          "bpReason": "ok",
+          "kt": 5,
+          "ki": 2.4999999999999787,
+          "kb": 0,
+          "ks": 0,
+          "lar": 61.729591555869206,
+          "pass": false,
+          "count": 2100
+        }
+      ]
+    },
+    "categorie-masquee": {
+      "sha256": "d6d2ace71a98436efabbbcbcfda134b1c9c7791807dff5ce39f89c5d0433e4c9",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.42850987670283,
+          "bp": 57.34928003409226,
+          "bpReason": "ok",
+          "kt": 5,
+          "ki": 2.500000000000057,
+          "kb": 0,
+          "ks": 0,
+          "lar": 62.34928003409226,
+          "pass": false,
+          "count": 3600
+        }
+      ]
+    },
+    "absence-donnees": {
+      "sha256": "4fc29e54e0e80d6bf57626c6f2d4df2e735d4f767fce1a4626a3e653f04f1cb7",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.78942846804071,
+          "bp": 57.7165701252401,
+          "bpReason": "ok",
+          "kt": 5,
+          "ki": 2.500000000000014,
+          "kb": 0,
+          "ks": 0,
+          "lar": 62.7165701252401,
+          "pass": false,
+          "count": 2100
+        }
+      ]
+    },
+    "pas-mixtes": {
+      "sha256": "eaf261214c3ff7e34376b45733c73d92e2089fe1977d71ca2a8cc561e0668348",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 58.18606888498547,
+          "bp": 58.119618776878774,
+          "bpReason": "ok",
+          "kt": 0,
+          "ki": 2.5,
+          "kb": 0,
+          "ks": 0,
+          "lar": 60.619618776878774,
+          "pass": false,
+          "count": 1830
+        }
+      ]
+    },
+    "recouvrement": {
+      "sha256": "ccfabec94ba4baa39e9cc0992643c81e48fa8b5ace432d36151538829b098be6",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 59.18255854442786,
+          "bp": 59.129815775443866,
+          "bpReason": "ok",
+          "kt": 0,
+          "ki": 2.500000000000014,
+          "kb": 0,
+          "ks": 0,
+          "lar": 61.62981577544388,
+          "pass": false,
+          "count": 7200
+        }
+      ]
+    },
+    "minuit": {
+      "sha256": "08311d6e3c7122ffe803e6e4e3d1dfb66c9de225ccba1d9553f30131018f8406",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.15390943437943,
+          "bp": 57.127380540814805,
+          "bpReason": "ok",
+          "kt": 0,
+          "ki": 2.5,
+          "kb": 0,
+          "ks": 0,
+          "lar": 59.627380540814805,
+          "pass": false,
+          "count": 90
+        }
+      ]
+    },
+    "sans-br": {
+      "sha256": "4129661cd3ef80abcc0fc3a8b1c63dfcb10477fe5e16616c1b5936567006de0e",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.42850987670283,
+          "bp": null,
+          "bpReason": "noBr",
+          "kt": 5,
+          "ki": 2.500000000000057,
+          "kb": 0,
+          "ks": 0,
+          "lar": null,
+          "pass": null,
+          "count": 3600
+        }
+      ]
+    },
+    "br-insuffisant": {
+      "sha256": "0fe37f376e2b4943480fe4f3f5bb3506735867ff0a271943f529cdbb18bd532b",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.42850987670283,
+          "bp": null,
+          "bpReason": "insufficient",
+          "kt": 5,
+          "ki": 2.500000000000057,
+          "kb": 0,
+          "ks": 0,
+          "lar": null,
+          "pass": null,
+          "count": 3600
+        }
+      ]
+    },
+    "k-manuels": {
+      "sha256": "bb38864c0e8e885bdc421fc3b5351cdf54601d0a4bea379ada449268c20495bc",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.42850987670283,
+          "bp": 57.40361111970386,
+          "bpReason": "ok",
+          "kt": 3,
+          "ki": 2.500000000000057,
+          "kb": 0,
+          "ks": 5,
+          "lar": 62.40361111970386,
+          "pass": false,
+          "count": 3600
+        }
+      ]
+    },
+    "sans-donnees": {
+      "sha256": "040899bef15de366f43311e655039491ed13ca8a03dd188c42d1a113e9894209",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": null,
+          "bp": null,
+          "bpReason": "noData",
+          "kt": 0,
+          "ki": 0,
+          "kb": 0,
+          "ks": 0,
+          "lar": null,
+          "pass": null,
+          "count": 0
+        }
+      ]
+    },
+    "deux-points": {
+      "sha256": "110c59e4034928c6b60739457a3b0d62fd0831951edd8c7ecbc494be25680f2f",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.05621733979242,
+          "bp": 56.969825040718305,
+          "bpReason": "ok",
+          "kt": 5,
+          "ki": 2.500000000000071,
+          "kb": 0,
+          "ks": 0,
+          "lar": 61.969825040718305,
+          "pass": false,
+          "count": 2700
+        },
+        {
+          "point": "BV-2",
+          "ba": 52.05621733979246,
+          "bp": 51.776929427376245,
+          "bpReason": "ok",
+          "kt": 0,
+          "ki": 2.5000000000000284,
+          "kb": 0,
+          "ks": 0,
+          "lar": 54.276929427376274,
+          "pass": false,
+          "count": 2700
+        }
+      ]
+    }
+  }
+}

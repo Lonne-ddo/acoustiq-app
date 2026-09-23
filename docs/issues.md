@@ -156,3 +156,38 @@ faut confirmer avec un acousticien que l'analyse tonale s'étend légitimement
 au-delà de 10 kHz — et, si oui, jusqu'où. La réponse décide si l'élargissement
 est une correction de calcul ou un changement de méthode. Le sort de 50 Hz se
 tranche dans le même mouvement.
+
+---
+
+## #3 — Comparaison de seuil tonal : `>= 15 / 8 / 5` dans le code, `> 14,5 / 7,5 / 4,5` dans le gabarit
+
+**Statut** : **fermé — le code est correct, aucune modification.**
+
+### Conclusion
+
+La Note 98-01 (annexe IV, Tableau 4) et les Lignes directrices MELCCFP 2026
+(§3.7.4, Tableau 2) ont un contenu identique et écrivent toutes deux
+« 15 dB et plus » (125 Hz et moins), « 8 dB et plus » (160 à 400 Hz),
+« 5 dB et plus » (500 Hz et plus). `>=` sur la valeur entière est la lecture
+littérale : c'est ce que fait le code. Le gabarit `Bruit_tonal.xls` encode un
+arrondi au dB entier (`> 4,5` ≈ « arrondi ≥ 5 »), ce qui n'est pas le texte.
+
+Constat connexe corrigé à la même occasion : le code 98-01 appliquait 15 dB à
+160 Hz ; il applique désormais 8 dB, conformément au Tableau 4 (les deux
+cadres partagent `ktThreshold`).
+
+### Constat initial
+
+Le gabarit `Bruit_tonal.xls` compare Δ > 14,5 / 7,5 / 4,5, le code compare
+Δ >= 15 / 8 / 5 :
+
+- cadre 2026 : `src/utils/acoustics.ts:886-887` ;
+- cadre 98-01 : `src/utils/acoustics.ts:1097-1098`.
+
+Sur Δ dans ]4,5 ; 5[ le gabarit détecte une tonalité que le code rate —
+direction défavorable (Kt non appliqué, conformité déclarée à tort). Même
+divergence sur ]7,5 ; 8[ et ]14,5 ; 15[. À Δ = 4,5 exactement, les deux
+concluent « non tonal ».
+
+Hypothèse initiale : le gabarit encode un arrondi au dB entier — à trancher
+contre la note 98-01. Tranché ci-dessus.

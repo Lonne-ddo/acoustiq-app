@@ -24,6 +24,13 @@ const DATA_DIR = path.join(ROOT_DIR, '.local-data')
 const EVAL_START = 14 * 60
 const EVAL_END = EVAL_START + 60
 
+/**
+ * Cadre réglementaire de l'analyse affichée : ce script n'appelle QUE
+ * `analyzeKt` (MELCCFP 2026). L'étiquette est imprimée en tête de chaque
+ * tableau pour ne jamais confondre sa sortie avec un gabarit 98-01.
+ */
+const CADRE = 'MELCCFP 2026 — analyzeKt (seuils §3.7.4 Tableau 2, exclusion ≥ 15 dB)'
+
 const f1 = (x) => (typeof x === 'number' && Number.isFinite(x) ? x.toFixed(1) : String(x))
 
 /**
@@ -110,12 +117,14 @@ function rapport(name, mf, r) {
   })
 
   L.push('')
+  L.push('  [cadre : ' + CADRE + ']')
   L.push("  Spectre LZeq réaligné PAR FRÉQUENCE sur les 24 bandes d'analyse (Hz → dB) :")
   L.push('    ' + b.bands.map((x) => x.freq + ':' + f1(x.lzeq)).join('  '))
 
   const detail = (i, titre) => {
     const t = b.bands[i], p = b.bands[i - 1], n = b.bands[i + 1]
     L.push('')
+    L.push('  [cadre : ' + CADRE + ']')
     L.push('  ' + titre)
     L.push('    voisine basse ' + String(p.freq).padStart(5) + ' Hz : LZeq = ' + f1(p.lzeq) + ' dB')
     L.push('    BANDE         ' + String(t.freq).padStart(5) + ' Hz : LZeq = ' + f1(t.lzeq)
@@ -189,7 +198,7 @@ export async function main() {
   }
 
   console.log('='.repeat(72))
-  console.log('SYNTHÈSE')
+  console.log('SYNTHÈSE — cadre : ' + CADRE)
   for (const { name, r } of synthese) {
     const m = !r.main ? 'n/a' : r.main.unavailable ? 'REFUS' : 'Kt=' + r.main.kt
     const b = !r.branche ? 'n/a'

@@ -519,8 +519,12 @@ nouvelle requête).
 
 ## #11 — « Exclure les heures non recevables » et les bandes météo : deux verdicts pour la même heure
 
-**Statut** : ouvert, non corrigé. **À trancher dans le chantier
-exclusion ↔ périodes**, où la question se repose entièrement.
+**Statut** : **corrigé** le 2026-09-23 (chantier exclusion ↔ météo,
+`feat/exclusion-meteo`). Le bouton « Exclure les heures non recevables » est
+remplacé par « Proposer les exclusions météo » : suggestions calculées sur la
+MÊME sélection que les bandes (`suggererExclusions(meteoModule,
+meteoSelection, …)`), sur toutes les dates mesurées, validées par
+l'utilisateur, motif persisté (`Period.motifMeteo`), cité au rapport.
 **Sévérité** : moyenne — deux verdicts contradictoires à l'écran.
 
 ### Constat
@@ -544,3 +548,52 @@ la même heure peut porter une bande « non recevable » sans être exclue, ou
 Une seule source de vérité pour ce qu'affichent les bandes ET ce qu'exclut le
 bouton (vraisemblablement la sélection, sur tous les jours affichés), décidée
 avec la refonte exclusion ↔ périodes. Pas de correctif isolé d'ici là.
+
+---
+
+## #12 — Conformité : une fenêtre LAr,1h démarrant à HH:30 chevauche deux heures météo
+
+**Statut** : ouvert, non corrigé — à traiter APRÈS le chantier
+exclusion ↔ météo.
+**Sévérité** : haute — c'est l'intervalle d'évaluation qui décide de la
+conformité, plus lourd que l'exclusion des périodes.
+
+### Constat
+
+La Conformité 2026 évalue `Ba = LAeq` sur `[evalHour, evalHour + 60 min[`
+(`src/components/Conformite2026.tsx`, `evalHour` saisi en HH:MM). La
+recevabilité météo est horaire, alignée sur l'heure pleine `[HH:00, HH+1:00[`.
+Une fenêtre qui démarre à HH:30 recouvre la seconde moitié d'une heure météo
+et la première moitié de la suivante : si l'une est non recevable (ou
+indéterminée) et l'autre recevable, le verdict météo de la fenêtre n'est pas
+défini aujourd'hui — et rien ne le signale à l'écran.
+
+### À trancher
+
+Règle de recevabilité d'une fenêtre à cheval (la plus défavorable des heures
+recouvertes ? refus d'évaluer ? pondération ?), son affichage dans la
+Conformité, et son report au rapport.
+
+---
+
+## #13 — `migratePeriodRaw` jette en silence tout champ de période inconnu
+
+**Statut** : ouvert, non corrigé.
+**Sévérité** : moyenne — perte de donnée silencieuse sur le chemin de la
+persistance.
+
+### Constat
+
+Au chargement d'un projet, `migratePeriodRaw` (`src/types/index.ts`)
+reconstruit chaque `Period` CHAMP PAR CHAMP (`id`, `name`, `startMs`,
+`endMs`, `categoryId`, `notes`). Tout autre champ est perdu sans message.
+Le chantier exclusion ↔ météo le contourne pour `motifMeteo` (recopié
+explicitement), mais le piège reste armé pour le prochain champ ajouté à
+`Period` : il sera persisté à la sauvegarde puis effacé au rechargement, et la
+sauvegarde suivante le supprimera définitivement.
+
+### Piste
+
+Au lieu de jeter : conserver les champs inconnus tels quels, ou au minimum
+SIGNALER leur présence (avertissement de chargement) — et un test qui
+échoue si un champ déclaré dans `Period` n'est pas repris par la migration.

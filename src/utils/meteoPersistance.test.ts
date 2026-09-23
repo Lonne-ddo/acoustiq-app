@@ -142,7 +142,7 @@ describe('blob projet (Dataverse) — results figés, rien de recalculé au char
   it('round-trip gzip : succès, échec ECCC, fetchedAt, request, dewpoint/pressure — identiques', () => {
     const etat = etatAvecResultats()
     const { schemaVersion, project } = deserializeProject(blob(etat))
-    expect(schemaVersion).toBe(2)
+    expect(schemaVersion).toBe(3)
     const recharge = meteoModuleAuChargement(project.meteoModule)
     expect(recharge.results).toEqual(etat.results)
     const om = recharge.results[0].outcomes[0] as SourceResult

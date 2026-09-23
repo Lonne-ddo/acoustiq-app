@@ -27,6 +27,7 @@ import type {
   Category,
 } from '../types'
 import { computeReportIndices } from '../utils/reportIndices'
+import { tableauExclusionsMeteo } from '../utils/exclusionMeteo'
 import {
   seuilsUtilisesLine,
   DEFAUT_MELCCFP,
@@ -157,6 +158,12 @@ export default function ReportGenerator({
         lines.push('')
         lines.push('Stations Environnement Canada tentées — indisponibles :')
         for (const s of ecccFailures) lines.push(`  • ${s}`)
+      }
+      // §4 : conditions météo ET justification des exclusions, au rapport.
+      const exclusions = tableauExclusionsMeteo(periods ?? [], categories ?? [])
+      if (exclusions.length > 0) {
+        lines.push('')
+        lines.push(...exclusions)
       }
       return lines.join('\n')
     }
@@ -364,6 +371,9 @@ export default function ReportGenerator({
     ecccStations,
     ecccFailures,
     cfg,
+    // Tableau des périodes exclues pour motif météo (section Conditions météo).
+    periods,
+    categories,
   ])
 
   // Sections éditables + suivi de la "salissure" (édition manuelle)

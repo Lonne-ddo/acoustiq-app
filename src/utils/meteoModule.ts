@@ -14,8 +14,6 @@ import {
   type SourceResult,
 } from './meteoSources'
 import {
-  evaluateRecevabilite,
-  parseHourTimestamp,
   DEFAUT_MELCCFP,
   type RecevabiliteConfig,
   type RecevabiliteLevel,
@@ -175,10 +173,6 @@ export function meteoModuleAuChargement(persisted?: PersistedMeteoModule | null)
 }
 
 /**
- * Heures de recevabilité du premier point / première source non-erreur,
- * filtrées sur `selectedDate` (YYYY-MM-DD).
- */
-/**
  * Stations ECCC effectivement utilisées, une ligne « Point : trace » par point
  * ayant un résultat Env. Canada. Pour la traçabilité du rapport (verdict §3.6).
  */
@@ -211,7 +205,7 @@ export function ecccFailuresUsed(state: MeteoModuleState): string[] {
 }
 
 /**
- * Niveaux retirés par « Exclure les heures non recevables » :
+ * Niveaux que la météo SUGGÈRE d'exclure (cf. utils/exclusionMeteo.ts) :
  *   - `bad`          : non recevable au §3.6 ;
  *   - `indetermine`  : donnée météo aberrante — la mesure ne peut pas être
  *                      justifiée, elle part aussi.
@@ -223,48 +217,3 @@ export const NIVEAUX_EXCLUS_PAR_METEO: ReadonlySet<RecevabiliteLevel> = new Set<
   'indetermine',
 ])
 
-/**
- * Fenêtres à exclure : heures dont le niveau est dans NIVEAUX_EXCLUS_PAR_METEO,
- * triées puis fusionnées quand elles se touchent (écart < 30 s). Deux heures
- * exclues séparées par une heure conservée ne sont jamais fusionnées.
- */
-export function fenetresAExclure(
-  hours: { startMs: number; endMs: number; level: RecevabiliteLevel }[],
-): { startMs: number; endMs: number }[] {
-  const exclues = hours
-    .filter((h) => NIVEAUX_EXCLUS_PAR_METEO.has(h.level))
-    .sort((a, b) => a.startMs - b.startMs)
-  const merged: { startMs: number; endMs: number }[] = []
-  for (const h of exclues) {
-    const last = merged[merged.length - 1]
-    if (last && h.startMs - last.endMs < 30_000) last.endMs = Math.max(last.endMs, h.endMs)
-    else merged.push({ startMs: h.startMs, endMs: h.endMs })
-  }
-  return merged
-}
-
-export function recevabiliteForDate(
-  state: MeteoModuleState,
-  selectedDate: string,
-): { startMin: number; endMin: number; recevable: boolean; level: RecevabiliteLevel }[] {
-  if (state.results.length === 0) return []
-  const first = state.results[0]
-  if (!first) return []
-  const firstOk = first.outcomes.find((o): o is SourceResult => !isError(o))
-  if (!firstOk) return []
-  const ev = evaluateRecevabilite(firstOk.rows, state.asphalt, state.recevabiliteConfig)
-  const out: { startMin: number; endMin: number; recevable: boolean; level: RecevabiliteLevel }[] = []
-  for (const h of ev) {
-    const d = h.date instanceof Date ? h.date : parseHourTimestamp(h.datetime)
-    const dateStr = isoDate(d)
-    if (dateStr !== selectedDate) continue
-    const startMin = d.getHours() * 60 + d.getMinutes()
-    out.push({
-      startMin,
-      endMin: Math.min(startMin + 60, 1440),
-      recevable: h.recevable,
-      level: h.level,
-    })
-  }
-  return out
-}

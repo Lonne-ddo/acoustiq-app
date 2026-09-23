@@ -49,8 +49,8 @@ export function buildIndicesSnapshot(
   return out
 }
 
-/** 1.2 : le module météo peut porter ses `results` figés (fetchedAt, request). */
-const PROJECT_VERSION = '1.2'
+/** 1.2 : `results` météo figés (fetchedAt, request). 1.3 : `Period.motifMeteo`. */
+const PROJECT_VERSION = '1.3'
 
 /**
  * Sauvegarde le projet courant en fichier JSON

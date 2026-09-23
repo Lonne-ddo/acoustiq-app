@@ -11,7 +11,8 @@
  * voir utils/periodEdit.
  */
 import { Fragment, useMemo, useRef, useState } from 'react'
-import { ChevronDown, Plus, Trash2, Check, AlertTriangle, CalendarPlus } from 'lucide-react'
+import { ChevronDown, Plus, Trash2, Check, AlertTriangle, CalendarPlus, CloudRain } from 'lucide-react'
+import { resumeMotif } from '../utils/exclusionMeteo'
 import type { Period, Category } from '../types'
 import {
   validatePeriodEdit,
@@ -286,6 +287,8 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
                     const check = checks.get(p.id)
                     const err = rowError?.id === p.id ? rowError.msg : null
                     const hasMessages = !!err || (check?.warnings.length ?? 0) > 0
+                    // Ligne(s) sous la période : messages, puis motif météo s'il y en a un.
+                    const hasSuite = hasMessages || !!p.motifMeteo
                     const editingStart = editingBound?.id === p.id && editingBound.field === 'start'
                     const editingEnd = editingBound?.id === p.id && editingBound.field === 'end'
                     // Une borne qui n'appartient pas au jour affiché porte sa
@@ -299,7 +302,7 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
                     const dayChipClass = check?.outsideMeasureRange ? 'text-amber-400' : 'text-gray-500'
                     return (
                       <Fragment key={p.id}>
-                      <tr className={hasMessages ? '' : 'border-b border-gray-900 last:border-0'}>
+                      <tr className={hasSuite ? '' : 'border-b border-gray-900 last:border-0'}>
                         <td className="px-2 py-1 text-gray-200">
                           {isEditing ? (
                             <input
@@ -417,7 +420,7 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
                           sont permanents — une période hors plage doit se
                           signaler en continu, pas seulement pendant l'édition. */}
                       {hasMessages && (
-                        <tr className="border-b border-gray-900 last:border-0">
+                        <tr className={p.motifMeteo ? '' : 'border-b border-gray-900 last:border-0'}>
                           <td colSpan={6} className="px-2 pb-1.5 pt-0">
                             {err && (
                               <p className="flex items-start gap-1.5 text-[10px] text-rose-300">
@@ -441,6 +444,17 @@ export default function PeriodsPanel({ periods, onAdd, onUpdate, onRemove, categ
                                 Reporter la fin au lendemain ({fmtDayMonth(shiftToNextDay(p.endMs))})
                               </button>
                             )}
+                          </td>
+                        </tr>
+                      )}
+                      {/* Motif d'une exclusion issue d'une suggestion météo validée. */}
+                      {p.motifMeteo && (
+                        <tr className="border-b border-gray-900 last:border-0">
+                          <td colSpan={6} className="px-2 pb-1.5 pt-0">
+                            <p className="flex items-start gap-1.5 text-[10px] text-sky-300/90">
+                              <CloudRain size={10} className="mt-0.5 shrink-0" aria-hidden="true" />
+                              <span className="flex-1 min-w-0 break-words">Motif météo : {resumeMotif(p.motifMeteo)}</span>
+                            </p>
                           </td>
                         </tr>
                       )}

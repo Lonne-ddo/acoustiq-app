@@ -514,3 +514,33 @@ telle quelle ; (2) un résultat figé avant correction couvrait des journées
 LST : corrigé à la lecture, il lui manque l'heure 00:00 légale du premier jour
 d'été et il déborde sur 00:00 du lendemain (données non récupérables sans
 nouvelle requête).
+
+---
+
+## #11 — « Exclure les heures non recevables » et les bandes météo : deux verdicts pour la même heure
+
+**Statut** : ouvert, non corrigé. **À trancher dans le chantier
+exclusion ↔ périodes**, où la question se repose entièrement.
+**Sévérité** : moyenne — deux verdicts contradictoires à l'écran.
+
+### Constat
+
+- Les **bandes** de la courbe LAeq suivent la sélection de l'onglet Météo
+  (point actif, source affichée) : `meteoPourCourbe` / `selectionEffective`
+  (`src/utils/meteoCourbe.ts`), passées au graphique par `App.tsx`
+  (`meteoCourbe={showMeteoRecevabilite ? meteoCourbe : null}`).
+- Le bouton **« Exclure les heures non recevables »** (barre latérale, sous la
+  case « Afficher la recevabilité météo ») crée ses périodes depuis
+  `recevabiliteOverlay` → `recevabiliteForDate` (`src/utils/meteoModule.ts`),
+  qui prend TOUJOURS le premier point (`results[0]`) et sa première source en
+  succès, et seulement la date sélectionnée.
+
+Dès que la sélection diffère (autre point, autre source) ou en multi-jours,
+la même heure peut porter une bande « non recevable » sans être exclue, ou
+être exclue sans bande — sous le même en-tête « recevabilité météo ».
+
+### Piste
+
+Une seule source de vérité pour ce qu'affichent les bandes ET ce qu'exclut le
+bouton (vraisemblablement la sélection, sur tous les jours affichés), décidée
+avec la refonte exclusion ↔ périodes. Pas de correctif isolé d'ici là.

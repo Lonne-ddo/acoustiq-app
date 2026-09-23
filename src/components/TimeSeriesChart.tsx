@@ -38,6 +38,7 @@ import AudioTimelineBar from './audio/AudioTimelineBar'
 import type { ClassifiedSegment } from '../utils/yamnetProcessor'
 import { laeqAvg } from '../utils/acoustics'
 import { measureSelectionRange } from '../utils/selectionMeasure'
+import type { RecevabiliteLevel } from '../utils/recevabilite'
 
 // Palette de couleurs par point de mesure
 const POINT_COLORS: Record<string, string> = {
@@ -272,7 +273,7 @@ interface Props {
   chartHighlightRange?: { startMin: number; endMin: number } | null
   /** Bandes de recevabilité météo (vert/rouge) en fond — une entrée par heure.
    *  startMs/endMs sont des epoch ms ; le chart convertit en minutes via son ancre. */
-  recevabiliteOverlay?: { startMs: number; endMs: number; recevable: boolean }[]
+  recevabiliteOverlay?: { startMs: number; endMs: number; recevable: boolean; level: RecevabiliteLevel }[]
 }
 
 /** Format court d'une date ISO en français : "2026-03-09" → "09 mars" */
@@ -2051,7 +2052,8 @@ export default function TimeSeriesChart({
                   if (endMin < fullRange.startMin || startMin > fullRange.endMin) return null
                   const x1 = Math.max(fullRange.startMin, startMin)
                   const x2 = Math.min(fullRange.endMin, endMin)
-                  const color = h.recevable ? '#10b981' : '#ef4444'
+                  // Indéterminé (donnée aberrante) : gris — ni recevable ni non recevable.
+                  const color = h.recevable ? '#10b981' : h.level === 'indetermine' ? '#9ca3af' : '#ef4444'
                   return (
                     <ReferenceArea
                       key={`recv-${i}`}

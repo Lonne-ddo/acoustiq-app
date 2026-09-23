@@ -234,3 +234,87 @@ c'est une fenêtre d'évaluation qui ne recoupe pas la mesure.
    reste non vérifiée par cette voie.
 4. Relancer ces six fichiers sur une fenêtre qui recoupe la mesure (p. ex.
    `evalHour` = heure de début) pour obtenir un vrai verdict Kt.
+
+---
+
+## #5 — SÉCURITÉ : SheetJS `xlsx@0.18.5` vulnérable sur le chemin de LECTURE
+
+**Statut** : ouvert, non corrigé. **Priorité haute.**
+**Sévérité** : haute (npm audit) — déclenchable par un fichier fourni par
+l'utilisateur (fichier de mesure, export ECME, carrière, Lp).
+
+### Constat
+
+`package.json` : `"xlsx": "^0.18.5"` (installé : 0.18.5). Deux avis :
+
+- **GHSA-4r6h-8v6p-xvw6** — pollution de prototype à la lecture d'un
+  classeur forgé (corrigé en 0.19.3) ;
+- **GHSA-5pgg-2g8v-p4x9** — ReDoS (corrigé en 0.20.2).
+
+`npm audit` : « PAS DE FIX npm ». L'éditeur a quitté le registre npm ; les
+versions corrigées ne sont publiées que sur `cdn.sheetjs.com`. Dernière
+version disponible : **0.20.3** (`xlsx-latest` → 0.20.3 ; 0.20.4+ → 404,
+vérifié le 2026-09-23).
+
+### Points de lecture (`XLSX.read`)
+
+| Fichier:ligne | Parseur | Thread |
+|---|---|---|
+| `src/modules/formatDetectors.ts:766` | `parseWorkbook` (831C/821SE) | worker si > 1 Mo (`workers/parserWorker.ts:34`), **principal** sinon (`App.tsx:165`) |
+| `src/utils/ecmeParser.ts:116` | `parseEcmeFile` | **principal** (`pages/EcmePage.tsx:41`) |
+| `src/utils/carriereParser.ts:217`, `:278`, `:341` | parseurs carrière | **principal** (`pages/CarrierePage.tsx`) |
+| `src/utils/universalParser.ts:47` | `parseLpFile` | **principal** (`components/LwCalculator.tsx`) |
+| `src/modules/parser821SE.ts:339`, `parser831C.ts:103` | `parse821SE` / `parse831C` | **code mort** : aucun appelant hors tests |
+
+Une pollution de prototype survenue DANS le worker reste confinée à son
+realm ; sur le thread principal, elle atteint toute l'application.
+
+Écriture seule (`XLSX.writeFile`, 9 sites : exports) : non concernée par ces
+deux avis. Utilitaires purs : `XLSX.SSF.parse_date_code`, `XLSX.utils.*`.
+
+### Voies de migration (à trancher)
+
+1. **CDN en dépendance directe** — `"xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"`
+   (méthode documentée par SheetJS). Le lockfile fige URL + intégrité.
+   Risque : installation dépendante de la disponibilité du CDN et du proxy
+   TLS du poste.
+2. **Vendoring** — tarball 0.20.3 (2,4 Mo) versionné dans le dépôt,
+   `"xlsx": "file:vendor/xlsx-0.20.3.tgz"`. Installation hors-ligne et
+   reproductible ; mises à jour manuelles.
+3. **Remplacement du parseur de lecture** — lecture OOXML directe (zip +
+   XML) pour les formats connus. Chantier lourd (5 parseurs actifs), mais
+   pourrait aussi régler la lecture intégrale en mémoire d'un classeur de
+   100 Mo (> 25 min).
+
+Quelle que soit la voie : saut 0.18 → 0.20, à valider par les tests de
+parseurs ET une passe sur les fichiers réels de `.local-data/`
+(`scripts/kt-recon.mjs`), la gestion des dates étant le point sensible.
+
+---
+
+## #6 — SÉCURITÉ : `maplibre-gl@5.23.0` — avis CRITIQUE (npm audit)
+
+**Statut** : ouvert, non corrigé.
+
+**GHSA-jrc7-96c5-q579** — contournement de `DOM.sanitize()` (XSS), versions
+≤ 6.4.0. Installé : 5.23.0 ; dernière : 6.11.1 (**saut de version majeure**).
+Usages : `src/components/meteo/MeteoMap.tsx`, `src/components/Vue3DTab.tsx`.
+Exposition atténuée : tout le contenu injecté par `Popup.setHTML` passe par
+`escapeHtml` (`MeteoMap.tsx:100-130`, `Vue3DTab.tsx:919`, `:1256`). Mise à
+jour à faire malgré tout, avec vérification des deux cartes.
+
+`npm audit` signale aussi, en « high » avec correctif disponible : vite,
+postcss, nanoid, form-data, brace-expansion.
+
+---
+
+## #7 — Note : fins de ligne (`core.autocrlf`)
+
+**Statut** : information, aucune action requise.
+
+`core.autocrlf = true` est réglé au niveau **système**
+(`C:/Program Files/Git/etc/gitconfig`), pas dans le dépôt. Le dépôt porte
+déjà un `.gitattributes` avec `* text=auto` : l'index est normalisé en LF
+quel que soit le réglage du poste, donc aucun diff fantôme de fins de ligne
+dans les commits. Seules les copies de travail peuvent alterner CRLF/LF
+selon l'outil qui écrit le fichier ; c'est sans effet sur l'historique.

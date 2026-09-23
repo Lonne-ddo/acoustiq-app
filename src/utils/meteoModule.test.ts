@@ -5,10 +5,78 @@ import {
   deserializeMeteoModule,
   ecccStationsUsed,
   ecccFailuresUsed,
+  fenetresAExclure,
+  NIVEAUX_EXCLUS_PAR_METEO,
   type MeteoModuleState,
 } from './meteoModule'
 import type { PointMeteoResults } from './meteoModule'
 import type { SourceResult, SourceError } from './meteoSources'
+import { evaluateRecevabilite, isMelccfpDefault } from './recevabilite'
+
+describe('fenetresAExclure — « Exclure les heures non recevables »', () => {
+  const H = 3_600_000
+  const h = (i: number, level: 'ok' | 'warn' | 'bad' | 'indetermine') => ({ startMs: i * H, endMs: (i + 1) * H, level })
+
+  it('RÈGLE : retire non recevable et indéterminé, garde recevable et à signaler', () => {
+    expect(NIVEAUX_EXCLUS_PAR_METEO.has('bad')).toBe(true)
+    expect(NIVEAUX_EXCLUS_PAR_METEO.has('indetermine')).toBe(true)
+    expect(NIVEAUX_EXCLUS_PAR_METEO.has('warn')).toBe(false)
+    expect(NIVEAUX_EXCLUS_PAR_METEO.has('ok')).toBe(false)
+    expect(fenetresAExclure([h(0, 'ok')])).toEqual([])
+    expect(fenetresAExclure([h(0, 'warn')])).toEqual([])
+    expect(fenetresAExclure([h(0, 'bad')])).toEqual([{ startMs: 0, endMs: H }])
+    expect(fenetresAExclure([h(0, 'indetermine')])).toEqual([{ startMs: 0, endMs: H }])
+  })
+
+  it('fusionne les heures exclues contiguës, jamais par-dessus une heure conservée', () => {
+    const hours = [h(0, 'bad'), h(1, 'indetermine'), h(2, 'warn'), h(3, 'bad'), h(4, 'ok'), h(5, 'indetermine')]
+    expect(fenetresAExclure(hours)).toEqual([
+      { startMs: 0, endMs: 2 * H },
+      { startMs: 3 * H, endMs: 4 * H },
+      { startMs: 5 * H, endMs: 6 * H },
+    ])
+  })
+
+  it('ordre d’entrée indifférent', () => {
+    expect(fenetresAExclure([h(1, 'bad'), h(0, 'bad')])).toEqual([{ startMs: 0, endMs: 2 * H }])
+  })
+})
+
+describe('persistance meteoModule — config d’avant les filtres de validité', () => {
+  it('un projet sans champs de validité se charge avec les défauts −50/+50 °C, 100 mm', () => {
+    const p = serializeMeteoModule(makeDefaultMeteoState())
+    // Forme d'un projet sauvegardé AVANT l'ajout des filtres : 3 seuils seulement.
+    const ancien = { ...p, recevabiliteConfig: { windMaxKmh: 25, precipMaxMm: 0, hrDryPct: 90 } }
+    const cfg = deserializeMeteoModule(ancien as typeof p).recevabiliteConfig
+    expect(cfg.windMaxKmh).toBe(25) // seuil persisté conservé
+    expect(cfg.validiteTempMinC).toBe(-50)
+    expect(cfg.validiteTempMaxC).toBe(50)
+    expect(cfg.validitePrecipMaxMm).toBe(100)
+  })
+
+  it('JAMAIS RÉTROACTIF : un projet sans critère d’humidité se recharge sans critère', () => {
+    const p = serializeMeteoModule(makeDefaultMeteoState())
+    const ancien = { ...p, recevabiliteConfig: { windMaxKmh: 20, precipMaxMm: 0, hrDryPct: 90 } }
+    const cfg = deserializeMeteoModule(ancien as typeof p).recevabiliteConfig
+    expect(cfg.humiditeMode).toBe('aucun')
+    expect(isMelccfpDefault(cfg)).toBe(true)
+    // Une heure à HR 99 % reste recevable dans ce projet rechargé.
+    const [h] = evaluateRecevabilite(
+      [{ datetime: '2026-07-03T08:00', temperature: 20, humidity: 99, precipitation: 0, windSpeed: 5, windDirection: null }],
+      true,
+      cfg,
+    )
+    expect(h.level).toBe('ok')
+  })
+
+  it('un critère ACTIVÉ puis sauvegardé est restauré tel quel', () => {
+    const s = makeDefaultMeteoState()
+    s.recevabiliteConfig = { ...s.recevabiliteConfig, humiditeMode: 'hr', hrMaxPct: 85 }
+    const cfg = deserializeMeteoModule(serializeMeteoModule(s)).recevabiliteConfig
+    expect(cfg.humiditeMode).toBe('hr')
+    expect(cfg.hrMaxPct).toBe(85)
+  })
+})
 
 describe('persistance meteoModule — eccStationByPoint (save/load)', () => {
   function stateWithChoice(): MeteoModuleState {

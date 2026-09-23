@@ -4,6 +4,12 @@ import {
   periodLabel,
   evaluateRecevabilite,
   chausseeSeche,
+  chausseeSecheDetail,
+  verdictHeure,
+  computeStats,
+  filtresValiditeParDefaut,
+  calcDewpoint,
+  critereHumiditeLabel,
   seuilsUtilisesLine,
   isMelccfpDefault,
   DEFAUT_MELCCFP,
@@ -151,6 +157,222 @@ describe('seuils configurables — DEFAUT_MELCCFP = comportement d’avant', () 
     // HR : 95 % non sèche au défaut (≤90), sèche si hrDryPct relevé à 96
     expect(chausseeSeche(-1, 95, 0, DEFAUT_MELCCFP)).toBe('non sèche')
     expect(chausseeSeche(-1, 95, 0, { ...DEFAUT_MELCCFP, hrDryPct: 96 })).toBe('sèche')
+  })
+})
+
+/**
+ * Verdict UNIFIÉ. Deux garanties, sur une grille exhaustive de valeurs, de
+ * seuils et d'options :
+ *  1. le niveau porté par les étapes = le `level` retourné (l'explication
+ *     affichée ne peut pas contredire le verdict — défaut du standalone) ;
+ *  2. niveau ET motifs = ceux de l'implémentation d'avant l'unification
+ *     (copie FIGÉE ci-dessous, main@02f7626) : l'unification ne change aucun
+ *     verdict.
+ */
+describe('verdictHeure — une seule fonction de verdict', () => {
+  /** COPIE FIGÉE de la boucle d'evaluateRecevabilite, main@02f7626. Ne pas modifier. */
+  function verdictAvantUnification(
+    row: MeteoHourRow,
+    asphalt: boolean,
+    config: RecevabiliteConfig,
+  ): { level: string; reasons: string[] } {
+    const cs = (temp: number | null, hr: number | null, precip: number | null) => {
+      if (precip == null || temp == null) return null
+      if (precip > config.precipMaxMm) return 'non sèche'
+      if (temp > 0) return 'sèche'
+      if (hr == null) return null
+      return hr <= config.hrDryPct ? 'sèche' : 'non sèche'
+    }
+    const reasons: string[] = []
+    let level = 'ok'
+    if (row.windSpeed != null && row.windSpeed >= config.windMaxKmh) {
+      reasons.push(`vent ${row.windSpeed.toFixed(1)} km/h ≥ ${config.windMaxKmh}`)
+      level = 'bad'
+    }
+    if (row.precipitation != null && row.precipitation > config.precipMaxMm) {
+      reasons.push(`précip. ${row.precipitation.toFixed(1)} mm > ${config.precipMaxMm}`)
+      level = 'bad'
+    }
+    if (level === 'ok' && asphalt) {
+      if (cs(row.temperature, row.humidity, row.precipitation) === 'non sèche') {
+        reasons.push('chaussée non sèche')
+        level = 'warn'
+      }
+    }
+    return { level, reasons }
+  }
+
+  const configs: RecevabiliteConfig[] = [
+    DEFAUT_MELCCFP,
+    { ...DEFAUT_MELCCFP, windMaxKmh: 30, precipMaxMm: 0.2, hrDryPct: 95 },
+    { ...DEFAUT_MELCCFP, humiditeMode: 'hr', hrMaxPct: 90 },
+    { ...DEFAUT_MELCCFP, humiditeMode: 'rosee', roseeEcartMinC: 2 },
+  ]
+  const winds = [null, 5, 20, 25, 30, 31]
+  const precips = [null, 0, 0.1, 0.2, 0.3]
+  const temps = [null, -5, 0, 5]
+  const hrs = [null, 85, 90, 95, 96]
+
+  const grille: { row: MeteoHourRow; asphalt: boolean; config: RecevabiliteConfig }[] = []
+  for (const config of configs)
+    for (const asphalt of [true, false])
+      for (const windSpeed of winds)
+        for (const precipitation of precips)
+          for (const temperature of temps)
+            for (const humidity of hrs)
+              grille.push({
+                row: { datetime: '2026-01-15T08:00', temperature, humidity, precipitation, windSpeed, windDirection: null },
+                asphalt,
+                config,
+              })
+
+  it(`grille de ${grille.length} combinaisons : niveau des étapes = level retourné`, () => {
+    for (const { row, asphalt, config } of grille) {
+      const v = verdictHeure(row, asphalt, config)
+      const attendu = v.steps.some((s) => s.cls === 'bad') ? 'bad'
+        : v.steps.some((s) => s.cls === 'warn') ? 'warn' : 'ok'
+      expect(v.level, JSON.stringify({ row, asphalt, config })).toBe(attendu)
+    }
+  })
+
+  it('même grille (sans critère d’humidité) : niveau ET motifs identiques à l’implémentation d’avant', () => {
+    for (const { row, asphalt, config } of grille.filter((g) => g.config.humiditeMode === 'aucun')) {
+      const v = verdictHeure(row, asphalt, config)
+      const avant = verdictAvantUnification(row, asphalt, config)
+      const ctx = JSON.stringify({ row, asphalt, config })
+      expect(v.level, ctx).toBe(avant.level)
+      expect(v.reasons, ctx).toEqual(avant.reasons)
+    }
+  })
+
+  it('DÉFAUT DU STANDALONE : asphalte décoché, chaussée gelée humide → étape neutre, verdict recevable', () => {
+    const row = { temperature: -5, humidity: 99, precipitation: 0, windSpeed: 5 }
+    const v = verdictHeure(row, false, DEFAUT_MELCCFP)
+    expect(v.level).toBe('ok')
+    const etape = v.steps.find((s) => s.label.startsWith('Chaussée'))!
+    expect(etape.cls).toBe('skip')
+    expect(etape.result).toBe('critère non applicable')
+    expect(v.steps.some((s) => s.result === 'À SIGNALER')).toBe(false)
+    // Asphalte coché, même heure : à signaler, et l'étape le dit.
+    const w = verdictHeure(row, true, DEFAUT_MELCCFP)
+    expect(w.level).toBe('warn')
+    expect(w.steps.find((s) => s.label.startsWith('Chaussée'))!.result).toBe('À SIGNALER')
+  })
+
+  it('evaluateRecevabilite porte les étapes de verdictHeure', () => {
+    const row: MeteoHourRow = { datetime: '2026-01-15T08:00', temperature: 5, humidity: 60, precipitation: 0, windSpeed: 25, windDirection: null }
+    const [h] = evaluateRecevabilite([row])
+    expect(h.steps).toEqual(verdictHeure(row).steps)
+    expect(h.level).toBe('bad')
+  })
+
+  it('chausseeSeche = chausseeSecheDetail(...).state', () => {
+    for (const t of temps) for (const hr of hrs) for (const p of precips)
+      expect(chausseeSeche(t, hr, p)).toBe(chausseeSecheDetail(t, hr, p).state)
+  })
+})
+
+describe('filtres de validité — donnée aberrante ⇒ indéterminé, jamais non recevable', () => {
+  const r = (over: Partial<MeteoHourRow>): MeteoHourRow => ({
+    datetime: '2026-01-15T08:00', temperature: 5, humidity: 60, precipitation: 0, windSpeed: 5, windDirection: null, ...over,
+  })
+
+  it('bornes STRICTES : −50 et +50 °C valides, −50,1 et +50,1 indéterminés', () => {
+    expect(verdictHeure(r({ temperature: -50 })).level).not.toBe('indetermine')
+    expect(verdictHeure(r({ temperature: 50 })).level).toBe('ok')
+    expect(verdictHeure(r({ temperature: -50.1 })).level).toBe('indetermine')
+    expect(verdictHeure(r({ temperature: 50.1 })).level).toBe('indetermine')
+  })
+
+  it('HIVER QUÉBÉCOIS : −30 °C n’est pas aberrant (le −10 °C du standalone l’aurait été)', () => {
+    const v = verdictHeure(r({ temperature: -30, humidity: 80 }))
+    expect(v.level).toBe('ok')
+    expect(v.steps[0].result).toBe('données valides')
+  })
+
+  it('précip. : 100 mm valide (donc non recevable §3.6), 100,1 mm indéterminé', () => {
+    expect(verdictHeure(r({ precipitation: 100 })).level).toBe('bad')
+    expect(verdictHeure(r({ precipitation: 100.1 })).level).toBe('indetermine')
+  })
+
+  it('PRIORITÉ : donnée aberrante l’emporte sur un vent non recevable ; aucun critère §3.6 évalué', () => {
+    const v = verdictHeure(r({ temperature: 80, windSpeed: 40 }))
+    expect(v.level).toBe('indetermine')
+    expect(v.reasons).toEqual(['T 80.0 °C hors plage de validité [-50 ; 50] — donnée aberrante'])
+    expect(v.steps.some((s) => s.label.startsWith('Vent'))).toBe(false)
+    expect(v.chaussee).toBeNull()
+  })
+
+  it('T et précip. aberrantes : deux motifs, deux étapes', () => {
+    const v = verdictHeure(r({ temperature: -60, precipitation: 150 }))
+    expect(v.level).toBe('indetermine')
+    expect(v.reasons).toHaveLength(2)
+    expect(v.steps.filter((s) => s.cls === 'indetermine')).toHaveLength(2)
+  })
+
+  it('indéterminé n’est ni recevable ni compté non recevable dans les stats', () => {
+    const ev = evaluateRecevabilite([r({ temperature: 99 }), r({ windSpeed: 30, datetime: '2026-01-15T09:00' })])
+    expect(ev[0].level).toBe('indetermine')
+    expect(ev[0].recevable).toBe(false)
+    const s = computeStats(ev)
+    expect(s.indetermine).toBe(1)
+    expect(s.bad).toBe(1)
+    expect(s.recevables + s.warn + s.bad + s.indetermine).toBe(s.total)
+  })
+
+  it('filtres modifiés : tracés dans seuilsUtilisesLine, sans toucher au drapeau MELCCFP', () => {
+    const cfg: RecevabiliteConfig = { ...DEFAUT_MELCCFP, validiteTempMinC: -40 }
+    expect(isMelccfpDefault(cfg)).toBe(true)
+    expect(filtresValiditeParDefaut(cfg)).toBe(false)
+    expect(seuilsUtilisesLine(cfg)).toContain('FILTRES MODIFIÉS')
+    expect(seuilsUtilisesLine(DEFAUT_MELCCFP)).not.toContain('FILTRES MODIFIÉS')
+  })
+})
+
+describe('critère d’humidité additionnel — non réglementaire, désactivé par défaut', () => {
+  const r = (over: Partial<MeteoHourRow>): MeteoHourRow => ({
+    datetime: '2026-07-03T08:00', temperature: 20, humidity: 60, precipitation: 0, windSpeed: 5, windDirection: null, ...over,
+  })
+  const HR: RecevabiliteConfig = { ...DEFAUT_MELCCFP, humiditeMode: 'hr' }
+  const ROSEE: RecevabiliteConfig = { ...DEFAUT_MELCCFP, humiditeMode: 'rosee' }
+
+  it('par défaut : aucun critère, HR 99 % reste recevable et aucune étape d’humidité', () => {
+    const v = verdictHeure(r({ humidity: 99 }))
+    expect(v.level).toBe('ok')
+    expect(v.steps.some((s) => /HR ≤|T − Td/.test(s.label))).toBe(false)
+  })
+
+  it('mode HR : 90 % recevable, 91 % non recevable, libellé « tolérance du sonomètre »', () => {
+    expect(verdictHeure(r({ humidity: 90 }), true, HR).level).toBe('ok')
+    const v = verdictHeure(r({ humidity: 91 }), true, HR)
+    expect(v.level).toBe('bad')
+    expect(v.reasons[0]).toContain('tolérance du sonomètre')
+    expect(v.reasons[0]).not.toContain('98-01')
+  })
+
+  it('calcDewpoint (Magnus) retrouve le Td mesuré par ECCC : T 19,7 °C, HR 84 % → 16,9 °C', () => {
+    expect(calcDewpoint(19.7, 84)).toBeCloseTo(16.9, 1)
+    expect(calcDewpoint(20, 0)).toBeNull()
+    expect(calcDewpoint(null, 50)).toBeNull()
+  })
+
+  it('mode rosée : Td de la source prioritaire, Magnus en repli, et l’étape dit lequel', () => {
+    const fourni = verdictHeure(r({ temperature: 10, humidity: 60, dewpoint: 9 }), true, ROSEE)
+    expect(fourni.level).toBe('bad') // écart 1 < 2
+    expect(fourni.steps.at(-1)!.detail).toContain('Td fourni par la source')
+    const calcule = verdictHeure(r({ temperature: 10, humidity: 60 }), true, ROSEE)
+    expect(calcule.level).toBe('ok') // Td ≈ 2,6 °C, écart ≈ 7,4
+    expect(calcule.steps.at(-1)!.detail).toContain('Td calculé (Magnus)')
+  })
+
+  it('actif ⇒ non MELCCFP, tracé dans seuilsUtilisesLine (rapport, exports)', () => {
+    for (const cfg of [HR, ROSEE]) {
+      expect(isMelccfpDefault(cfg)).toBe(false)
+      expect(seuilsUtilisesLine(cfg)).toContain('non MELCCFP')
+    }
+    expect(seuilsUtilisesLine(HR)).toContain('HR > 90 % (tolérance du sonomètre)')
+    expect(seuilsUtilisesLine(ROSEE)).toContain('T − Td < 2 °C')
+    expect(critereHumiditeLabel(DEFAUT_MELCCFP)).toBeNull()
   })
 })
 

@@ -16,6 +16,7 @@ import {
   parseHourTimestamp,
   DEFAUT_MELCCFP,
   type RecevabiliteConfig,
+  type RecevabiliteLevel,
 } from './recevabilite'
 
 export interface PointMeteoResults {
@@ -154,17 +155,50 @@ export function ecccFailuresUsed(state: MeteoModuleState): string[] {
   return out
 }
 
+/**
+ * Niveaux retirés par « Exclure les heures non recevables » :
+ *   - `bad`          : non recevable au §3.6 ;
+ *   - `indetermine`  : donnée météo aberrante — la mesure ne peut pas être
+ *                      justifiée, elle part aussi.
+ * Restent : `ok` et `warn` (« à signaler » est RECEVABLE au §3.6 : il se
+ * mentionne au rapport, il ne s'exclut pas).
+ */
+export const NIVEAUX_EXCLUS_PAR_METEO: ReadonlySet<RecevabiliteLevel> = new Set<RecevabiliteLevel>([
+  'bad',
+  'indetermine',
+])
+
+/**
+ * Fenêtres à exclure : heures dont le niveau est dans NIVEAUX_EXCLUS_PAR_METEO,
+ * triées puis fusionnées quand elles se touchent (écart < 30 s). Deux heures
+ * exclues séparées par une heure conservée ne sont jamais fusionnées.
+ */
+export function fenetresAExclure(
+  hours: { startMs: number; endMs: number; level: RecevabiliteLevel }[],
+): { startMs: number; endMs: number }[] {
+  const exclues = hours
+    .filter((h) => NIVEAUX_EXCLUS_PAR_METEO.has(h.level))
+    .sort((a, b) => a.startMs - b.startMs)
+  const merged: { startMs: number; endMs: number }[] = []
+  for (const h of exclues) {
+    const last = merged[merged.length - 1]
+    if (last && h.startMs - last.endMs < 30_000) last.endMs = Math.max(last.endMs, h.endMs)
+    else merged.push({ startMs: h.startMs, endMs: h.endMs })
+  }
+  return merged
+}
+
 export function recevabiliteForDate(
   state: MeteoModuleState,
   selectedDate: string,
-): { startMin: number; endMin: number; recevable: boolean }[] {
+): { startMin: number; endMin: number; recevable: boolean; level: RecevabiliteLevel }[] {
   if (state.results.length === 0) return []
   const first = state.results[0]
   if (!first) return []
   const firstOk = first.outcomes.find((o): o is SourceResult => !isError(o))
   if (!firstOk) return []
   const ev = evaluateRecevabilite(firstOk.rows, state.asphalt, state.recevabiliteConfig)
-  const out: { startMin: number; endMin: number; recevable: boolean }[] = []
+  const out: { startMin: number; endMin: number; recevable: boolean; level: RecevabiliteLevel }[] = []
   for (const h of ev) {
     const d = h.date instanceof Date ? h.date : parseHourTimestamp(h.datetime)
     const dateStr = isoDate(d)
@@ -174,6 +208,7 @@ export function recevabiliteForDate(
       startMin,
       endMin: Math.min(startMin + 60, 1440),
       recevable: h.recevable,
+      level: h.level,
     })
   }
   return out

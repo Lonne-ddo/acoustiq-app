@@ -18,6 +18,9 @@ import PointsList, {
 import MeteoMap from '../components/meteo/MeteoMap'
 import SourceTable from '../components/meteo/SourceTable'
 import ComparisonTable from '../components/meteo/ComparisonTable'
+import MeteoInspector, { type InspectorSelection } from '../components/meteo/MeteoInspector'
+import MeteoTutorial from '../components/meteo/MeteoTutorial'
+import { externalLinks, viewerUrl } from '../utils/meteoLinks'
 import {
   SOURCES,
   fetchSource,
@@ -40,9 +43,12 @@ import {
   DEFAUT_MELCCFP,
   seuilsUtilisesLine,
   isMelccfpDefault,
+  filtresValiditeParDefaut,
+  critereHumiditeLabel,
   type RecevabiliteHour,
   type RecevabiliteConfig,
 } from '../utils/recevabilite'
+import { detectDiscord, formatDiscord, type HourDiscord } from '../utils/meteoDiscord'
 import type {
   MeteoModuleState,
   PointMeteoResults,
@@ -71,6 +77,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
     Record<string, Record<string, EcccFailure>>
   >({})
   const lastFetchKeyRef = useRef<string | null>(null)
+  // Heure inspectée (clic sur une ligne de tableau). Fermée au changement de point.
+  const [inspection, setInspection] = useState<InspectorSelection | null>(null)
 
   /**
    * Mémorise l'issue ECCC d'un point : candidats (survivent au succès OU à
@@ -116,6 +124,10 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
       setActivePointId(state.results[0].pointId)
     }
   }, [state.results, activePointId])
+
+  useEffect(() => {
+    setInspection(null)
+  }, [activePointId, state.results])
 
   function setPoints(points: MeteoPoint[]) {
     update({ points })
@@ -391,6 +403,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         map.set(key, row)
       }
     }
+    const discMap = discordByHour(activeSources)
     const sortedKeys = Array.from(map.keys()).sort()
     const header = ['datetime']
     sourceIds.forEach((id) => {
@@ -403,6 +416,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         `${lbl} Dir °`,
       )
     })
+    header.push('Désaccord')
     const lines: string[][] = [header]
     for (const key of sortedKeys) {
       const row = map.get(key)!
@@ -416,6 +430,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
           fmtCsv(row[`${id}_Dir`], 0),
         )
       }
+      const disc = discMap.get(key)
+      line.push(disc ? formatDiscord(disc) : '')
       lines.push(line)
     }
     download(
@@ -466,6 +482,12 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         compMap.set(key, row)
       }
     }
+    // Colonne « Désaccord » (dernière), une par heure.
+    const discMap = discordByHour(activeSources)
+    for (const [key, row] of compMap) {
+      const disc = discMap.get(key)
+      row['Désaccord'] = disc ? formatDiscord(disc) : ''
+    }
     const compRows = Array.from(compMap.values()).sort((a, b) =>
       String(a.Heure).localeCompare(String(b.Heure)),
     )
@@ -494,6 +516,17 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         Valeur: `> ${cfg.precipMaxMm} mm ⇒ non recevable (et chaussée non sèche)`,
       },
       { Champ: 'HR chaussée sèche', Valeur: `≤ ${cfg.hrDryPct} %` },
+      {
+        Champ: "Critère d'humidité",
+        Valeur: critereHumiditeLabel(cfg) ? `${critereHumiditeLabel(cfg)} — non MELCCFP` : 'aucun (§3.6 strict)',
+      },
+      {
+        Champ: 'Filtres de validité',
+        Valeur:
+          `T ∈ [${cfg.validiteTempMinC} ; ${cfg.validiteTempMaxC}] °C, précip. ≤ ${cfg.validitePrecipMaxMm} mm — ` +
+          'hors plage ⇒ indéterminé (donnée aberrante)' +
+          (filtresValiditeParDefaut(cfg) ? '' : ' — FILTRES MODIFIÉS'),
+      },
       {
         Champ: 'Seuils',
         Valeur: isMelccfpDefault(cfg) ? 'MELCCFP (défaut)' : 'MODIFIÉS — non MELCCFP',
@@ -561,6 +594,8 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
             </p>
           </div>
         </div>
+
+        <MeteoTutorial />
 
         {/* SECTION 1 — POINTS */}
         <section className="space-y-3 no-print">
@@ -771,7 +806,46 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
               sources={activeSources}
               recevabiliteBySource={recevabiliteBySource}
               config={state.recevabiliteConfig}
+              onSelectHour={(hourKey, source) => setInspection({ mode: 'detail', hourKey, source })}
+              selectedHourKey={inspection?.mode === 'detail' ? inspection.hourKey : null}
+              viewerUrlFor={
+                activePoint?.lat != null && activePoint.lng != null
+                  ? (s) => viewerUrl(s, activePoint.lat!, activePoint.lng!, state.startDate, state.endDate)
+                  : undefined
+              }
             />
+            {inspection?.mode === 'detail' && activeResult && (
+              <MeteoInspector
+                selection={inspection}
+                outcomes={activeResult.outcomes}
+                pointLabel={activePoint?.label ?? ''}
+                asphalt={state.asphalt ?? true}
+                config={state.recevabiliteConfig}
+                onClose={() => setInspection(null)}
+              />
+            )}
+            {activePoint?.lat != null && activePoint.lng != null && (
+              <details className="rounded border border-gray-800 bg-gray-900/40 px-3 py-2 no-print">
+                <summary className="text-xs text-gray-400 cursor-pointer">
+                  Sources de référence externes — consultation manuelle (3 sites)
+                </summary>
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 pt-2">
+                  {externalLinks(activePoint.lat, activePoint.lng).map((l) => (
+                    <a
+                      key={l.name}
+                      href={l.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="block rounded border border-gray-800 px-2 py-1.5 hover:border-gray-600"
+                    >
+                      <div className="text-xs text-gray-200">{l.name} ↗</div>
+                      <div className="text-[10px] text-gray-500">{l.desc}</div>
+                      <div className="text-[10px] text-gray-600">lien direct sur les coordonnées</div>
+                    </a>
+                  ))}
+                </div>
+              </details>
+            )}
             <div className="flex flex-wrap gap-2 pt-1">
               <button
                 onClick={exportCsvSource}
@@ -814,7 +888,21 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         {activeSources.length >= 2 && (
           <section className="space-y-3">
             <SectionHeader index={5} title="Vue comparaison (sources côte à côte)" />
-            <ComparisonTable sources={activeSources} />
+            <ComparisonTable
+              sources={activeSources}
+              onSelectHour={(hourKey) => setInspection({ mode: 'comparison', hourKey })}
+              selectedHourKey={inspection?.mode === 'comparison' ? inspection.hourKey : null}
+            />
+            {inspection?.mode === 'comparison' && activeResult && (
+              <MeteoInspector
+                selection={inspection}
+                outcomes={activeResult.outcomes}
+                pointLabel={activePoint?.label ?? ''}
+                asphalt={state.asphalt ?? true}
+                config={state.recevabiliteConfig}
+                onClose={() => setInspection(null)}
+              />
+            )}
           </section>
         )}
       </div>
@@ -980,10 +1068,8 @@ function RecevabiliteConfigEditor({
   config: RecevabiliteConfig
   onChange: (c: RecevabiliteConfig) => void
 }) {
-  const isDefault =
-    config.windMaxKmh === DEFAUT_MELCCFP.windMaxKmh &&
-    config.precipMaxMm === DEFAUT_MELCCFP.precipMaxMm &&
-    config.hrDryPct === DEFAUT_MELCCFP.hrDryPct
+  // Un critère d'humidité actif compte comme un seuil modifié (non MELCCFP).
+  const isDefault = isMelccfpDefault(config)
   return (
     <div className="rounded border border-gray-800 bg-gray-900/40 px-3 py-2 space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
@@ -1030,6 +1116,81 @@ function RecevabiliteConfigEditor({
           max={100}
           step={1}
           onValid={(v) => onChange({ ...config, hrDryPct: v })}
+        />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+        <label className="text-[10px] text-gray-500 space-y-1">
+          <span className="block">Critère d'humidité additionnel (non réglementaire)</span>
+          <select
+            value={config.humiditeMode}
+            onChange={(e) =>
+              onChange({ ...config, humiditeMode: e.target.value as RecevabiliteConfig['humiditeMode'] })
+            }
+            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
+          >
+            <option value="aucun">Aucun (§3.6 strict)</option>
+            <option value="hr">HR max — tolérance du sonomètre</option>
+            <option value="rosee">Point de rosée — critère d'équipe</option>
+          </select>
+        </label>
+        {config.humiditeMode === 'hr' && (
+          <NumField
+            label="HR max (%) — tolérance du sonomètre"
+            value={config.hrMaxPct}
+            min={50}
+            max={100}
+            step={1}
+            onValid={(v) => onChange({ ...config, hrMaxPct: v })}
+          />
+        )}
+        {config.humiditeMode === 'rosee' && (
+          <NumField
+            label="Écart T − Td minimal (°C)"
+            value={config.roseeEcartMinC}
+            min={0}
+            max={10}
+            step={0.5}
+            onValid={(v) => onChange({ ...config, roseeEcartMinC: v })}
+          />
+        )}
+      </div>
+      <div className="flex items-center gap-2 flex-wrap pt-1">
+        <span
+          className="text-[11px] font-medium text-gray-400"
+          title="Ce ne sont pas des seuils §3.6 : une valeur hors plage rend l'heure « indéterminée » (donnée aberrante), jamais « non recevable »."
+        >
+          Filtres de validité des données
+        </span>
+        {!filtresValiditeParDefaut(config) && (
+          <span className="text-[9px] px-1.5 py-0.5 rounded uppercase tracking-wider text-gray-300 bg-gray-700/40 border border-gray-600">
+            filtres modifiés
+          </span>
+        )}
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+        <NumField
+          label="T min valide (°C)"
+          value={config.validiteTempMinC}
+          min={-90}
+          max={0}
+          step={1}
+          onValid={(v) => onChange({ ...config, validiteTempMinC: v })}
+        />
+        <NumField
+          label="T max valide (°C)"
+          value={config.validiteTempMaxC}
+          min={0}
+          max={70}
+          step={1}
+          onValid={(v) => onChange({ ...config, validiteTempMaxC: v })}
+        />
+        <NumField
+          label="Précip. max valide (mm/h)"
+          value={config.validitePrecipMaxMm}
+          min={1}
+          max={500}
+          step={1}
+          onValid={(v) => onChange({ ...config, validitePrecipMaxMm: v })}
         />
       </div>
     </div>
@@ -1110,6 +1271,29 @@ function SectionHeader({ index, title }: { index: number; title: string }) {
 function hourKey(s: string): string {
   const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})[T ](\d{2})/)
   return m ? `${m[1]}-${m[2]}-${m[3]}T${m[4]}` : s
+}
+
+/** Désaccord inter-sources par heure (clé = hourKey) pour les exports. */
+function discordByHour(sources: SourceResult[]): Map<string, HourDiscord> {
+  const acc = new Map<
+    string,
+    { temperature: (number | null)[]; windSpeed: (number | null)[]; precipitation: (number | null)[]; humidity: (number | null)[] }
+  >()
+  for (const s of sources) {
+    for (const r of s.rows) {
+      const key = hourKey(r.datetime)
+      const e =
+        acc.get(key) ?? { temperature: [], windSpeed: [], precipitation: [], humidity: [] }
+      e.temperature.push(r.temperature)
+      e.windSpeed.push(r.windSpeed)
+      e.precipitation.push(r.precipitation)
+      e.humidity.push(r.humidity)
+      acc.set(key, e)
+    }
+  }
+  const out = new Map<string, HourDiscord>()
+  for (const [key, cells] of acc) out.set(key, detectDiscord(cells))
+  return out
 }
 
 function fmtCsv(v: number | null | undefined, decimals: number): string {

@@ -73,13 +73,23 @@ describe('liens de consultation', () => {
 })
 
 describe('MeteoInspector — affiche le verdict du tableau, pas un autre', () => {
-  const cas: Partial<MeteoHourRow>[] = [
-    {}, { windSpeed: 30 }, { temperature: -5, humidity: 99 }, { temperature: 70 }, { precipitation: 0.4 },
+  const cas: [Partial<MeteoHourRow>, string][] = [
+    [{}, 'ok'],
+    [{ temperature: -5, humidity: 99 }, 'warn'],
+    [{ windSpeed: 30 }, 'bad'],
+    [{ precipitation: 0.4 }, 'bad'],
+    [{ temperature: 70 }, 'indetermine'],
   ]
-  for (const over of cas) {
-    it(`detail ${JSON.stringify(over)}`, () => {
+
+  it('les cas couvrent les QUATRE niveaux', () => {
+    expect(new Set(cas.map(([, l]) => l))).toEqual(new Set(['ok', 'warn', 'bad', 'indetermine']))
+  })
+
+  for (const [over, niveau] of cas) {
+    it(`detail — niveau ${niveau} ${JSON.stringify(over)}`, () => {
       const r = row(over)
       const [h] = evaluateRecevabilite([r], true, DEFAUT_MELCCFP) // ce qu'affiche le tableau
+      expect(h.level).toBe(niveau)
       const html = renderToStaticMarkup(
         createElement(MeteoInspector, {
           selection: { mode: 'detail', hourKey: '2025-07-03T14', source: 'eccc' },

@@ -114,6 +114,7 @@ const MeteoPage = lazy(() => import('./pages/MeteoPage'))
 import {
   makeDefaultMeteoState,
   recevabiliteForDate,
+  fenetresAExclure,
   serializeMeteoModule,
   deserializeMeteoModule,
   ecccStationsUsed,
@@ -1336,6 +1337,7 @@ function Sidebar({
                     className="w-full px-2 py-1.5 rounded bg-gray-800 text-gray-300 border border-gray-700
                                hover:bg-rose-900/30 hover:text-rose-300 hover:border-rose-700
                                text-[11px] transition-colors"
+                    title="Retire les heures « non recevable » et « indéterminé » (donnée aberrante). Les heures « à signaler », recevables au §3.6, sont conservées."
                   >
                     Exclure les heures non recevables
                   </button>
@@ -2910,22 +2912,13 @@ export default function App() {
     }))
   }, [meteoModule, selectedDate])
 
-  // Crée des périodes "exclude" pour chaque heure non recevable de la date courante,
-  // en fusionnant les heures contiguës pour limiter le nombre de périodes.
+  // Crée des périodes "exclude" pour les heures non recevables OU indéterminées
+  // de la date courante (règle : fenetresAExclure), heures contiguës fusionnées.
   const handleExcludeNonRecevable = useCallback(() => {
-    // Indéterminé (donnée aberrante) n'est PAS un verdict « non recevable » :
-    // jamais exclu automatiquement. (warn reste exclu comme avant.)
-    const non = recevabiliteOverlay.filter((h) => h.level === 'bad' || h.level === 'warn')
-    if (non.length === 0) {
-      showToast('Aucune heure non recevable à exclure.', 'info')
+    const merged = fenetresAExclure(recevabiliteOverlay)
+    if (merged.length === 0) {
+      showToast('Aucune heure non recevable ou indéterminée à exclure.', 'info')
       return
-    }
-    // Fusion contiguë (gap < 30 s = continuité)
-    const merged: { startMs: number; endMs: number }[] = []
-    for (const h of non) {
-      const last = merged[merged.length - 1]
-      if (last && h.startMs - last.endMs < 30_000) last.endMs = h.endMs
-      else merged.push({ startMs: h.startMs, endMs: h.endMs })
     }
     let n = 0
     for (const w of merged) {
@@ -2933,7 +2926,7 @@ export default function App() {
         ...prev,
         {
           id: `meteo-excl-${w.startMs}`,
-          name: 'Météo non recevable',
+          name: 'Météo non recevable / indéterminée',
           startMs: w.startMs,
           endMs: w.endMs,
           categoryId: DEFAULT_CATEGORY_IDS.exclure,

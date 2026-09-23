@@ -597,3 +597,54 @@ sauvegarde suivante le supprimera définitivement.
 Au lieu de jeter : conserver les champs inconnus tels quels, ou au minimum
 SIGNALER leur présence (avertissement de chargement) — et un test qui
 échoue si un champ déclaré dans `Period` n'est pas repris par la migration.
+
+---
+
+## #14 — `Ba` biaisé : pas d'échantillonnage différents et fichiers qui se recouvrent
+
+**Statut** : ouvert, non corrigé — **priorité haute**, à traiter juste après
+le chantier de couverture LAr,1h.
+**Sévérité** : haute — erreur de CALCUL réglementaire, pas d'affichage :
+`Ba` entre dans `Bp`, donc dans `LAr,1h`, donc dans le verdict.
+
+### Constat
+
+`Ba = laeqAvg(inWindow.map((d) => d.laeq))` (`src/components/Conformite2026.tsx:272`,
+`laeqAvg` : `src/utils/acoustics.ts:293`) fait la moyenne énergétique des
+ÉCHANTILLONS, chacun à poids égal, quelle que soit la durée qu'il représente.
+
+- Deux fichiers d'un même point, à des pas différents (1 s et 1 min), dans la
+  même fenêtre : le fichier au pas fin pèse 60 fois plus par minute.
+- Deux fichiers qui se RECOUVRENT : les données du point sont concaténées
+  (`flatMap`, `Conformite2026.tsx:200-202`), les mêmes minutes comptent deux fois.
+
+Le pas n'est stocké nulle part (`MeasurementFile`, `DataPoint` :
+`src/types/index.ts`) ; il est mesuré à la détection du format
+(`formatDetectors.ts`, `stepSec`) puis perdu.
+
+### Piste
+
+Pondérer chaque échantillon par sa durée (pas déduit ou conservé), et
+dédoublonner les recouvrements avant la moyenne — à valider par un golden.
+
+---
+
+## #15 — Fenêtre d'évaluation à cheval sur minuit : le modulo 1440 confond deux matins
+
+**Statut** : ouvert, non corrigé — **priorité haute**, juste après le chantier
+de couverture LAr,1h.
+**Sévérité** : haute — mauvaises données dans l'intervalle qui décide de la
+conformité.
+
+### Constat
+
+`src/components/Conformite2026.tsx:241` : `const m = ((d.t % 1440) + 1440) % 1440`,
+puis `m >= evalStart || m < me` quand la fenêtre dépasse minuit. Sur tout
+fichier de plus de 24 h, le matin du jour de la date sélectionnée et le matin
+du lendemain ont le même `m` : une fenêtre 23:30–00:30 prend les minutes
+00:00–00:30 des DEUX jours.
+
+### Piste
+
+Évaluer la fenêtre en temps absolu (epoch ms, comme les périodes) plutôt
+qu'en minutes modulo 1440.

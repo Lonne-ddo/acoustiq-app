@@ -339,14 +339,14 @@ describe('analyzeKt9801 — seuils 15/8/5 + significativité ≤ 14,5', () => {
   // Spectre synthétique construit SUR les bandes d'analyse : alignement prouvé.
   const F = KT_BAND_FREQS
 
-  it('160 Hz exige 15 dB en 98-01 (vs 8 dB en MELCCFP 2026)', () => {
-    const s = spec160(10) // 10 dB : ≥ 8 (2026) mais < 15 (98-01)
-    expect(analyzeKt9801(s, 50, F).kt).toBe(0)   // 98-01 : non tonal
-    expect(analyzeKt(s, 50, F).kt).toBe(5)        // MELCCFP : tonal
+  it('160 Hz exige 8 dB en 98-01, comme en MELCCFP 2026 (annexe IV, Tableau 4)', () => {
+    const s = spec160(10) // 10 dB ≥ 8 : tonal dans les deux cadres
+    expect(analyzeKt9801(s, 50, F).kt).toBe(5)
+    expect(analyzeKt(s, 50, F).kt).toBe(5)
   })
 
-  it('160 Hz tonal en 98-01 si émergence ≥ 15', () => {
-    expect(analyzeKt9801(spec160(16), 50, F).kt).toBe(5)
+  it('160 Hz non tonal en 98-01 sous 8 dB', () => {
+    expect(analyzeKt9801(spec160(7.5), 50, F).kt).toBe(0)
   })
 
   it('significativité : exclu si (global − bande) > 14,5', () => {

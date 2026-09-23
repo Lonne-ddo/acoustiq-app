@@ -33,9 +33,17 @@ import { analyzeKt, analyzeKt9801, KT_BAND_FREQS } from './acoustics'
  * entrées exactes. Égalité STRICTE constatée sur les 9 cas calculés, pour
  * chacune des deux fonctions : `kt`, `triggeringIndex` et toutes les
  * `KtBandRow`, champ par champ, sans tolérance. Le 10ᵉ cas (spectre troué,
- * (g)) est un refus sur la branche, testé à part. Les littéraux sont recopiés à pleine précision — le bruit flottant
- * visible (p. ex. 43.800000000000004) est la valeur RÉELLE de `main`, pas une
- * coquille : l’arrondir relâcherait le critère.
+ * (g)) est un refus sur la branche, testé à part. Les littéraux sont recopiés
+ * à pleine précision — le bruit flottant visible (p. ex. 43.800000000000004)
+ * est la valeur RÉELLE de `main`, pas une coquille : l’arrondir relâcherait le
+ * critère.
+ *
+ * UN SEUL ÉCART VOULU avec `main`, corrigé à la main : `golden9801.threshold`
+ * à 160 Hz (index 5) vaut 8, et non 15 comme le rendait `main`. `main`
+ * appliquait à tort 15 dB à 160 Hz en 98-01 ; la Note 98-01, annexe IV,
+ * Tableau 4, donne 8 dB de 160 à 400 Hz, comme le Tableau 2 de 2026. Dans les
+ * 9 cas, aucun Δ à 160 Hz n’atteint 8 : ni `isTonal` ni `kt` ne bougent. Tout
+ * le reste est la sortie de `main`, inchangée.
  *
  * NE PAS régénérer ces golden depuis le code courant. Un golden recalculé à
  * partir de ce qu’on teste ne prouve plus rien.
@@ -115,7 +123,7 @@ const CAS: CasNonRegression[] = [
       laeqBand: [29.8,33.8,37.5,40.9,43.9,46.6,49.1,51.4,53.4,55.2,56.8,58.1,59.2,60,60.6,61,61.2,61.3,61.2,61,60.5,59.9,58.9,57.5],
       diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
       diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null],
-      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X......................X',
       excluded: 'XXX.....................',
       isTonal: '........................',
@@ -153,7 +161,7 @@ const CAS: CasNonRegression[] = [
       laeqBand: [19.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,70,50.6,51,51.2,51.3,51.2,51,50.5,49.9,48.9,47.5],
       diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,20,-20,0,0,0,0,0,0,0,0,0],
       diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,-20,20,0,0,0,0,0,0,0,0,0,null],
-      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X......................X',
       excluded: 'XXXXXXX.................',
       isTonal: '.............X..........',
@@ -191,7 +199,7 @@ const CAS: CasNonRegression[] = [
       laeqBand: [19.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,55,50.6,51,51.2,51.3,51.2,51,50.5,49.9,48.9,47.5],
       diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,5,-5,0,0,0,0,0,0,0,0,0],
       diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,-5,5,0,0,0,0,0,0,0,0,0,null],
-      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X......................X',
       excluded: 'XXXXXXX.................',
       isTonal: '.............X..........',
@@ -229,7 +237,7 @@ const CAS: CasNonRegression[] = [
       laeqBand: [19.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,54.5,50.6,51,51.2,51.3,51.2,51,50.5,49.9,48.9,47.5],
       diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,4.5,-4.5,0,0,0,0,0,0,0,0,0],
       diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,-4.5,4.5,0,0,0,0,0,0,0,0,0,null],
-      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X......................X',
       excluded: 'XXXXXXX.................',
       isTonal: '........................',
@@ -267,7 +275,7 @@ const CAS: CasNonRegression[] = [
       laeqBand: [49.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,50,50.6,51,51.2,51.3,51.2,51,50.5,49.9,48.9,47.5],
       diffPrev: [null,-30,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
       diffNext: [30,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null],
-      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X......................X',
       excluded: '.XXXXXX.................',
       isTonal: '........................',
@@ -305,7 +313,7 @@ const CAS: CasNonRegression[] = [
       laeqBand: [19.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,50,50.6,51,51.2,51.3,51.2,51,50.5,49.9,48.9,77.5],
       diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,30],
       diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-30,null],
-      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X......................X',
       excluded: 'XXXXXXX.................',
       isTonal: '........................',
@@ -343,7 +351,7 @@ const CAS: CasNonRegression[] = [
       laeqBand: [19.8,43.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,50,50.6,51,51.2,51.3,51.2,51,50.5,49.9,48.9,47.5],
       diffPrev: [null,20,-20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
       diffNext: [-20,20,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,null],
-      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X......................X',
       excluded: 'X.XXXXX.................',
       isTonal: '.X......................',
@@ -381,7 +389,7 @@ const CAS: CasNonRegression[] = [
       laeqBand: [19.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,50,50.6,51,51.2,51.3,51.2,51,50.5,49.9,68.9,47.5],
       diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,20,-20],
       diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,-20,20,null],
-      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
+      threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X......................X',
       excluded: 'XXXXXXX.................',
       isTonal: '......................X.',
@@ -419,7 +427,7 @@ const CAS: CasNonRegression[] = [
       laeqBand: [19.8,23.8,27.5,30.9,33.9,36.6,39.1,41.4,43.4,45.2,46.8,48.1,49.2,70,50.6,51,51.2,51.3,51.2,51],
       diffPrev: [null,0,0,0,0,0,0,0,0,0,0,0,0,20,-20,0,0,0,0,0],
       diffNext: [0,0,0,0,0,0,0,0,0,0,0,0,-20,20,0,0,0,0,0,null],
-      threshold: [15,15,15,15,15,15,8,8,8,8,5,5,5,5,5,5,5,5,5,5],
+      threshold: [15,15,15,15,15,8,8,8,8,8,5,5,5,5,5,5,5,5,5,5],
       isBoundary: 'X..................X',
       excluded: 'XXXXXXX.............',
       isTonal: '.............X......',
@@ -502,8 +510,10 @@ describe('analyzeKt — non-régression stricte vs main (indexation par index)',
  * sur une couverture partielle : les tests existants (acoustics.test.ts:331-360,
  * ktAlignment.test.ts:172-186) travaillent tous sur 24 bandes complètes.
  *
- * Les seuils diffèrent du cadre 2026 (160 Hz relève de 15 dB, exclusion à
- * > 14,5 au lieu de >= 15) : les golden sont donc distincts, et c’est normal.
+ * Les seuils sont ceux du cadre 2026 (même `ktThreshold`) ; seule l’exclusion
+ * diffère (> 14,5 au lieu de >= 15). Sur ces 9 cas, aucune bande ne tombe dans
+ * ]14,5 ; 15[ : `golden9801` coïncide donc avec `golden`. Ils restent écrits
+ * séparément pour qu’une future divergence des deux cadres soit visible.
  */
 describe('analyzeKt9801 — non-régression stricte vs main (cadre 98-01)', () => {
   for (const c of CAS) {
@@ -549,6 +559,34 @@ describe('analyzeKt9801 — non-régression stricte vs main (cadre 98-01)', () =
     expect(r.unavailable?.reason).toBe('bande-analyse-absente')
     expect(r.bands).toEqual([])
   })
+})
+
+/**
+ * 160 Hz — CAS HORS GOLDEN `main`, et volontairement : `main` rendait kt = 0 en
+ * 98-01 (seuil 15 appliqué à tort) et kt = 5 en 2026. Les deux textes (Note
+ * 98-01, annexe IV, Tableau 4 ; MELCCFP 2026, §3.7.4, Tableau 2) placent
+ * 160 Hz à 8 dB et plus : les deux cadres doivent conclure à une tonalité.
+ * Valeurs attendues établies à la main, pas relevées sur le code :
+ *   Δprec = Δsuiv = 58,5 − 50 = 8,5 ≥ 8 ; LAeq_bande = 58,5 − 13,4 = 45,1 ;
+ *   Ba − 45,1 = 9,9 ⇒ ni ≥ 15 (2026) ni > 14,5 (98-01) ⇒ non exclue.
+ */
+describe('160 Hz, Δ = 8,5 dB — tonal dans les DEUX cadres', () => {
+  const spectrum = spectre(FREQS_831C, 50, { 160: 58.5 })
+  for (const [cadre, fn] of [['2026', analyzeKt], ['98-01', analyzeKt9801]] as const) {
+    it(cadre, () => {
+      const r = fn(spectrum, 55, FREQS_831C)
+      expect(r.unavailable).toBeNull()
+      expect(r.kt).toBe(5)
+      expect(r.triggeringIndex).toBe(5)
+      const b = r.bands[5]
+      expect(b.freq).toBe(160)
+      expect(b.threshold).toBe(8)
+      expect(b.diffPrev).toBe(8.5)
+      expect(b.diffNext).toBe(8.5)
+      expect(b.excluded).toBe(false)
+      expect(b.isTonal).toBe(true)
+    })
+  }
 })
 
 /**

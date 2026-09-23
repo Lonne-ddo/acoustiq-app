@@ -641,8 +641,12 @@ export const A_WEIGHT: Record<number, number> = {
 }
 
 /**
- * Seuil d'émergence tonale Kt (dB) appliqué selon le centre de bande.
- * Tableau 2 — Lignes directrices MELCCFP 2026, Section 3.7.4.
+ * Seuil d'émergence tonale Kt (dB) appliqué selon le centre de bande :
+ * 125 Hz et moins → 15 dB et plus ; 160 à 400 Hz → 8 dB et plus ; 500 Hz et
+ * plus → 5 dB et plus. Table IDENTIQUE dans les deux cadres : Lignes
+ * directrices MELCCFP 2026, §3.7.4, Tableau 2, et Note 98-01, annexe IV,
+ * Tableau 4 — d'où une seule fonction pour `analyzeKt` et `analyzeKt9801`.
+ * « et plus » ⇒ comparaison `>=` sur la valeur entière (cf. docs/issues.md #3).
  */
 function ktThreshold(fc: number): number {
   if (fc <= 125) return 15
@@ -1052,21 +1056,11 @@ export function computeKb9801(lceq: number | null | undefined, laeq: number): nu
 }
 
 /**
- * Seuil d'émergence tonale Kt — Note 98-01 : 15 dB (50–160 Hz), 8 dB
- * (200–400 Hz), 5 dB (500 Hz–10 kHz). (Diffère du Tableau 2 MELCCFP 2026 où
- * 160 Hz relève déjà du seuil 8 — d'où une fonction séparée.)
- */
-function ktThreshold9801(fc: number): number {
-  if (fc <= 160) return 15
-  if (fc <= 400) return 8
-  return 5
-}
-
-/**
  * Analyse tonale Kt — Note 98-01 (variante SÉPARÉE de `analyzeKt` MELCCFP 2026).
  *
- * Identique dans la structure (Δ vs les deux voisines, A-weighting par bande),
- * mais : seuils 15/8/5 via `ktThreshold9801` (160 Hz = 15) et significativité
+ * Identique dans la structure (Δ vs les deux voisines, A-weighting par bande)
+ * et dans les seuils : même `ktThreshold` (Note 98-01, annexe IV, Tableau 4 =
+ * MELCCFP 2026, Tableau 2). Seule différence : significativité
  * « (LAeq_global − LAeq_band) ≤ 14,5 dB » (exclu au-delà), au lieu du ≥ 15 dB
  * du cadre 2026.
  */
@@ -1092,7 +1086,7 @@ export function analyzeKt9801(
     const lzeq = levels[i]
     const aw = A_WEIGHT[freq] ?? 0
     const laeqBand = lzeq + aw
-    const threshold = ktThreshold9801(freq)
+    const threshold = ktThreshold(freq)
     const diffPrev = i === 0 ? null : lzeq - levels[i - 1]
     const diffNext = i === N - 1 ? null : lzeq - levels[i + 1]
     const isBoundary = diffPrev === null || diffNext === null

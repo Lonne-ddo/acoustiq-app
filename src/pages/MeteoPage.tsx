@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import * as XLSX from 'xlsx'
 import {
   AlertTriangle,
   Cloud,
@@ -44,7 +43,6 @@ import {
   seuilsUtilisesLine,
   isMelccfpDefault,
   filtresValiditeParDefaut,
-  critereHumiditeLabel,
   type RecevabiliteHour,
   type RecevabiliteConfig,
 } from '../utils/recevabilite'
@@ -441,110 +439,31 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
     )
   }
 
-  function exportXlsx() {
+  async function exportXlsx() {
     if (!activePoint || activeSources.length === 0) return
-    const wb = XLSX.utils.book_new()
-
-    // Une feuille par source avec recevabilité.
-    for (const s of activeSources) {
-      const ev = recevabiliteBySource[s.source] ?? []
-      const rows = ev.map((h) => ({
-        Heure: h.datetime.replace('T', ' '),
-        Période: h.period,
-        'T °C': h.temperature,
-        'HR %': h.humidity,
-        'Précip mm': h.precipitation,
-        'Vent km/h': h.windSpeed,
-        'Direction °': h.windDirection,
-        'Recevabilité §3.6': RECEVABILITE_LABEL[h.level],
-        Asphalte: state.asphalt ? 'oui' : 'non',
-        Raisons: h.reasons.join(' · '),
-      }))
-      XLSX.utils.book_append_sheet(
-        wb,
-        XLSX.utils.json_to_sheet(rows),
-        SOURCES[s.source].shortLabel.slice(0, 31),
+    try {
+      // ExcelJS (écriture stylée), chargé à la demande ; SheetJS reste en lecture.
+      const { meteoWorkbookBytes } = await import('../utils/meteoExcel')
+      const bytes = await meteoWorkbookBytes({
+        pointLabel: activePoint.label,
+        lat: activePoint.lat,
+        lng: activePoint.lng,
+        startDate: state.startDate,
+        endDate: state.endDate,
+        sources: activeSources,
+        recevabiliteBySource,
+        asphalt: state.asphalt ?? true,
+        config: state.recevabiliteConfig,
+        ecccError,
+      })
+      download(
+        bytes,
+        `meteo_${slug(activePoint.label)}_${state.startDate}_${state.endDate}.xlsx`,
+        'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       )
+    } catch (e) {
+      showToast(`Export Excel impossible : ${e instanceof Error ? e.message : String(e)}`, 'error')
     }
-
-    // Feuille de comparaison.
-    const sourceIds = activeSources.map((s) => s.source)
-    const compMap = new Map<string, Record<string, number | string | null>>()
-    for (const s of activeSources) {
-      for (const r of s.rows) {
-        const key = hourKey(r.datetime)
-        const row = compMap.get(key) ?? { Heure: key.replace('T', ' ') + ':00' }
-        const lbl = SOURCES[s.source].shortLabel
-        row[`${lbl} T°C`] = r.temperature
-        row[`${lbl} HR%`] = r.humidity
-        row[`${lbl} Pp mm`] = r.precipitation
-        row[`${lbl} Vent km/h`] = r.windSpeed
-        compMap.set(key, row)
-      }
-    }
-    // Colonne « Désaccord » (dernière), une par heure.
-    const discMap = discordByHour(activeSources)
-    for (const [key, row] of compMap) {
-      const disc = discMap.get(key)
-      row['Désaccord'] = disc ? formatDiscord(disc) : ''
-    }
-    const compRows = Array.from(compMap.values()).sort((a, b) =>
-      String(a.Heure).localeCompare(String(b.Heure)),
-    )
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(compRows),
-      'Comparaison',
-    )
-
-    // Feuille synthèse.
-    const cfg = state.recevabiliteConfig
-    const synth: Record<string, string | number>[] = [
-      { Champ: 'Point', Valeur: activePoint.label },
-      { Champ: 'Coordonnées', Valeur: `${activePoint.lat ?? ''}, ${activePoint.lng ?? ''}` },
-      { Champ: 'Plage', Valeur: `${state.startDate} → ${state.endDate}` },
-      { Champ: 'Sources', Valeur: sourceIds.map((id) => SOURCES[id].shortLabel).join(', ') },
-      ...(ecccResult
-        ? [{ Champ: 'Station EC utilisée', Valeur: formatStationTrace(ecccResult.station) }]
-        : ecccError
-          ? [{ Champ: 'Station EC', Valeur: `indisponible — ${ecccError.error}` }]
-          : []),
-      { Champ: 'Référentiel', Valeur: 'Lignes directrices MELCCFP — §3.6' },
-      { Champ: 'Vent', Valeur: `≥ ${cfg.windMaxKmh} km/h ⇒ non recevable` },
-      {
-        Champ: 'Précipitations',
-        Valeur: `> ${cfg.precipMaxMm} mm ⇒ non recevable (et chaussée non sèche)`,
-      },
-      { Champ: 'HR chaussée sèche', Valeur: `≤ ${cfg.hrDryPct} %` },
-      {
-        Champ: "Critère d'humidité",
-        Valeur: critereHumiditeLabel(cfg) ? `${critereHumiditeLabel(cfg)} — non MELCCFP` : 'aucun (§3.6 strict)',
-      },
-      {
-        Champ: 'Filtres de validité',
-        Valeur:
-          `T ∈ [${cfg.validiteTempMinC} ; ${cfg.validiteTempMaxC}] °C, précip. ≤ ${cfg.validitePrecipMaxMm} mm — ` +
-          'hors plage ⇒ indéterminé (donnée aberrante)' +
-          (filtresValiditeParDefaut(cfg) ? '' : ' — FILTRES MODIFIÉS'),
-      },
-      {
-        Champ: 'Seuils',
-        Valeur: isMelccfpDefault(cfg) ? 'MELCCFP (défaut)' : 'MODIFIÉS — non MELCCFP',
-      },
-      {
-        Champ: 'Chaussée',
-        Valeur: state.asphalt
-          ? 'sèche exigée (asphalte à proximité) — sinon « à signaler »'
-          : 'non considérée (pas d’asphalte à proximité)',
-      },
-      { Champ: 'Généré par AcoustiQ', Valeur: 'https://acoustiq-app.pages.dev' },
-    ]
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(synth), 'Synthèse')
-
-    XLSX.writeFile(
-      wb,
-      `meteo_${slug(activePoint.label)}_${state.startDate}_${state.endDate}.xlsx`,
-    )
   }
 
   // ───────── UI ─────────
@@ -864,7 +783,7 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
                 <Download size={12} /> CSV comparaison
               </button>
               <button
-                onClick={exportXlsx}
+                onClick={() => void exportXlsx()}
                 disabled={activeSources.length === 0}
                 className="px-3 py-1.5 rounded bg-emerald-600 text-white
                            hover:bg-emerald-500 disabled:opacity-40 text-xs flex items-center gap-1.5"
@@ -1310,7 +1229,7 @@ function slug(s: string): string {
   return s.replace(/[^a-zA-Z0-9_-]+/g, '_').slice(0, 30) || 'point'
 }
 
-function download(content: string, filename: string, mime: string) {
+function download(content: string | ArrayBuffer, filename: string, mime: string) {
   const blob = new Blob([content], { type: mime })
   const url = URL.createObjectURL(blob)
   const a = document.createElement('a')

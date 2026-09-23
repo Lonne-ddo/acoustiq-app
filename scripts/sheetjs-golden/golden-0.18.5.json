@@ -1,0 +1,449 @@
+{
+  "xlsx": "0.18.5",
+  "figeLe": "2026-09-23T17:27:21.895Z",
+  "fichiers": {
+    "821SE 40488-250311000-094335.xlsx": {
+      "parseWorkbook": {
+        "statut": "ok",
+        "sha256": "7dccbd62a4ab5e2618ddfea4731573549c3da8853d4b15b422005e8a4c6a62c4",
+        "taille": 112077,
+        "resume": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "name": "821SE 40488-250311000-094335.xlsx",
+          "model": "Sonomètre",
+          "serial": "Modèle",
+          "date": "2025-03-11",
+          "startTime": "00:00",
+          "stopTime": "00:00",
+          "point": null,
+          "data": "[302]",
+          "rowCount": 302,
+          "spectraFreqs": "[36]",
+          "spectraSource": "A-déponderé"
+        },
+        "secondes": 0.3
+      },
+      "parseEcmeFile": {
+        "statut": "ok",
+        "sha256": "94362a2c634af006ffd90906adef3d34391fcce08b6c3248de1906d4850eb859",
+        "taille": 8108,
+        "resume": {
+          "occupation": "[61]",
+          "inventory": "[0]",
+          "txOccupation": "[0]"
+        },
+        "secondes": 0.1
+      },
+      "parseLpFile": {
+        "statut": "ok",
+        "sha256": "ad669d8cdd681b3f0a96342fc107c1532ddfab5de29e02f05f740b1228c0115f",
+        "taille": 13781,
+        "resume": {
+          "fileName": "821SE 40488-250311000-094335.xlsx",
+          "sheets": "[2]"
+        },
+        "secondes": 0.1
+      },
+      "parseTimeHistorySheet": {
+        "statut": "ok",
+        "sha256": "3333ac49ffe08cb509ff9df4a75fcc24db2e42554ca3a06862b8d041e79d22ab",
+        "taille": 16938,
+        "resume": {
+          "array": 303
+        },
+        "secondes": 0.1
+      },
+      "parseCamionnageSheet": {
+        "statut": "erreur",
+        "message": "Colonne \"Départ\" introuvable dans le registre camionnage. Vérifiez les en-têtes.",
+        "secondes": 0.1
+      },
+      "parseMeteoSheet": {
+        "statut": "erreur",
+        "message": "Onglet \"Données météo\" introuvable dans le fichier météo.",
+        "secondes": 0.1
+      }
+    },
+    "821SE 40488-250311002-105256.xlsx": {
+      "parseWorkbook": {
+        "statut": "ok",
+        "sha256": "7f2b6873eeffbce2c0eaa1e290be06de3c81fc4d448b8891733db4ff27922c82",
+        "taille": 136932,
+        "resume": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "name": "821SE 40488-250311002-105256.xlsx",
+          "model": "Sonomètre",
+          "serial": "Modèle",
+          "date": "2025-03-11",
+          "startTime": "00:00",
+          "stopTime": "00:00",
+          "point": null,
+          "data": "[362]",
+          "rowCount": 362,
+          "spectraFreqs": "[36]",
+          "spectraSource": "A-déponderé"
+        },
+        "secondes": 0.2
+      },
+      "parseEcmeFile": {
+        "statut": "ok",
+        "sha256": "27fe0f298f7419a6ec253c6e657eded1c75469b714556f23626ebf3acda91ebf",
+        "taille": 8109,
+        "resume": {
+          "occupation": "[61]",
+          "inventory": "[0]",
+          "txOccupation": "[0]"
+        },
+        "secondes": 0.1
+      },
+      "parseLpFile": {
+        "statut": "ok",
+        "sha256": "3bdf64015849edeffa0c06a20f4817d82927cf36963e8c897beae6c6b7d28166",
+        "taille": 16111,
+        "resume": {
+          "fileName": "821SE 40488-250311002-105256.xlsx",
+          "sheets": "[2]"
+        },
+        "secondes": 0.1
+      },
+      "parseTimeHistorySheet": {
+        "statut": "ok",
+        "sha256": "a5b21cd3e1660e46102558ceb30cfdc83c50a1e196d620b5a4e7be068fe1d6b3",
+        "taille": 20281,
+        "resume": {
+          "array": 363
+        },
+        "secondes": 0.1
+      },
+      "parseCamionnageSheet": {
+        "statut": "erreur",
+        "message": "Colonne \"Départ\" introuvable dans le registre camionnage. Vérifiez les en-têtes.",
+        "secondes": 0.1
+      },
+      "parseMeteoSheet": {
+        "statut": "erreur",
+        "message": "Onglet \"Données météo\" introuvable dans le fichier météo.",
+        "secondes": 0.1
+      }
+    },
+    "821SE 40488-250311003-112001.xlsx": {
+      "parseWorkbook": {
+        "statut": "ok",
+        "sha256": "223202ba01e7e8b7f7e8f7df01ae1123d228bbf44f1c050e72a70ee6118306ee",
+        "taille": 360206,
+        "resume": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "name": "821SE 40488-250311003-112001.xlsx",
+          "model": "Sonomètre",
+          "serial": "Modèle",
+          "date": "2025-03-11",
+          "startTime": "00:00",
+          "stopTime": "00:00",
+          "point": null,
+          "data": "[919]",
+          "rowCount": 919,
+          "spectraFreqs": "[36]",
+          "spectraSource": "A-déponderé"
+        },
+        "secondes": 0.3
+      },
+      "parseEcmeFile": {
+        "statut": "ok",
+        "sha256": "a957879a2c01ffc228fa6ec62d9e4bb5e6e227be52806cdc7a4f959dd2278ce5",
+        "taille": 8108,
+        "resume": {
+          "occupation": "[61]",
+          "inventory": "[0]",
+          "txOccupation": "[0]"
+        },
+        "secondes": 0.3
+      },
+      "parseLpFile": {
+        "statut": "ok",
+        "sha256": "1cb87ad31a24a163b70cda6636363c3356ee79c982597ead7a03cf56799b5552",
+        "taille": 40437,
+        "resume": {
+          "fileName": "821SE 40488-250311003-112001.xlsx",
+          "sheets": "[2]"
+        },
+        "secondes": 0.3
+      },
+      "parseTimeHistorySheet": {
+        "statut": "ok",
+        "sha256": "c9758d8ac2c97e65a783f9cbbb9c2692b9479834566be35f039763ceb9d87f73",
+        "taille": 51398,
+        "resume": {
+          "array": 920
+        },
+        "secondes": 0.3
+      },
+      "parseCamionnageSheet": {
+        "statut": "erreur",
+        "message": "Colonne \"Départ\" introuvable dans le registre camionnage. Vérifiez les en-têtes.",
+        "secondes": 0.2
+      },
+      "parseMeteoSheet": {
+        "statut": "erreur",
+        "message": "Onglet \"Données météo\" introuvable dans le fichier météo.",
+        "secondes": 0.3
+      }
+    },
+    "821SE 40488-250311005-114304.xlsx": {
+      "parseWorkbook": {
+        "statut": "ok",
+        "sha256": "d1ea4af36fd7e2abeccd2deeeb2fb835ddf6cc66b8ff09e0a9e52d3ed10e0587",
+        "taille": 418476,
+        "resume": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "name": "821SE 40488-250311005-114304.xlsx",
+          "model": "Sonomètre",
+          "serial": "Modèle",
+          "date": "2025-03-11",
+          "startTime": "00:00",
+          "stopTime": "00:00",
+          "point": null,
+          "data": "[1083]",
+          "rowCount": 1083,
+          "spectraFreqs": "[36]",
+          "spectraSource": "A-déponderé"
+        },
+        "secondes": 0.4
+      },
+      "parseEcmeFile": {
+        "statut": "ok",
+        "sha256": "8864a14a01101b6038ac202715e6fb21aeb710f957b2d52e1482c8ec281b9e2f",
+        "taille": 8106,
+        "resume": {
+          "occupation": "[61]",
+          "inventory": "[0]",
+          "txOccupation": "[0]"
+        },
+        "secondes": 0.3
+      },
+      "parseLpFile": {
+        "statut": "ok",
+        "sha256": "9f4f69c8c1608abb5f7c0c9998ebed05309744e56571bb76e7f6881f41403d96",
+        "taille": 47758,
+        "resume": {
+          "fileName": "821SE 40488-250311005-114304.xlsx",
+          "sheets": "[2]"
+        },
+        "secondes": 0.3
+      },
+      "parseTimeHistorySheet": {
+        "statut": "ok",
+        "sha256": "caddff5e848326d1529135f4cb9f4c2aa3dbd0bd86c5c5b339a5a77d5b4c8bf7",
+        "taille": 60573,
+        "resume": {
+          "array": 1084
+        },
+        "secondes": 0.3
+      },
+      "parseCamionnageSheet": {
+        "statut": "erreur",
+        "message": "Colonne \"Départ\" introuvable dans le registre camionnage. Vérifiez les en-têtes.",
+        "secondes": 0.3
+      },
+      "parseMeteoSheet": {
+        "statut": "erreur",
+        "message": "Onglet \"Données météo\" introuvable dans le fichier météo.",
+        "secondes": 0.3
+      }
+    },
+    "821SE 40488-250311006-120827.xlsx": {
+      "parseWorkbook": {
+        "statut": "ok",
+        "sha256": "84921155a95c9feb68d6aa92b279611feeca6c62ce5cb2c623167e1942e394cc",
+        "taille": 360076,
+        "resume": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "name": "821SE 40488-250311006-120827.xlsx",
+          "model": "Sonomètre",
+          "serial": "Modèle",
+          "date": "2025-03-11",
+          "startTime": "00:00",
+          "stopTime": "00:00",
+          "point": null,
+          "data": "[936]",
+          "rowCount": 936,
+          "spectraFreqs": "[36]",
+          "spectraSource": "A-déponderé"
+        },
+        "secondes": 0.3
+      },
+      "parseEcmeFile": {
+        "statut": "ok",
+        "sha256": "0fb605e748076aa049d2a69d929fd21045d6644ded77aa55c6e0fda2c48a0c8f",
+        "taille": 8106,
+        "resume": {
+          "occupation": "[61]",
+          "inventory": "[0]",
+          "txOccupation": "[0]"
+        },
+        "secondes": 0.2
+      },
+      "parseLpFile": {
+        "statut": "ok",
+        "sha256": "124a3dc4c01cd1b74d685363d8d1a52c435e52ebf7b7ac87b63e9191092bf700",
+        "taille": 41239,
+        "resume": {
+          "fileName": "821SE 40488-250311006-120827.xlsx",
+          "sheets": "[2]"
+        },
+        "secondes": 0.3
+      },
+      "parseTimeHistorySheet": {
+        "statut": "ok",
+        "sha256": "b7358d0adac56ac13ee024ea8144721b03a74a605f83b9b71b9a391beda0e6f2",
+        "taille": 52366,
+        "resume": {
+          "array": 937
+        },
+        "secondes": 0.3
+      },
+      "parseCamionnageSheet": {
+        "statut": "erreur",
+        "message": "Colonne \"Départ\" introuvable dans le registre camionnage. Vérifiez les en-têtes.",
+        "secondes": 0.3
+      },
+      "parseMeteoSheet": {
+        "statut": "erreur",
+        "message": "Onglet \"Données météo\" introuvable dans le fichier météo.",
+        "secondes": 0.2
+      }
+    },
+    "821SE 40489-250311003-111959.xlsx": {
+      "parseWorkbook": {
+        "statut": "ok",
+        "sha256": "3ceb9f8643d3125705f195af6eb0f0be3a0eaf7ef4ce9c60810553733698414d",
+        "taille": 351251,
+        "resume": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "name": "821SE 40489-250311003-111959.xlsx",
+          "model": "Sonomètre",
+          "serial": "Modèle",
+          "date": "2025-03-11",
+          "startTime": "00:00",
+          "stopTime": "00:00",
+          "point": null,
+          "data": "[918]",
+          "rowCount": 918,
+          "spectraFreqs": "[36]",
+          "spectraSource": "A-déponderé"
+        },
+        "secondes": 0.2
+      },
+      "parseEcmeFile": {
+        "statut": "ok",
+        "sha256": "7d9529018011f6e2cd213cacbd7883c41cffa7478ff5e2978367a8cc85fddd13",
+        "taille": 3843,
+        "resume": {
+          "occupation": "[6]",
+          "inventory": "[0]",
+          "txOccupation": "[0]"
+        },
+        "secondes": 0.2
+      },
+      "parseLpFile": {
+        "statut": "ok",
+        "sha256": "1570bdfb27dc49a4aa85dff3f85d0aba3b04538e9b847a9d75806cf59f8a6c77",
+        "taille": 42300,
+        "resume": {
+          "fileName": "821SE 40489-250311003-111959.xlsx",
+          "sheets": "[3]"
+        },
+        "secondes": 0.2
+      },
+      "parseTimeHistorySheet": {
+        "statut": "ok",
+        "sha256": "ed12eaf906a088e87aed6dd5e10af23abe562f1f3ebf47ed55db2a2a70296981",
+        "taille": 51349,
+        "resume": {
+          "array": 919
+        },
+        "secondes": 0.2
+      },
+      "parseCamionnageSheet": {
+        "statut": "erreur",
+        "message": "Colonne \"Départ\" introuvable dans le registre camionnage. Vérifiez les en-têtes.",
+        "secondes": 0.2
+      },
+      "parseMeteoSheet": {
+        "statut": "erreur",
+        "message": "Onglet \"Données météo\" introuvable dans le fichier météo.",
+        "secondes": 0.2
+      }
+    },
+    "831C_12782-20260707 070000-26070700.LD0.xlsx": {
+      "parseWorkbook": {
+        "statut": "ok",
+        "sha256": "33ceb3622f69cbed15bc5f20755c7b0af5f5de390b6e9a7511213a962a327f5b",
+        "taille": 12456458,
+        "resume": {
+          "id": "00000000-0000-4000-8000-000000000001",
+          "name": "831C_12782-20260707 070000-26070700.LD0.xlsx",
+          "model": "26070700.LD0.s",
+          "serial": "    831C_12782-20260707 070000-26070700.LD0.ldbin",
+          "date": "2026-07-07",
+          "startTime": "00:00",
+          "stopTime": "00:00",
+          "point": null,
+          "data": "[28060]",
+          "rowCount": 28060,
+          "spectraFreqs": "[36]",
+          "spectraSource": "Z-natif"
+        },
+        "secondes": 18.1
+      },
+      "parseEcmeFile": {
+        "statut": "ok",
+        "sha256": "708034f80272ebe2b80f812d84207bd3cd4c73297811da30ddf962f96ad2ad45",
+        "taille": 15740,
+        "resume": {
+          "occupation": "[107]",
+          "inventory": "[0]",
+          "txOccupation": "[0]"
+        },
+        "secondes": 15.5
+      },
+      "parseLpFile": {
+        "statut": "ok",
+        "sha256": "c492aab4014856f7806494c5b09901e99aa8d6433772fdba13cb390207bd50ce",
+        "taille": 813114,
+        "resume": {
+          "fileName": "831C_12782-20260707 070000-26070700.LD0.xlsx",
+          "sheets": "[3]"
+        },
+        "secondes": 16.8
+      },
+      "parseTimeHistorySheet": {
+        "statut": "ok",
+        "sha256": "38689d859711e86e8f0b1fcf4baaebe04f5baab5d4747515ee9448721f058487",
+        "taille": 1925001,
+        "resume": {
+          "array": 28060
+        },
+        "secondes": 16.4
+      },
+      "parseCamionnageSheet": {
+        "statut": "erreur",
+        "message": "Colonne \"Départ\" introuvable dans le registre camionnage. Vérifiez les en-têtes.",
+        "secondes": 14.2
+      },
+      "parseMeteoSheet": {
+        "statut": "erreur",
+        "message": "Onglet \"Données météo\" introuvable dans le fichier météo.",
+        "secondes": 14.2
+      }
+    }
+  },
+  "ecartsAcceptes": [
+    {
+      "fichier": "831C_12782-20260707 070000-26070700.LD0.xlsx",
+      "parseur": "parseEcmeFile",
+      "sha256_0_20_3": "810aa38baa05745a",
+      "champs": "occupation[16..18].modele",
+      "explication": "Cellule horaire pure (sérial < 1) lue avec cellDates:true : la part de date est le sérial 0 = 31 déc. 1899 dans le système Excel. 0.20.3 a raison ; le 30 déc. 1899 de 0.18.5 était l'ancien décalage de SheetJS. Accepté le 2026-09-23, non neutralisé."
+    }
+  ]
+}

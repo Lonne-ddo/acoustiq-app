@@ -239,7 +239,20 @@ c'est une fenêtre d'évaluation qui ne recoupe pas la mesure.
 
 ## #5 — SÉCURITÉ : SheetJS `xlsx@0.18.5` vulnérable sur le chemin de LECTURE
 
-**Statut** : ouvert, non corrigé. **Priorité haute.**
+**Statut** : **corrigé** le 2026-09-23 — SheetJS 0.20.3 vendorisé
+(`vendor/xlsx-0.20.3.tgz`, procédure et provenance : `docs/sheetjs.md`).
+Golden 0.18.5 → 0.20.3 sur fichiers réels : égalité stricte, un écart accepté
+et documenté (convention de date d'une cellule horaire pure).
+
+**`npm audit` ne voit plus `xlsx` — c'est ATTENDU, pas un oubli.**
+Contrairement à ce qui était prévu (« restera rouge »), l'audit est MUET sur
+`xlsx` après installation : une dépendance `file:` n'est pas confrontée au
+registre. Il ne signale donc ni les anciens avis (corrigés en 0.20.3) ni de
+futurs avis : la veille SheetJS est manuelle (`docs/sheetjs.md`). Vérifier
+la version avec `node -p "require('xlsx').version"`.
+
+**Reste ouvert** : les parseurs ECME et carrière ne sont pas couverts par le
+golden (modules masqués, aucun fichier réel) — à couvrir avant démasquage.
 **Sévérité** : haute (npm audit) — déclenchable par un fichier fourni par
 l'utilisateur (fichier de mesure, export ECME, carrière, Lp).
 
@@ -376,6 +389,23 @@ Refuser explicitement (« ce fichier n'est pas un classeur ECME ») quand
 aucune ligne d'en-tête datée n'est trouvée ou que `dateColumns` est vide.
 
 Découvert lors du golden SheetJS (831C passé à tous les parseurs).
+
+### PRÉALABLE au démasquage du module Parc ECME
+
+Le correctif de validation est un **préalable** à tout passage de
+`FEATURES.parcEcme` à `true` (`src/config/features.ts:18`). Un parseur
+qui accepte un 831C et renvoie 107 occupations sans rien dire, c'est un refus
+silencieux. Pas de correctif tant que le module est masqué.
+
+Autres préalables au démasquage, relevés au passage :
+
+- le rendu de `EcmePage` n'est PAS gardé par le flag
+  (`src/App.tsx:2248`, `effectiveTab === 'ecme'` seul), contrairement à
+  Carrière (`src/App.tsx:2228`, `FEATURES.carriere && …`). Il est
+  inatteignable aujourd'hui uniquement parce qu'aucun chemin de navigation ne
+  met `activeTab` à `'ecme'` (barre filtrée par `SUBTABS`, `:1800`) ;
+- le golden SheetJS ne couvre pas `parseEcmeFile` sur un vrai classeur ECME
+  (`docs/sheetjs.md`, « Couverture »).
 
 ---
 

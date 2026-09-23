@@ -87,7 +87,7 @@ import MeteoSection from './components/MeteoSection'
 import ComparisonModal from './components/ComparisonModal'
 import { parseWorkbook } from './modules/formatDetectors'
 import { pairResume, isResumeName } from './modules/csvParser'
-import { saveProject, loadProject, buildIndicesSnapshot, buildFullProjectData, buildProjectNotes } from './modules/projectManager'
+import { saveProject, loadProject, buildIndicesSnapshot, buildFullProjectData, buildProjectNotes, recentStateJson } from './modules/projectManager'
 import { getDataverseClient } from './modules/dataverseClient'
 import {
   serializeProject, deserializeProject,
@@ -3190,12 +3190,11 @@ export default function App() {
   }
 
   // ---- Sérialisation état courant ----
+  // Projets récents (localStorage) : JAMAIS de résultats météo (cf. recentStateJson).
   const serializeCurrentState = useCallback(() => {
-    return JSON.stringify({
-      files: files.map((f) => ({ id: f.id, name: f.name, model: f.model, serial: f.serial, date: f.date, startTime: f.startTime, stopTime: f.stopTime, rowCount: f.rowCount })),
-      pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods,
-      meteoModule: serializeMeteoModule(meteoModule),
-      projectNumber,
+    return recentStateJson({
+      files, pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods,
+      meteoModule, projectNumber,
     })
   }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, checklist, categories, periods, meteoModule, projectNumber])
 
@@ -3216,7 +3215,7 @@ export default function App() {
   // Export fichier JSON (voie secondaire explicite, déclenchée par « Exporter en
   // fichier » — jamais par « Sauvegarder », qui va dans Dataverse).
   const handleSaveProject = useCallback(() => {
-    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D, categories, periods, serializeMeteoModule(meteoModule), projectNumber)
+    saveProject(files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, checklist, scene3D, categories, periods, serializeMeteoModule(meteoModule, { withResults: true }), projectNumber)
     cacheToRecents()
   }, [files, pointMap, events, concordance, mapImage, mapMarkers, meteo, projectName, projectNumber, checklist, scene3D, categories, periods, meteoModule, cacheToRecents])
 
@@ -3232,7 +3231,8 @@ export default function App() {
       const project = buildFullProjectData({
         files, pointMap, events, concordance, mapImage, mapMarkers, meteo,
         projectName, projectNumber, checklist, scene3D, categories, periods,
-        meteoModule: serializeMeteoModule(meteoModule),
+        // Résultats météo FIGÉS dans le blob (données telles que récupérées).
+        meteoModule: serializeMeteoModule(meteoModule, { withResults: true }),
       })
       const gz = serializeProject(project)
       const client = getDataverseClient()

@@ -433,3 +433,34 @@ Hors périmètre, restés en SheetJS sans styles : les 8 autres exports
 « moderate » via `uuid@8.3.2` (GHSA-w5hq-g745-h8pq, vérification de bornes
 quand l'appelant fournit un tampon `buf`) — version déjà présente dans
 l'arbre via `@microsoft/power-apps`.
+
+---
+
+## #9 — Un projet sauvegardé par une version PLUS RÉCENTE de l'app perd ses données en silence
+
+**Statut** : ouvert, non corrigé (hors MVP G3, décision du 2026-09-23).
+**Sévérité** : moyenne — perte de données silencieuse, sans message.
+
+### Constat
+
+Depuis G3, le blob Dataverse est en `SCHEMA_VERSION = 2`
+(`src/modules/dataverseProjectStore.ts`) et l'export fichier en
+`PROJECT_VERSION = '1.2'` (`src/modules/projectManager.ts`) : le module
+météo y porte ses `results` figés.
+
+Aucune voie de chargement ne compare la version lue à celle de l'app :
+`deserializeProject` renvoie `schemaVersion`, mais
+`handleOpenDataverseProject` n'en garde que `{ project }` (`src/App.tsx`),
+et `loadProject` vérifie seulement la PRÉSENCE de `version`.
+
+Conséquence : une version antérieure de l'app (poste non à jour, cache du
+player) qui ouvre un blob v2 ignore les champs qu'elle ne connaît pas —
+dont les résultats météo figés — puis, à la sauvegarde suivante, **réécrit le
+blob sans eux**. Les données figées sont perdues sans avertissement.
+
+### Piste
+
+Au chargement, si `schemaVersion > SCHEMA_VERSION` (ou `version` >
+`PROJECT_VERSION`) : avertissement non bloquant (« projet enregistré par une
+version plus récente d'AcoustiQ — l'enregistrer ici peut perdre des
+données ») et, au minimum, confirmation avant d'écraser le blob.

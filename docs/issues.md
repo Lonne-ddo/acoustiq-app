@@ -376,3 +376,30 @@ Refuser explicitement (« ce fichier n'est pas un classeur ECME ») quand
 aucune ligne d'en-tête datée n'est trouvée ou que `dateColumns` est vide.
 
 Découvert lors du golden SheetJS (831C passé à tous les parseurs).
+
+---
+
+## G4 — Export Excel sans styles (SheetJS npm n'écrit pas de styles)
+
+**Statut** : **fermé** le 2026-09-23.
+
+L'export Excel du module Météo est désormais écrit avec **ExcelJS 4.4.0**
+(MIT), chargé à la demande (`import()` dynamique : chunk séparé de
+~256 Ko gzip, hors bundle principal). SheetJS reste la bibliothèque de
+**lecture**. Module : `src/utils/meteoExcel.ts` ; onglets Synthèse §3.6,
+un par source (format proche de l'Annexe A), Comparaison, Métadonnées ;
+verdict coloré par niveau (recevable / à signaler / non recevable /
+indéterminé), en-têtes sarcelle, point de rosée calculé signalé par une
+note de cellule. Vérifié : relecture ExcelJS et SheetJS (tests), ouverture
+dans Excel 16 de bureau sans journal de réparation.
+
+Choix : xlsx-js-style écarté (dernière publication 2022, embarque SheetJS
+0.18.5 vulnérable, +338 Ko gzip) ; SpreadsheetML 2003 écarté (non ouvert
+par Excel Online, Teams/SharePoint, mobile) ; OOXML écrit à la main écarté
+(temps de validation multi-environnements non justifié par l'écart de poids).
+
+Hors périmètre, restés en SheetJS sans styles : les 8 autres exports
+(`grep -rn "XLSX.writeFile" src`). `npm audit` : ExcelJS remonte en
+« moderate » via `uuid@8.3.2` (GHSA-w5hq-g745-h8pq, vérification de bornes
+quand l'appelant fournit un tampon `buf`) — version déjà présente dans
+l'arbre via `@microsoft/power-apps`.

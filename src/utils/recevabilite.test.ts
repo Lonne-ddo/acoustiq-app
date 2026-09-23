@@ -4,6 +4,8 @@ import {
   periodLabel,
   evaluateRecevabilite,
   chausseeSeche,
+  chausseeSecheDetail,
+  verdictHeure,
   seuilsUtilisesLine,
   isMelccfpDefault,
   DEFAUT_MELCCFP,
@@ -151,6 +153,116 @@ describe('seuils configurables — DEFAUT_MELCCFP = comportement d’avant', () 
     // HR : 95 % non sèche au défaut (≤90), sèche si hrDryPct relevé à 96
     expect(chausseeSeche(-1, 95, 0, DEFAUT_MELCCFP)).toBe('non sèche')
     expect(chausseeSeche(-1, 95, 0, { ...DEFAUT_MELCCFP, hrDryPct: 96 })).toBe('sèche')
+  })
+})
+
+/**
+ * Verdict UNIFIÉ. Deux garanties, sur une grille exhaustive de valeurs, de
+ * seuils et d'options :
+ *  1. le niveau porté par les étapes = le `level` retourné (l'explication
+ *     affichée ne peut pas contredire le verdict — défaut du standalone) ;
+ *  2. niveau ET motifs = ceux de l'implémentation d'avant l'unification
+ *     (copie FIGÉE ci-dessous, main@02f7626) : l'unification ne change aucun
+ *     verdict.
+ */
+describe('verdictHeure — une seule fonction de verdict', () => {
+  /** COPIE FIGÉE de la boucle d'evaluateRecevabilite, main@02f7626. Ne pas modifier. */
+  function verdictAvantUnification(
+    row: MeteoHourRow,
+    asphalt: boolean,
+    config: RecevabiliteConfig,
+  ): { level: string; reasons: string[] } {
+    const cs = (temp: number | null, hr: number | null, precip: number | null) => {
+      if (precip == null || temp == null) return null
+      if (precip > config.precipMaxMm) return 'non sèche'
+      if (temp > 0) return 'sèche'
+      if (hr == null) return null
+      return hr <= config.hrDryPct ? 'sèche' : 'non sèche'
+    }
+    const reasons: string[] = []
+    let level = 'ok'
+    if (row.windSpeed != null && row.windSpeed >= config.windMaxKmh) {
+      reasons.push(`vent ${row.windSpeed.toFixed(1)} km/h ≥ ${config.windMaxKmh}`)
+      level = 'bad'
+    }
+    if (row.precipitation != null && row.precipitation > config.precipMaxMm) {
+      reasons.push(`précip. ${row.precipitation.toFixed(1)} mm > ${config.precipMaxMm}`)
+      level = 'bad'
+    }
+    if (level === 'ok' && asphalt) {
+      if (cs(row.temperature, row.humidity, row.precipitation) === 'non sèche') {
+        reasons.push('chaussée non sèche')
+        level = 'warn'
+      }
+    }
+    return { level, reasons }
+  }
+
+  const configs: RecevabiliteConfig[] = [
+    DEFAUT_MELCCFP,
+    { windMaxKmh: 30, precipMaxMm: 0.2, hrDryPct: 95 },
+  ]
+  const winds = [null, 5, 20, 25, 30, 31]
+  const precips = [null, 0, 0.1, 0.2, 0.3]
+  const temps = [null, -5, 0, 5]
+  const hrs = [null, 85, 90, 95, 96]
+
+  const grille: { row: MeteoHourRow; asphalt: boolean; config: RecevabiliteConfig }[] = []
+  for (const config of configs)
+    for (const asphalt of [true, false])
+      for (const windSpeed of winds)
+        for (const precipitation of precips)
+          for (const temperature of temps)
+            for (const humidity of hrs)
+              grille.push({
+                row: { datetime: '2026-01-15T08:00', temperature, humidity, precipitation, windSpeed, windDirection: null },
+                asphalt,
+                config,
+              })
+
+  it(`grille de ${grille.length} combinaisons : niveau des étapes = level retourné`, () => {
+    for (const { row, asphalt, config } of grille) {
+      const v = verdictHeure(row, asphalt, config)
+      const attendu = v.steps.some((s) => s.cls === 'bad') ? 'bad'
+        : v.steps.some((s) => s.cls === 'warn') ? 'warn' : 'ok'
+      expect(v.level, JSON.stringify({ row, asphalt, config })).toBe(attendu)
+    }
+  })
+
+  it('même grille : niveau ET motifs identiques à l’implémentation d’avant', () => {
+    for (const { row, asphalt, config } of grille) {
+      const v = verdictHeure(row, asphalt, config)
+      const avant = verdictAvantUnification(row, asphalt, config)
+      const ctx = JSON.stringify({ row, asphalt, config })
+      expect(v.level, ctx).toBe(avant.level)
+      expect(v.reasons, ctx).toEqual(avant.reasons)
+    }
+  })
+
+  it('DÉFAUT DU STANDALONE : asphalte décoché, chaussée gelée humide → étape neutre, verdict recevable', () => {
+    const row = { temperature: -5, humidity: 99, precipitation: 0, windSpeed: 5 }
+    const v = verdictHeure(row, false, DEFAUT_MELCCFP)
+    expect(v.level).toBe('ok')
+    const etape = v.steps.find((s) => s.label.startsWith('Chaussée'))!
+    expect(etape.cls).toBe('skip')
+    expect(etape.result).toBe('critère non applicable')
+    expect(v.steps.some((s) => s.result === 'À SIGNALER')).toBe(false)
+    // Asphalte coché, même heure : à signaler, et l'étape le dit.
+    const w = verdictHeure(row, true, DEFAUT_MELCCFP)
+    expect(w.level).toBe('warn')
+    expect(w.steps.find((s) => s.label.startsWith('Chaussée'))!.result).toBe('À SIGNALER')
+  })
+
+  it('evaluateRecevabilite porte les étapes de verdictHeure', () => {
+    const row: MeteoHourRow = { datetime: '2026-01-15T08:00', temperature: 5, humidity: 60, precipitation: 0, windSpeed: 25, windDirection: null }
+    const [h] = evaluateRecevabilite([row])
+    expect(h.steps).toEqual(verdictHeure(row).steps)
+    expect(h.level).toBe('bad')
+  })
+
+  it('chausseeSeche = chausseeSecheDetail(...).state', () => {
+    for (const t of temps) for (const hr of hrs) for (const p of precips)
+      expect(chausseeSeche(t, hr, p)).toBe(chausseeSecheDetail(t, hr, p).state)
   })
 })
 

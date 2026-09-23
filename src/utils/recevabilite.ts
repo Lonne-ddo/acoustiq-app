@@ -42,6 +42,8 @@ export interface RecevabiliteHour extends MeteoHourRow {
   /** Raccourci : `level === 'ok'`. Conservé pour les consommateurs existants. */
   recevable: boolean
   reasons: string[]
+  /** Étapes ayant produit `level` (cf. `verdictHeure`). */
+  steps: VerdictStep[]
 }
 
 /**
@@ -129,27 +131,169 @@ export function parseHourTimestamp(s: string): Date {
   return new Date(s)
 }
 
+// ─────────────────────────────────────────────────────────────────────────
+// Verdict §3.6 — UNE SEULE fonction de décision, explicable pas à pas.
+//
+// Le standalone « agrégateur météo » calculait le verdict (getRecevabilite)
+// et son explication (recevabiliteSteps) dans DEUX fonctions parallèles, qui
+// divergeaient : asphalte décoché, l'explication disait « À SIGNALER » et le
+// verdict « recevable ». Ici, le niveau est DÉRIVÉ des étapes
+// (`levelFromSteps`) : l'explication affichée est, par construction, celle
+// qui a produit le verdict.
+// ─────────────────────────────────────────────────────────────────────────
+
+/** Effet d'une étape sur le verdict. `skip` = critère non évalué (sans effet). */
+export type StepCls = 'ok' | 'warn' | 'bad' | 'skip'
+
+/** Une étape de l'arbre de décision, telle qu'affichée à l'utilisateur. */
+export interface VerdictStep {
+  n: number
+  /** Question posée (« Vent < 20 km/h ? »). */
+  label: string
+  /** Valeurs lues et comparaison effectuée. */
+  detail: string
+  /** Issue lisible (« critère respecté », « NON RECEVABLE »…). */
+  result: string
+  cls: StepCls
+}
+
+export type EtatChaussee = 'sèche' | 'non sèche' | null
+
+export interface ChausseeDetail {
+  state: EtatChaussee
+  steps: VerdictStep[]
+}
+
+export interface Verdict {
+  level: RecevabiliteLevel
+  reasons: string[]
+  steps: VerdictStep[]
+  /** Détail de l'arbre « chaussée sèche », ou null s'il n'a pas été parcouru. */
+  chaussee: ChausseeDetail | null
+}
+
+type CriteresHeure = Pick<MeteoHourRow, 'temperature' | 'humidity' | 'precipitation' | 'windSpeed'>
+
+/** Niveau porté par une liste d'étapes : bad > warn > ok ; `skip` est neutre. */
+export function levelFromSteps(steps: VerdictStep[]): RecevabiliteLevel {
+  if (steps.some((s) => s.cls === 'bad')) return 'bad'
+  if (steps.some((s) => s.cls === 'warn')) return 'warn'
+  return 'ok'
+}
+
 /**
- * Heuristique « chaussée sèche » (§3.6). Retourne `null` si indéterminable.
- *   - précipitation > 0 → non sèche
- *   - T° > 0 °C (sans précip) → sèche
- *   - sinon (gel, sans précip) : dépend de l'humidité — sèche si HR ≤ 90 %.
+ * Arbre « chaussée sèche » (§3.6), étape par étape. `state` null = indéterminable.
+ *   1. précipitation > seuil → non sèche
+ *   2. T° > 0 °C (sans précip) → sèche
+ *   3. sinon (gel, sans précip) : sèche si HR ≤ seuil
  */
+export function chausseeSecheDetail(
+  temp: number | null,
+  hr: number | null,
+  precip: number | null,
+  config: RecevabiliteConfig = DEFAUT_MELCCFP,
+): ChausseeDetail {
+  const steps: VerdictStep[] = []
+  if (precip == null || temp == null) {
+    steps.push({ n: 1, label: 'Données suffisantes ?', detail: 'précipitation ou température manquante', result: 'indéterminé', cls: 'skip' })
+    return { state: null, steps }
+  }
+  const pLabel = `Précip. > ${config.precipMaxMm} mm ?`
+  if (precip > config.precipMaxMm) { // STRICT (jamais >=)
+    steps.push({ n: 1, label: pLabel, detail: `${precip.toFixed(1)} mm > ${config.precipMaxMm}`, result: 'NON SÈCHE', cls: 'bad' })
+    return { state: 'non sèche', steps }
+  }
+  steps.push({ n: 1, label: pLabel, detail: `${precip.toFixed(1)} mm ≤ ${config.precipMaxMm}`, result: 'non → étape 2', cls: 'ok' })
+  if (temp > 0) {
+    steps.push({ n: 2, label: 'T > 0 °C ?', detail: `${temp.toFixed(1)} °C > 0`, result: 'SÈCHE', cls: 'ok' })
+    return { state: 'sèche', steps }
+  }
+  steps.push({ n: 2, label: 'T > 0 °C ?', detail: `${temp.toFixed(1)} °C ≤ 0`, result: 'non → étape 3', cls: 'ok' })
+  const hLabel = `HR ≤ ${config.hrDryPct} % ?`
+  if (hr == null) {
+    steps.push({ n: 3, label: hLabel, detail: 'HR manquante', result: 'indéterminé', cls: 'skip' })
+    return { state: null, steps }
+  }
+  if (hr <= config.hrDryPct) {
+    steps.push({ n: 3, label: hLabel, detail: `${hr.toFixed(0)} % ≤ ${config.hrDryPct}`, result: 'SÈCHE', cls: 'ok' })
+    return { state: 'sèche', steps }
+  }
+  steps.push({ n: 3, label: hLabel, detail: `${hr.toFixed(0)} % > ${config.hrDryPct} (risque givre/condensation)`, result: 'NON SÈCHE', cls: 'bad' })
+  return { state: 'non sèche', steps }
+}
+
+/** État de chaussée seul (raccourci de `chausseeSecheDetail`). */
 export function chausseeSeche(
   temp: number | null,
   hr: number | null,
   precip: number | null,
   config: RecevabiliteConfig = DEFAUT_MELCCFP,
-): 'sèche' | 'non sèche' | null {
-  if (precip == null || temp == null) return null
-  if (precip > config.precipMaxMm) return 'non sèche' // STRICT (jamais >=)
-  if (temp > 0) return 'sèche'
-  if (hr == null) return null
-  return hr <= config.hrDryPct ? 'sèche' : 'non sèche'
+): EtatChaussee {
+  return chausseeSecheDetail(temp, hr, precip, config).state
 }
 
 /**
- * Calcule la recevabilité §3.6 heure par heure.
+ * Verdict §3.6 d'UNE heure : niveau, motifs ET étapes, produits ensemble.
+ * Le niveau est `levelFromSteps(steps)` — jamais calculé à part.
+ *
+ * @param asphalt « asphalte à proximité » — active le critère de chaussée sèche
+ */
+export function verdictHeure(
+  row: CriteresHeure,
+  asphalt = true,
+  config: RecevabiliteConfig = DEFAUT_MELCCFP,
+): Verdict {
+  const steps: VerdictStep[] = []
+  const reasons: string[] = []
+  let n = 1
+
+  const w = row.windSpeed
+  const wLabel = `Vent < ${config.windMaxKmh} km/h ?`
+  if (w == null) {
+    steps.push({ n: n++, label: wLabel, detail: 'donnée manquante', result: 'critère non évalué', cls: 'skip' })
+  } else if (w >= config.windMaxKmh) {
+    reasons.push(`vent ${w.toFixed(1)} km/h ≥ ${config.windMaxKmh}`)
+    steps.push({ n: n++, label: wLabel, detail: `${w.toFixed(1)} km/h ≥ ${config.windMaxKmh}`, result: 'NON RECEVABLE', cls: 'bad' })
+  } else {
+    steps.push({ n: n++, label: wLabel, detail: `${w.toFixed(1)} km/h < ${config.windMaxKmh}`, result: 'critère respecté', cls: 'ok' })
+  }
+
+  const p = row.precipitation
+  const pLabel = `Précip. ≤ ${config.precipMaxMm} mm ?`
+  if (p == null) {
+    steps.push({ n: n++, label: pLabel, detail: 'donnée manquante', result: 'critère non évalué', cls: 'skip' })
+  } else if (p > config.precipMaxMm) {
+    reasons.push(`précip. ${p.toFixed(1)} mm > ${config.precipMaxMm}`)
+    steps.push({ n: n++, label: pLabel, detail: `${p.toFixed(1)} mm > ${config.precipMaxMm}`, result: 'NON RECEVABLE', cls: 'bad' })
+  } else {
+    steps.push({ n: n++, label: pLabel, detail: `${p.toFixed(1)} mm ≤ ${config.precipMaxMm}`, result: 'critère respecté', cls: 'ok' })
+  }
+
+  // Chaussée : n'a d'effet que si l'asphalte est coché ET que rien n'a déjà
+  // rendu l'heure non recevable. Dans les deux autres cas, l'étape le DIT.
+  let chaussee: ChausseeDetail | null = null
+  const cLabel = 'Chaussée sèche ?'
+  if (!asphalt) {
+    steps.push({ n: n++, label: cLabel, detail: 'pas d’asphalte à proximité', result: 'critère non applicable', cls: 'skip' })
+  } else if (levelFromSteps(steps) === 'bad') {
+    steps.push({ n: n++, label: cLabel, detail: 'non évaluée — heure déjà non recevable', result: 'critère non évalué', cls: 'skip' })
+  } else {
+    chaussee = chausseeSecheDetail(row.temperature, row.humidity, row.precipitation, config)
+    if (chaussee.state === 'non sèche') {
+      reasons.push('chaussée non sèche')
+      steps.push({ n: n++, label: cLabel, detail: 'non sèche', result: 'À SIGNALER', cls: 'warn' })
+    } else if (chaussee.state === 'sèche') {
+      steps.push({ n: n++, label: cLabel, detail: 'sèche', result: 'critère respecté', cls: 'ok' })
+    } else {
+      steps.push({ n: n++, label: cLabel, detail: 'indéterminée', result: 'critère non évalué', cls: 'skip' })
+    }
+  }
+
+  return { level: levelFromSteps(steps), reasons, steps, chaussee }
+}
+
+/**
+ * Calcule la recevabilité §3.6 heure par heure (via `verdictHeure`).
  * @param rows    lignes horaires (n'ont pas besoin d'être triées)
  * @param asphalt « asphalte à proximité » — active le critère de chaussée sèche
  */
@@ -166,32 +310,15 @@ export function evaluateRecevabilite(
 
   return parsed.map((row) => {
     const period: RegPeriod = regPeriodOfHour(row.date.getHours())
-    const reasons: string[] = []
-    let level: RecevabiliteLevel = 'ok'
-
-    if (row.windSpeed != null && row.windSpeed >= config.windMaxKmh) {
-      reasons.push(`vent ${row.windSpeed.toFixed(1)} km/h ≥ ${config.windMaxKmh}`)
-      level = 'bad'
-    }
-    if (row.precipitation != null && row.precipitation > config.precipMaxMm) {
-      reasons.push(`précip. ${row.precipitation.toFixed(1)} mm > ${config.precipMaxMm}`)
-      level = 'bad'
-    }
-    if (level === 'ok' && asphalt) {
-      const cs = chausseeSeche(row.temperature, row.humidity, row.precipitation, config)
-      if (cs === 'non sèche') {
-        reasons.push('chaussée non sèche')
-        level = 'warn'
-      }
-    }
-
+    const v = verdictHeure(row, asphalt, config)
     return {
       ...row,
       date: row.date,
       period,
-      level,
-      recevable: level === 'ok',
-      reasons,
+      level: v.level,
+      recevable: v.level === 'ok',
+      reasons: v.reasons,
+      steps: v.steps,
     }
   })
 }

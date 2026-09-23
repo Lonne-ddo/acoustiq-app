@@ -41,6 +41,7 @@ import {
   seuilsUtilisesLine,
   isMelccfpDefault,
   filtresValiditeParDefaut,
+  critereHumiditeLabel,
   type RecevabiliteHour,
   type RecevabiliteConfig,
 } from '../utils/recevabilite'
@@ -506,6 +507,10 @@ export default function MeteoPage({ state, onChange, projectPoints }: Props) {
         Valeur: `> ${cfg.precipMaxMm} mm ⇒ non recevable (et chaussée non sèche)`,
       },
       { Champ: 'HR chaussée sèche', Valeur: `≤ ${cfg.hrDryPct} %` },
+      {
+        Champ: "Critère d'humidité",
+        Valeur: critereHumiditeLabel(cfg) ? `${critereHumiditeLabel(cfg)} — non MELCCFP` : 'aucun (§3.6 strict)',
+      },
       {
         Champ: 'Filtres de validité',
         Valeur:
@@ -999,10 +1004,8 @@ function RecevabiliteConfigEditor({
   config: RecevabiliteConfig
   onChange: (c: RecevabiliteConfig) => void
 }) {
-  const isDefault =
-    config.windMaxKmh === DEFAUT_MELCCFP.windMaxKmh &&
-    config.precipMaxMm === DEFAUT_MELCCFP.precipMaxMm &&
-    config.hrDryPct === DEFAUT_MELCCFP.hrDryPct
+  // Un critère d'humidité actif compte comme un seuil modifié (non MELCCFP).
+  const isDefault = isMelccfpDefault(config)
   return (
     <div className="rounded border border-gray-800 bg-gray-900/40 px-3 py-2 space-y-2">
       <div className="flex items-center gap-2 flex-wrap">
@@ -1050,6 +1053,42 @@ function RecevabiliteConfigEditor({
           step={1}
           onValid={(v) => onChange({ ...config, hrDryPct: v })}
         />
+      </div>
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end">
+        <label className="text-[10px] text-gray-500 space-y-1">
+          <span className="block">Critère d'humidité additionnel (non réglementaire)</span>
+          <select
+            value={config.humiditeMode}
+            onChange={(e) =>
+              onChange({ ...config, humiditeMode: e.target.value as RecevabiliteConfig['humiditeMode'] })
+            }
+            className="w-full bg-gray-800 border border-gray-700 rounded px-2 py-1 text-xs text-gray-200"
+          >
+            <option value="aucun">Aucun (§3.6 strict)</option>
+            <option value="hr">HR max — tolérance du sonomètre</option>
+            <option value="rosee">Point de rosée — critère d'équipe</option>
+          </select>
+        </label>
+        {config.humiditeMode === 'hr' && (
+          <NumField
+            label="HR max (%) — tolérance du sonomètre"
+            value={config.hrMaxPct}
+            min={50}
+            max={100}
+            step={1}
+            onValid={(v) => onChange({ ...config, hrMaxPct: v })}
+          />
+        )}
+        {config.humiditeMode === 'rosee' && (
+          <NumField
+            label="Écart T − Td minimal (°C)"
+            value={config.roseeEcartMinC}
+            min={0}
+            max={10}
+            step={0.5}
+            onValid={(v) => onChange({ ...config, roseeEcartMinC: v })}
+          />
+        )}
       </div>
       <div className="flex items-center gap-2 flex-wrap pt-1">
         <span

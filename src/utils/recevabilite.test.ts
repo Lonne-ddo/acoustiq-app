@@ -8,6 +8,8 @@ import {
   verdictHeure,
   computeStats,
   filtresValiditeParDefaut,
+  calcDewpoint,
+  critereHumiditeLabel,
   seuilsUtilisesLine,
   isMelccfpDefault,
   DEFAUT_MELCCFP,
@@ -203,6 +205,8 @@ describe('verdictHeure — une seule fonction de verdict', () => {
   const configs: RecevabiliteConfig[] = [
     DEFAUT_MELCCFP,
     { ...DEFAUT_MELCCFP, windMaxKmh: 30, precipMaxMm: 0.2, hrDryPct: 95 },
+    { ...DEFAUT_MELCCFP, humiditeMode: 'hr', hrMaxPct: 90 },
+    { ...DEFAUT_MELCCFP, humiditeMode: 'rosee', roseeEcartMinC: 2 },
   ]
   const winds = [null, 5, 20, 25, 30, 31]
   const precips = [null, 0, 0.1, 0.2, 0.3]
@@ -231,8 +235,8 @@ describe('verdictHeure — une seule fonction de verdict', () => {
     }
   })
 
-  it('même grille : niveau ET motifs identiques à l’implémentation d’avant', () => {
-    for (const { row, asphalt, config } of grille) {
+  it('même grille (sans critère d’humidité) : niveau ET motifs identiques à l’implémentation d’avant', () => {
+    for (const { row, asphalt, config } of grille.filter((g) => g.config.humiditeMode === 'aucun')) {
       const v = verdictHeure(row, asphalt, config)
       const avant = verdictAvantUnification(row, asphalt, config)
       const ctx = JSON.stringify({ row, asphalt, config })
@@ -322,6 +326,53 @@ describe('filtres de validité — donnée aberrante ⇒ indéterminé, jamais n
     expect(filtresValiditeParDefaut(cfg)).toBe(false)
     expect(seuilsUtilisesLine(cfg)).toContain('FILTRES MODIFIÉS')
     expect(seuilsUtilisesLine(DEFAUT_MELCCFP)).not.toContain('FILTRES MODIFIÉS')
+  })
+})
+
+describe('critère d’humidité additionnel — non réglementaire, désactivé par défaut', () => {
+  const r = (over: Partial<MeteoHourRow>): MeteoHourRow => ({
+    datetime: '2026-07-03T08:00', temperature: 20, humidity: 60, precipitation: 0, windSpeed: 5, windDirection: null, ...over,
+  })
+  const HR: RecevabiliteConfig = { ...DEFAUT_MELCCFP, humiditeMode: 'hr' }
+  const ROSEE: RecevabiliteConfig = { ...DEFAUT_MELCCFP, humiditeMode: 'rosee' }
+
+  it('par défaut : aucun critère, HR 99 % reste recevable et aucune étape d’humidité', () => {
+    const v = verdictHeure(r({ humidity: 99 }))
+    expect(v.level).toBe('ok')
+    expect(v.steps.some((s) => /HR ≤|T − Td/.test(s.label))).toBe(false)
+  })
+
+  it('mode HR : 90 % recevable, 91 % non recevable, libellé « tolérance du sonomètre »', () => {
+    expect(verdictHeure(r({ humidity: 90 }), true, HR).level).toBe('ok')
+    const v = verdictHeure(r({ humidity: 91 }), true, HR)
+    expect(v.level).toBe('bad')
+    expect(v.reasons[0]).toContain('tolérance du sonomètre')
+    expect(v.reasons[0]).not.toContain('98-01')
+  })
+
+  it('calcDewpoint (Magnus) retrouve le Td mesuré par ECCC : T 19,7 °C, HR 84 % → 16,9 °C', () => {
+    expect(calcDewpoint(19.7, 84)).toBeCloseTo(16.9, 1)
+    expect(calcDewpoint(20, 0)).toBeNull()
+    expect(calcDewpoint(null, 50)).toBeNull()
+  })
+
+  it('mode rosée : Td de la source prioritaire, Magnus en repli, et l’étape dit lequel', () => {
+    const fourni = verdictHeure(r({ temperature: 10, humidity: 60, dewpoint: 9 }), true, ROSEE)
+    expect(fourni.level).toBe('bad') // écart 1 < 2
+    expect(fourni.steps.at(-1)!.detail).toContain('Td fourni par la source')
+    const calcule = verdictHeure(r({ temperature: 10, humidity: 60 }), true, ROSEE)
+    expect(calcule.level).toBe('ok') // Td ≈ 2,6 °C, écart ≈ 7,4
+    expect(calcule.steps.at(-1)!.detail).toContain('Td calculé (Magnus)')
+  })
+
+  it('actif ⇒ non MELCCFP, tracé dans seuilsUtilisesLine (rapport, exports)', () => {
+    for (const cfg of [HR, ROSEE]) {
+      expect(isMelccfpDefault(cfg)).toBe(false)
+      expect(seuilsUtilisesLine(cfg)).toContain('non MELCCFP')
+    }
+    expect(seuilsUtilisesLine(HR)).toContain('HR > 90 % (tolérance du sonomètre)')
+    expect(seuilsUtilisesLine(ROSEE)).toContain('T − Td < 2 °C')
+    expect(critereHumiditeLabel(DEFAUT_MELCCFP)).toBeNull()
   })
 })
 

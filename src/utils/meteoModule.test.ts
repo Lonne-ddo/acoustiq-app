@@ -9,6 +9,7 @@ import {
 } from './meteoModule'
 import type { PointMeteoResults } from './meteoModule'
 import type { SourceResult, SourceError } from './meteoSources'
+import { evaluateRecevabilite, isMelccfpDefault } from './recevabilite'
 
 describe('persistance meteoModule — config d’avant les filtres de validité', () => {
   it('un projet sans champs de validité se charge avec les défauts −50/+50 °C, 100 mm', () => {
@@ -20,6 +21,29 @@ describe('persistance meteoModule — config d’avant les filtres de validité'
     expect(cfg.validiteTempMinC).toBe(-50)
     expect(cfg.validiteTempMaxC).toBe(50)
     expect(cfg.validitePrecipMaxMm).toBe(100)
+  })
+
+  it('JAMAIS RÉTROACTIF : un projet sans critère d’humidité se recharge sans critère', () => {
+    const p = serializeMeteoModule(makeDefaultMeteoState())
+    const ancien = { ...p, recevabiliteConfig: { windMaxKmh: 20, precipMaxMm: 0, hrDryPct: 90 } }
+    const cfg = deserializeMeteoModule(ancien as typeof p).recevabiliteConfig
+    expect(cfg.humiditeMode).toBe('aucun')
+    expect(isMelccfpDefault(cfg)).toBe(true)
+    // Une heure à HR 99 % reste recevable dans ce projet rechargé.
+    const [h] = evaluateRecevabilite(
+      [{ datetime: '2026-07-03T08:00', temperature: 20, humidity: 99, precipitation: 0, windSpeed: 5, windDirection: null }],
+      true,
+      cfg,
+    )
+    expect(h.level).toBe('ok')
+  })
+
+  it('un critère ACTIVÉ puis sauvegardé est restauré tel quel', () => {
+    const s = makeDefaultMeteoState()
+    s.recevabiliteConfig = { ...s.recevabiliteConfig, humiditeMode: 'hr', hrMaxPct: 85 }
+    const cfg = deserializeMeteoModule(serializeMeteoModule(s)).recevabiliteConfig
+    expect(cfg.humiditeMode).toBe('hr')
+    expect(cfg.hrMaxPct).toBe(85)
   })
 })
 

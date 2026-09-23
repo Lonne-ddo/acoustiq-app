@@ -254,6 +254,8 @@ async function fetchOpenMeteoBase({
       'wind_speed_10m',
       'wind_direction_10m',
       'weather_code',
+      'dew_point_2m',
+      'surface_pressure',
     ].join(','),
     timezone: 'America/Toronto',
     wind_speed_unit: 'kmh',
@@ -322,6 +324,8 @@ async function fetchOpenMeteoBase({
       windDirection: num(j.hourly.wind_direction_10m?.[i]),
       weatherCode: num(j.hourly.weather_code?.[i]),
       weatherText: null,
+      dewpoint: num(j.hourly.dew_point_2m?.[i]),
+      pressureHpa: num(j.hourly.surface_pressure?.[i]),
     })
   }
   if (rows.length === 0) throw new Error('Aucune donnée pour cette plage.')
@@ -496,6 +500,9 @@ export async function fetchECCCHourly(
         windDirection: windDir10 != null ? windDir10 * 10 : null,
         weatherCode: null,
         weatherText: (p.WEATHER as string) || null,
+        dewpoint: num(p.DEW_POINT_TEMP ?? p.DEWPOINT_TEMP),
+        // STATION_PRESSURE est en kPa ; stockée en hPa comme Open-Meteo.
+        pressureHpa: num(p.STATION_PRESSURE) != null ? (num(p.STATION_PRESSURE) as number) * 10 : null,
       } as MeteoHourRow
     })
     .sort((a: MeteoHourRow, b: MeteoHourRow) =>

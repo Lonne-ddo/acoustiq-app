@@ -29,6 +29,22 @@ export interface MeteoHourRow {
   windDirection: number | null
   weatherCode?: number | null
   weatherText?: string | null
+  /** Point de rosée (°C) fourni par la source ; à défaut, `calcDewpoint`. */
+  dewpoint?: number | null
+  /** Pression (hPa) — affichage/export uniquement, hors verdict. */
+  pressureHpa?: number | null
+}
+
+/**
+ * Point de rosée (°C) par la formule de Magnus (a = 17,625 ; b = 243,04 °C).
+ * Repli quand la source ne fournit pas Td. null si T ou HR manquante, ou HR ≤ 0.
+ */
+export function calcDewpoint(t: number | null, rh: number | null): number | null {
+  if (t == null || rh == null || rh <= 0) return null
+  const a = 17.625
+  const b = 243.04
+  const gamma = Math.log(rh / 100) + (a * t) / (b + t)
+  return (b * gamma) / (a - gamma)
 }
 
 /**
@@ -73,6 +89,20 @@ export interface RecevabiliteConfig {
   validiteTempMaxC: number
   /** Précipitation horaire au-delà de laquelle la donnée est jugée aberrante (mm/h). */
   validitePrecipMaxMm: number
+  /**
+   * Critère d'humidité ADDITIONNEL, exclusif, désactivé par défaut. Aucun des
+   * deux n'est un seuil réglementaire : actif, il rend `isMelccfpDefault` faux
+   * (badge « non MELCCFP ») et apparaît dans le rapport et les exports.
+   *  - 'hr'    : HR > `hrMaxPct` ⇒ non recevable — paramètre d'ÉQUIPEMENT
+   *              (tolérance du sonomètre ; le §3.6 2026 renvoie au fabricant).
+   *              Défaut 90 %, valeur reprise de la Note 98-01.
+   *  - 'rosee' : T − Td < `roseeEcartMinC` ⇒ non recevable — critère d'équipe.
+   * Défaut 'aucun' : un projet sauvegardé sans ce champ se recharge SANS
+   * critère (jamais d'activation rétroactive).
+   */
+  humiditeMode: 'aucun' | 'hr' | 'rosee'
+  hrMaxPct: number
+  roseeEcartMinC: number
 }
 
 export const DEFAUT_MELCCFP: RecevabiliteConfig = {
@@ -84,6 +114,9 @@ export const DEFAUT_MELCCFP: RecevabiliteConfig = {
   validiteTempMinC: -50,
   validiteTempMaxC: 50,
   validitePrecipMaxMm: 100,
+  humiditeMode: 'aucun',
+  hrMaxPct: 90,
+  roseeEcartMinC: 2,
 }
 
 /** Vrai si les filtres de validité sont ceux par défaut. */
@@ -100,8 +133,16 @@ export function isMelccfpDefault(c: RecevabiliteConfig): boolean {
   return (
     c.windMaxKmh === DEFAUT_MELCCFP.windMaxKmh &&
     c.precipMaxMm === DEFAUT_MELCCFP.precipMaxMm &&
-    c.hrDryPct === DEFAUT_MELCCFP.hrDryPct
+    c.hrDryPct === DEFAUT_MELCCFP.hrDryPct &&
+    c.humiditeMode === 'aucun'
   )
+}
+
+/** Libellé du critère d'humidité actif, ou null s'il n'y en a pas. */
+export function critereHumiditeLabel(c: RecevabiliteConfig): string | null {
+  if (c.humiditeMode === 'hr') return `HR > ${c.hrMaxPct} % (tolérance du sonomètre) ⇒ non recevable`
+  if (c.humiditeMode === 'rosee') return `T − Td < ${c.roseeEcartMinC} °C (risque de condensation, critère d'équipe) ⇒ non recevable`
+  return null
 }
 
 /**
@@ -114,6 +155,7 @@ export function seuilsUtilisesLine(c: RecevabiliteConfig): string {
     `Seuils utilisés — vent ≥ ${c.windMaxKmh} km/h · ` +
     `précip > ${c.precipMaxMm} mm (recevabilité ET chaussée) · ` +
     `HR chaussée ≤ ${c.hrDryPct} %` +
+    (critereHumiditeLabel(c) ? ` · ${critereHumiditeLabel(c)}` : '') +
     (isMelccfpDefault(c) ? ' (MELCCFP)' : ' — SEUILS MODIFIÉS (non MELCCFP)') +
     ` · validité T ∈ [${c.validiteTempMinC} ; ${c.validiteTempMaxC}] °C, ` +
     `précip. ≤ ${c.validitePrecipMaxMm} mm` +
@@ -207,7 +249,8 @@ export interface Verdict {
   chaussee: ChausseeDetail | null
 }
 
-type CriteresHeure = Pick<MeteoHourRow, 'temperature' | 'humidity' | 'precipitation' | 'windSpeed'>
+type CriteresHeure = Pick<MeteoHourRow, 'temperature' | 'humidity' | 'precipitation' | 'windSpeed'> &
+  Pick<Partial<MeteoHourRow>, 'dewpoint'>
 
 /** Niveau porté par une liste d'étapes : indetermine > bad > warn > ok ; `skip` est neutre. */
 export function levelFromSteps(steps: VerdictStep[]): RecevabiliteLevel {
@@ -343,6 +386,38 @@ export function verdictHeure(
       steps.push({ n: n++, label: cLabel, detail: 'sèche', result: 'critère respecté', cls: 'ok' })
     } else {
       steps.push({ n: n++, label: cLabel, detail: 'indéterminée', result: 'critère non évalué', cls: 'skip' })
+    }
+  }
+
+  // Critère d'humidité additionnel (non réglementaire, désactivé par défaut).
+  if (config.humiditeMode === 'hr') {
+    const hr = row.humidity
+    const hLabel = `HR ≤ ${config.hrMaxPct} % (tolérance du sonomètre) ?`
+    if (hr == null) {
+      steps.push({ n: n++, label: hLabel, detail: 'HR manquante', result: 'critère non évalué', cls: 'skip' })
+    } else if (hr > config.hrMaxPct) {
+      reasons.push(`HR ${hr.toFixed(0)} % > ${config.hrMaxPct} (tolérance du sonomètre, non MELCCFP)`)
+      steps.push({ n: n++, label: hLabel, detail: `${hr.toFixed(0)} % > ${config.hrMaxPct}`, result: 'NON RECEVABLE', cls: 'bad' })
+    } else {
+      steps.push({ n: n++, label: hLabel, detail: `${hr.toFixed(0)} % ≤ ${config.hrMaxPct}`, result: 'critère respecté', cls: 'ok' })
+    }
+  } else if (config.humiditeMode === 'rosee') {
+    const t = row.temperature
+    const mesure = row.dewpoint != null
+    const td = mesure ? (row.dewpoint as number) : calcDewpoint(t, row.humidity)
+    const rLabel = `T − Td ≥ ${config.roseeEcartMinC} °C (risque de rosée, critère d'équipe) ?`
+    if (t == null || td == null) {
+      steps.push({ n: n++, label: rLabel, detail: 'T ou Td manquante', result: 'critère non évalué', cls: 'skip' })
+    } else {
+      const ecart = t - td
+      const src = mesure ? 'Td fourni par la source' : 'Td calculé (Magnus)'
+      const detail = `T ${t.toFixed(1)} °C, Td ${td.toFixed(1)} °C (${src}), écart ${ecart.toFixed(1)} °C`
+      if (ecart < config.roseeEcartMinC) {
+        reasons.push(`T − Td = ${ecart.toFixed(1)} °C < ${config.roseeEcartMinC} (risque de condensation, non MELCCFP)`)
+        steps.push({ n: n++, label: rLabel, detail, result: 'NON RECEVABLE', cls: 'bad' })
+      } else {
+        steps.push({ n: n++, label: rLabel, detail, result: 'critère respecté', cls: 'ok' })
+      }
     }
   }
 

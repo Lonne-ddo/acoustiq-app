@@ -38,7 +38,8 @@ import AudioTimelineBar from './audio/AudioTimelineBar'
 import type { ClassifiedSegment } from '../utils/yamnetProcessor'
 import { laeqAvg } from '../utils/acoustics'
 import { measureSelectionRange } from '../utils/selectionMeasure'
-import type { RecevabiliteLevel } from '../utils/recevabilite'
+import { portionsNonCouvertes, libellePortions, idMotifMeteo, zonesSurAxe, intervallesMesure, MOTIF_METEO, type MeteoCourbe, type Intervalle } from '../utils/meteoCourbe'
+import { MotifsMeteo, LegendeMeteo } from './meteo/MeteoCourbeMotifs'
 
 // Palette de couleurs par point de mesure
 const POINT_COLORS: Record<string, string> = {
@@ -271,9 +272,13 @@ interface Props {
   onChartRangePicked?: (startMin: number, endMin: number) => void
   /** Fenêtre surlignée de façon persistante sur le chart (bleu translucide). */
   chartHighlightRange?: { startMin: number; endMin: number } | null
-  /** Bandes de recevabilité météo (vert/rouge) en fond — une entrée par heure.
-   *  startMs/endMs sont des epoch ms ; le chart convertit en minutes via son ancre. */
-  recevabiliteOverlay?: { startMs: number; endMs: number; recevable: boolean; level: RecevabiliteLevel }[]
+  /**
+   * Recevabilité météo (source et point sélectionnés dans l'onglet Météo).
+   * Bandes d'EXCEPTION seulement (à signaler / non recevable / indéterminé) ;
+   * epoch ms, converties en minutes via l'ancre du graphique. null/undefined :
+   * rien n'est affiché (pas de données météo = fait de donnée, pas d'erreur).
+   */
+  meteoCourbe?: MeteoCourbe | null
 }
 
 /** Format court d'une date ISO en français : "2026-03-09" → "09 mars" */
@@ -334,7 +339,7 @@ export default function TimeSeriesChart({
   chartRangePickArmed,
   onChartRangePicked,
   chartHighlightRange,
-  recevabiliteOverlay,
+  meteoCourbe,
 }: Props) {
   // Affichage des données météo (vent) sur le graphique
   const [showWind, setShowWind] = useState(false)
@@ -942,6 +947,21 @@ export default function TimeSeriesChart({
     const d = new Date(); d.setHours(0, 0, 0, 0)
     return d.getTime()
   }, [isMultiDay, anchorDate, selectedDate])
+
+  // Bandes météo en coordonnées de l'axe X, tronquées à fullRange comme les
+  // périodes ; le zoom est géré par ifOverflow="hidden".
+  const meteoZones = useMemo(
+    () => (meteoCourbe ? zonesSurAxe(meteoCourbe.bandes, chartAnchorMs, fullRange) : []),
+    [meteoCourbe, chartAnchorMs, fullRange],
+  )
+
+  // Portions de la mesure affichée qu'aucune heure météo ne couvre — dites
+  // EXPLICITEMENT à l'écran (jamais de courbe partiellement couverte en silence).
+  const meteoNonCouvert = useMemo((): Intervalle[] => {
+    if (!meteoCourbe) return []
+    const mesure = intervallesMesure(chartData.map((d) => d.t), aggSec / 60, chartAnchorMs)
+    return portionsNonCouvertes(mesure, meteoCourbe.couvert)
+  }, [meteoCourbe, chartData, aggSec, chartAnchorMs])
 
   /** Pour une période, retourne ses bornes dans la coord X du graphique, ou null. */
   const periodBounds = useCallback((p: Period): [number, number] | null => {
@@ -1569,6 +1589,26 @@ export default function TimeSeriesChart({
           </span>
         )}
 
+        {/* Légende météo (niveaux PRÉSENTS + « sans bande = recevable ») et
+            bandeau de couverture partielle — jamais de graphique partiellement
+            couvert sans le dire. Rien du tout sans données météo. */}
+        {meteoCourbe && (
+          <LegendeMeteo
+            niveaux={[...new Set(meteoZones.map((z) => z.level))]}
+            sourceLabel={meteoCourbe.sourceLabel}
+            pointLabel={meteoCourbe.pointLabel}
+          />
+        )}
+        {meteoCourbe && meteoNonCouvert.length > 0 && (
+          <span
+            role="status"
+            className="text-[10px] text-amber-300 bg-amber-950/30 border border-amber-900/40 rounded px-1.5 py-0.5"
+          >
+            ⚠ Météo ({meteoCourbe.sourceLabel} · {meteoCourbe.pointLabel}) : ne couvre pas{' '}
+            {libellePortions(meteoNonCouvert, isMultiDay)} de la mesure affichée
+          </span>
+        )}
+
         {/* Astuces (?) — tooltip au survol */}
         <div className="relative group">
           <HelpCircle size={13} className="text-gray-600 hover:text-gray-300 transition-colors cursor-help" />
@@ -1789,6 +1829,15 @@ export default function TimeSeriesChart({
               {audioZones.length > 0 && (
                 <defs>
                   <AudioHatchPattern id={AUDIO_HATCH_ID} strokeOpacity={0.1} />
+                </defs>
+              )}
+              {meteoZones.length > 0 && (
+                <defs>
+                  <MotifsMeteo
+                    suffixe="courbe"
+                    strokeOpacity={0.35}
+                    niveaux={[...new Set(meteoZones.map((z) => z.level))]}
+                  />
                 </defs>
               )}
 
@@ -2043,30 +2092,22 @@ export default function TimeSeriesChart({
                 )
               })()}
 
-              {/* Recevabilité météo (overlay de fond, sous les périodes nommées). */}
-              {recevabiliteOverlay && recevabiliteOverlay.length > 0 &&
-                Number.isFinite(chartAnchorMs) &&
-                recevabiliteOverlay.map((h, i) => {
-                  const startMin = (h.startMs - chartAnchorMs) / 60_000
-                  const endMin = (h.endMs - chartAnchorMs) / 60_000
-                  if (endMin < fullRange.startMin || startMin > fullRange.endMin) return null
-                  const x1 = Math.max(fullRange.startMin, startMin)
-                  const x2 = Math.min(fullRange.endMin, endMin)
-                  // Indéterminé (donnée aberrante) : gris — ni recevable ni non recevable.
-                  const color = h.recevable ? '#10b981' : h.level === 'indetermine' ? '#9ca3af' : '#ef4444'
-                  return (
-                    <ReferenceArea
-                      key={`recv-${i}`}
-                      yAxisId="left"
-                      x1={x1}
-                      x2={x2}
-                      fill={color}
-                      fillOpacity={0.1}
-                      stroke="none"
-                      ifOverflow="hidden"
-                    />
-                  )
-                })}
+              {/* Recevabilité météo : bandes d'EXCEPTION seulement, motif par niveau
+                  (la couleur ne porte jamais l'information seule). Sous les
+                  périodes nommées ; la courbe LAeq passe toujours au-dessus. */}
+              {meteoZones.map((z) => (
+                <ReferenceArea
+                  key={`meteo-${z.key}`}
+                  yAxisId="left"
+                  x1={z.x1}
+                  x2={z.x2}
+                  fill={`url(#${idMotifMeteo(z.level, 'courbe')})`}
+                  fillOpacity={1}
+                  stroke={MOTIF_METEO[z.level].couleur}
+                  strokeOpacity={0.3}
+                  ifOverflow="hidden"
+                />
+              ))}
 
               {/* Périodes nommées :
                    couleur = couleur de la catégorie (opacity 0.20).

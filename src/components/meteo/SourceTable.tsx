@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { Check, AlertTriangle, X, HelpCircle } from 'lucide-react'
 import {
   type RecevabiliteHour,
@@ -25,6 +25,10 @@ interface Props {
   selectedHourKey?: string | null
   /** Page de consultation de la source (lien « voir à la source »). */
   viewerUrlFor?: (s: SourceResult) => string
+  /** Source à afficher à l'ouverture (sélection mémorisée). */
+  initialSource?: SourceId | null
+  /** Remonte la source affichée (elle pilote les bandes de la courbe LAeq). */
+  onActiveSourceChange?: (source: SourceId | null) => void
 }
 
 type PeriodFilter = 'all' | 'jour' | 'soir' | 'nuit'
@@ -63,8 +67,17 @@ export default function SourceTable({
   onSelectHour,
   selectedHourKey,
   viewerUrlFor,
+  initialSource,
+  onActiveSourceChange,
 }: Props) {
-  const [activeSourceIdx, setActiveSourceIdx] = useState(0)
+  const [activeSourceIdx, setActiveSourceIdx] = useState(() =>
+    Math.max(0, sources.findIndex((s) => s.source === initialSource)),
+  )
+  const sourceAffichee = sources[activeSourceIdx]?.source ?? null
+  useEffect(() => {
+    onActiveSourceChange?.(sourceAffichee)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- remonter seulement quand la source change
+  }, [sourceAffichee])
   const [periodFilter, setPeriodFilter] = useState<PeriodFilter>('all')
   const [recevableOnly, setRecevableOnly] = useState(false)
 

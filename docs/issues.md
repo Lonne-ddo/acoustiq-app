@@ -627,6 +627,25 @@ Le pas n'est stocké nulle part (`MeasurementFile`, `DataPoint` :
 Pondérer chaque échantillon par sa durée (pas déduit ou conservé), et
 dédoublonner les recouvrements avant la moyenne — à valider par un golden.
 
+### Décision (2026-09-28)
+
+- Pondération par la DURÉE de chaque échantillon, une seule fonction pure,
+  utilisée partout (même biais dans `leqOnRegPeriod`, `leqByClockHour`,
+  `computeCorr9801Point`, le Kt des Indices, les K de la Conformité, les
+  percentiles L10/L50/L90, et l'affichage).
+- Recouvrement de deux fichiers au même point : **refus explicite** du calcul
+  quand les sources DIVERGENT (niveau qu'aucun instrument n'a mesuré : exclu ;
+  priorité d'un fichier : aucune base pour la fixer). Doublon STRICT (mêmes
+  valeurs, reconnu par la valeur, pas par le nom — le même relevé en xlsx et en
+  CSV) : dédoublonné sans refus, et signalé.
+- Refus TRACÉ comme la couverture : port explicite, cause nommée, zone de
+  recouvrement, écart en dB. Jamais silencieux.
+- Trois lots, chacun mergé avant le suivant, golden AVANT et contrôle par
+  mutation sur chacun : (1) Conformité, (2) Indices et 98-01, (3) affichage.
+
+Références à jour depuis l'extraction : Ba en `src/utils/conformiteFenetre.ts:184`,
+concaténation en `:129`.
+
 ---
 
 ## #15 — Fenêtre d'évaluation à cheval sur minuit : le modulo 1440 confond deux matins
@@ -638,7 +657,7 @@ conformité.
 
 ### Constat
 
-`src/components/Conformite2026.tsx:241` : `const m = ((d.t % 1440) + 1440) % 1440`,
+`src/components/Conformite2026.tsx:241` (depuis l'extraction : `src/utils/conformiteFenetre.ts:153`, et même convention dans `couvertureFenetre`, `:370-371`) : `const m = ((d.t % 1440) + 1440) % 1440`,
 puis `m >= evalStart || m < me` quand la fenêtre dépasse minuit. Sur tout
 fichier de plus de 24 h, le matin du jour de la date sélectionnée et le matin
 du lendemain ont le même `m` : une fenêtre 23:30–00:30 prend les minutes
@@ -648,3 +667,51 @@ du lendemain ont le même `m` : une fenêtre 23:30–00:30 prend les minutes
 
 Évaluer la fenêtre en temps absolu (epoch ms, comme les périodes) plutôt
 qu'en minutes modulo 1440.
+
+---
+
+## #16 — `laeqOverRange` moyenne tous les points ensemble : volontaire ou non ?
+
+**Statut** : ouvert, À CONFIRMER — aucun correctif avant décision.
+**Sévérité** : à qualifier (affichage de comparaison, pas de verdict).
+
+### Constat
+
+`src/components/TimeSeriesChart.tsx:686-697` : `laeqOverRange(tA, tB)` parcourt
+`filesByPoint.values()` — les fichiers de TOUS les points visibles de la date
+principale — et fait un seul `laeqAvg` de tous leurs échantillons. Utilisé par
+la sélection de plage ON/OFF sur la courbe (`:1243`, `compPhase` pickON /
+pickOFF) : le LAeq d'une plage est donc un mélange des points, pondéré par
+leur nombre d'échantillons (même biais que #14).
+
+Le commentaire (`:686` « tous points visibles ») décrit le comportement mais
+ne dit pas s'il est voulu. À confirmer, pas à supposer : un LAeq « multi-points »
+n'a pas de sens réglementaire ; si la comparaison ON/OFF doit se faire par
+point, c'est un défaut.
+
+---
+
+## #17 — Détection d'émergences sur fichiers concaténés : sources entrelacées
+
+**Statut** : ouvert, non corrigé — rattaché à la famille #14 (lot 3).
+**Sévérité** : moyenne — événements détectés manqués ou fragmentés.
+
+### Constat
+
+`src/App.tsx:3096` concatène les fichiers d'un même point et d'une même date
+(`fs.flatMap((f) => f.data)`) avant `detectEmergenceEvents`. L'ORDRE n'est pas
+le problème : la fonction trie par `t` (`src/utils/acoustics.ts:111-113`).
+
+Le problème est ce que le tri produit quand deux fichiers se RECOUVRENT ou ont
+des pas différents :
+- les échantillons des deux sources sont ENTRELACÉS ; la détection des runs
+  (`acoustics.ts:~140`) exige des indices contigus au-dessus du seuil — une
+  émergence vue par une source, intercalée avec des échantillons sous le seuil
+  de l'autre, est coupée en morceaux ou rejetée par `minDurationSec` ;
+- la baseline glissante (`:119-134`) moyenne par NOMBRE d'échantillons : le
+  fichier au pas fin domine, les secondes recouvertes comptent deux fois.
+
+### Piste
+
+Même primitive que #14 (pondération par la durée, doublon strict dédoublonné,
+sources divergentes refusées et tracées) avant la détection.

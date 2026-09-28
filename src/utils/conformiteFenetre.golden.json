@@ -1,5 +1,5 @@
 {
-  "provenance": "Figé sur main@f01b6d9 le 2026-09-23 : code de Conformite2026.tsx EXTRAIT TEL QUEL (helpers + corps des useMemo pointNames/dataByPoint/results) et exécuté avec les dépendances de main, sur les cas de conformiteFenetre.fixtures.ts. Empreinte = SHA-256 de la sérialisation canonique (serialisationCanonique.ts) du PointResult[] d'origine. NE PAS régénérer depuis le code courant.",
+  "provenance": "Figé sur main@f01b6d9 le 2026-09-23 : code de Conformite2026.tsx EXTRAIT TEL QUEL (helpers + corps des useMemo pointNames/dataByPoint/results) et exécuté avec les dépendances de main, sur les cas de conformiteFenetre.fixtures.ts. Empreinte = SHA-256 de la sérialisation canonique (serialisationCanonique.ts) du PointResult[] d'origine. NE PAS régénérer depuis le code courant. Cas kb-auto, ki-manuel, verdict-egalite, priorite-statuts, borne-fin ajoutés le 2026-09-28 par scripts/golden-fenetre/generer.mjs (même protocole, même code d'origine ; les 15 cas antérieurs reproduits à l'identique).",
   "cas": {
     "complet": {
       "sha256": "d6d2ace71a98436efabbbcbcfda134b1c9c7791807dff5ce39f89c5d0433e4c9",
@@ -281,6 +281,96 @@
           "lar": 54.276929427376274,
           "pass": false,
           "count": 2700
+        }
+      ]
+    },
+    "kb-auto": {
+      "sha256": "96c024e5add6b601865294219f12e8bdb291401d629267a66b17cd2607323df8",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.42850987670283,
+          "bp": 57.34928003409226,
+          "bpReason": "ok",
+          "kt": 0,
+          "ki": 2.500000000000057,
+          "kb": 5,
+          "ks": 0,
+          "lar": 62.34928003409226,
+          "pass": false,
+          "count": 3600
+        }
+      ]
+    },
+    "ki-manuel": {
+      "sha256": "0576fac3e519af4ff240da8577e8cf1b0f37f5697da000acf80cf47028ae65bc",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.42850987670283,
+          "bp": 57.34928003409226,
+          "bpReason": "ok",
+          "kt": 0,
+          "ki": 4,
+          "kb": 0,
+          "ks": 0,
+          "lar": 61.34928003409226,
+          "pass": false,
+          "count": 3600
+        }
+      ]
+    },
+    "verdict-egalite": {
+      "sha256": "0805cdf7f300b941a2571059b5dc41c4fe6989e21acc791a1b0f80c7dd1c399f",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 41.45200891417246,
+          "bp": 41.12944807206582,
+          "bpReason": "ok",
+          "kt": 0,
+          "ki": 2.5,
+          "kb": 0,
+          "ks": 3.87055192793418,
+          "lar": 45,
+          "pass": true,
+          "count": 60
+        }
+      ]
+    },
+    "priorite-statuts": {
+      "sha256": "be53a4e744bc392001c02241b5c4b916220c0b8ec3a16251af8832de2a01afea",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 58.03953910296238,
+          "bp": 57.97079059265245,
+          "bpReason": "ok",
+          "kt": 0,
+          "ki": 2.500000000000057,
+          "kb": 0,
+          "ks": 0,
+          "lar": 60.470790592652506,
+          "pass": false,
+          "count": 3010
+        }
+      ]
+    },
+    "borne-fin": {
+      "sha256": "c5d34623303c3985c435a28bf82f15d2871c7c2add6b07b73056f60989baf9f2",
+      "resume": [
+        {
+          "point": "BV-1",
+          "ba": 57.65433467027287,
+          "bp": 57.57915430352908,
+          "bpReason": "ok",
+          "kt": 0,
+          "ki": 2.5,
+          "kb": 0,
+          "ks": 0,
+          "lar": 60.07915430352908,
+          "pass": false,
+          "count": 40
         }
       ]
     }

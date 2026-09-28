@@ -6,6 +6,11 @@
  * d'échantillonnage mixtes, fichiers qui se recouvrent, fenêtre à cheval sur
  * minuit, Bp (ok / Br absent / insuffisant), termes K manuels et Ks.
  *
+ * Cas ajoutés après l'audit par mutation (scripts/golden-fenetre) : chacun
+ * existe parce qu'une mutation du calcul survivait sans eux — Kb automatique,
+ * Ki manuel, verdict à égalité exacte, priorité des statuts de couverture,
+ * borne de fin de période.
+ *
  * Utilisé par le harnais qui fige le golden SUR MAIN (code d'origine extrait)
  * et par le test de non-régression de la fonction extraite.
  */
@@ -36,15 +41,24 @@ const FREQS = [6.3, 8, 10, 12.5, 16, 20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160
 /** Niveau déterministe, arrondi au 0,1 dB comme un export. */
 const niveau = (t: number, base: number) => Math.round((base + 6 * Math.sin(t / 3.7) + 2 * Math.cos(t / 0.9)) * 10) / 10
 
-/** Fichier de `debutMin` à `finMin` (minutes depuis minuit de `date`), pas `pasS` secondes. */
-export function fichier(id: string, debutMin: number, finMin: number, pasS: number, opts: { base?: number; spectres?: boolean; date?: string } = {}): MeasurementFile {
+/**
+ * Fichier de `debutMin` à `finMin` (minutes depuis minuit de `date`), pas `pasS` secondes.
+ * `lceqEcart` : LCeq − LAeq de chaque échantillon (défaut 9 dB, Kb nul) ;
+ * `sansLaft` : aucun LAFTeq (le Ki manuel devient atteignable).
+ */
+export function fichier(
+  id: string, debutMin: number, finMin: number, pasS: number,
+  opts: { base?: number; spectres?: boolean; date?: string; lceqEcart?: number; sansLaft?: boolean } = {},
+): MeasurementFile {
   const base = opts.base ?? 55
+  const lceqEcart = opts.lceqEcart ?? 9
   const data: DataPoint[] = []
   const n = Math.round(((finMin - debutMin) * 60) / pasS)
   for (let i = 0; i < n; i++) {
     const t = debutMin + (i * pasS) / 60
     const laeq = niveau(t, base)
-    const d: DataPoint = { t, laeq, lceq: Math.round((laeq + 9) * 10) / 10, laftEq: Math.round((laeq + 2.5) * 10) / 10 }
+    const d: DataPoint = { t, laeq, lceq: Math.round((laeq + lceqEcart) * 10) / 10 }
+    if (!opts.sansLaft) d.laftEq = Math.round((laeq + 2.5) * 10) / 10
     if (opts.spectres) {
       // Spectre plat avec une émergence à 1 kHz : Kt exercé.
       d.spectra = FREQS.map((f) => (f === 1000 ? laeq + 12 : laeq - 8))
@@ -143,6 +157,45 @@ export const CAS_FENETRE: { id: string; titre: string; entree: () => EntreeFenet
       files: [fichier('A', 13 * 60, 16 * 60, 1, { spectres: true }), fichier('B', 13 * 60, 16 * 60, 1, { base: 50 })],
       pointMap: { A: 'BV-1', B: 'BV-2' },
       periods: [periode('m1', '14:45', '15:00', DEFAULT_CATEGORY_IDS.exclure)],
+    }),
+  },
+  {
+    // LCeq − LAeq = 21 dB ≥ 20 : Kb = 5, supérieur à Ki (2,5) — c'est Kb qui fixe le LAr,1h.
+    id: 'kb-auto', titre: 'LCeq − LAeq = 21 dB : Kb automatique = 5, terme appliqué',
+    entree: () => base({ files: [fichier('A', 13 * 60, 16 * 60, 1, { lceqEcart: 21 })] }),
+  },
+  {
+    // Sans LAFTeq, le Ki automatique est indisponible : le Ki manuel (4) s'applique.
+    id: 'ki-manuel', titre: 'aucun LAFTeq : Ki manuel = 4, terme appliqué',
+    entree: () => base({ files: [fichier('A', 13 * 60, 16 * 60, 1, { sansLaft: true })], kiManual: { 'BV-1': 4 } }),
+  },
+  {
+    // Ks CALIBRÉ au bit près pour que LAr,1h = Bp + Ks = 45 = critère (type I, jour) :
+    // le verdict « ≤ » doit donner conforme. Valeur trouvée par balayage, figée ici.
+    id: 'verdict-egalite', titre: 'LAr,1h exactement égal au critère (45 dB) : conforme',
+    entree: () => base({
+      files: [fichier('A', 13 * 60, 16 * 60, 60, { base: 39 })],
+      brJour: '30', ksEnabled: true, ksValue: '3.87055192793418', ksReason: 'égalité',
+    }),
+  },
+  {
+    // Fichier B au pas de 5 min décalé de 2 min : ses échantillons chevauchent les
+    // bornes de l'exclusion 14:10–14:20 que le fichier A (1 s) respecte à la seconde.
+    // Une seconde couverte par une donnée RETENUE est retenue, quel que soit l'ordre.
+    id: 'priorite-statuts', titre: 'recouvrement 1 s / 5 min autour d’une exclusion 14:10–14:20',
+    entree: () => base({
+      files: [fichier('A', 13 * 60, 16 * 60, 1), fichier('B', 14 * 60 + 2, 15 * 60 + 2, 300)],
+      pointMap: { A: 'BV-1', B: 'BV-1' },
+      periods: [periode('m1', '14:10', '14:20', DEFAULT_CATEGORY_IDS.exclure)],
+    }),
+  },
+  {
+    // Pas de 60 s : l'échantillon de 14:30 tombe PILE sur la fin de l'exclusion ;
+    // bornes [début, fin[ : il est retenu et couvre 14:30–14:31.
+    id: 'borne-fin', titre: 'pas 60 s, exclusion 14:10–14:30 : l’échantillon de 14:30 est retenu',
+    entree: () => base({
+      files: [fichier('A', 13 * 60, 16 * 60, 60)],
+      periods: [periode('m1', '14:10', '14:30', DEFAULT_CATEGORY_IDS.exclure)],
     }),
   },
 ]

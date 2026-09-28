@@ -44,6 +44,15 @@ const ATTENDU: Record<string, CouvertureFenetre[]> = {
   'k-manuels': [c(60)],
   'sans-donnees': [c(0, { absenceDonnees: 60 })],
   'deux-points': [c(45, { exclusionManuelle: 15 }), c(45, { exclusionManuelle: 15 })],
+  'kb-auto': [c(60)],
+  'ki-manuel': [c(60)],
+  'verdict-egalite': [c(60)],
+  // A (1 s) exclu 14:10–14:20 ; B (5 min, t = 14:02, 14:07, 14:12, 14:17…) : 14:07 retenu
+  // couvre 14:10–14:12, 14:17 exclu couvre 14:20–14:22 où A est retenu → la donnée
+  // RETENUE prime des deux côtés : seules 14:12–14:20 manquent (8 min).
+  'priorite-statuts': [c(52, { exclusionManuelle: 8 })],
+  // Pas 60 s : échantillons exclus 14:10…14:29 (20) ; celui de 14:30 (= fin) est retenu.
+  'borne-fin': [c(40, { exclusionManuelle: 20 })],
 }
 
 describe('couverture de la fenêtre — minutes retenues sur 60 et causes', () => {

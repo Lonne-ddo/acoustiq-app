@@ -297,15 +297,51 @@ export const LIBELLE_CAUSE: Record<CauseManque, string> = {
   absenceDonnees: 'absence de données',
 }
 
+/** Ordre fixe d'affichage des causes (et de départage des arrondis). */
+const ORDRE_CAUSES = Object.keys(LIBELLE_CAUSE) as CauseManque[]
+
 /**
  * Minutes RÉELLEMENT couvertes par des données retenues sur les 60 de la
- * fenêtre, et ventilation des minutes manquantes par cause. Résolution : la
- * seconde. Recalculée à chaque rendu (jamais figée) : elle décrit l'état
- * ACTUEL des périodes. `retenuesMin + Σ manquantesMin = 60`.
+ * fenêtre, et ventilation des minutes manquantes par cause. Recalculée à chaque
+ * rendu (jamais figée) : elle décrit l'état ACTUEL des périodes.
+ *
+ * `secondes` : le compte EXACT (résolution : la seconde), source de vérité.
+ * `retenuesMin` / `manquantesMin` : minutes ENTIÈRES pour l'affichage — le
+ * dixième laisserait croire à une précision que le pas d'échantillonnage ne
+ * donne pas (cf. minutesEntieres). `retenuesMin + Σ manquantesMin = 60`.
  */
 export interface CouvertureFenetre {
   retenuesMin: number
   manquantesMin: Record<CauseManque, number>
+  secondes: { retenues: number; manquantes: Record<CauseManque, number> }
+}
+
+/**
+ * Minutes entières sommant EXACTEMENT à 60, depuis les secondes :
+ * - minutes retenues arrondies à l'INFÉRIEUR : une fenêtre à laquelle il manque
+ *   ne serait-ce qu'une seconde n'affiche jamais « 60/60 » ;
+ * - le reste est réparti entre les causes au plus fort reste (méthode de
+ *   Hamilton), égalités départagées dans l'ordre fixe des causes.
+ * Une cause de quelques secondes peut ainsi tomber à 0 min : le libellé la
+ * signale alors « < 1 min » plutôt que de la taire (libelleCouverture).
+ */
+export function minutesEntieres(
+  retenuesS: number,
+  manquantesS: Record<CauseManque, number>,
+): { retenuesMin: number; manquantesMin: Record<CauseManque, number> } {
+  const retenuesMin = Math.floor(retenuesS / 60)
+  const manquantesMin = {} as Record<CauseManque, number>
+  for (const k of ORDRE_CAUSES) manquantesMin[k] = Math.floor(manquantesS[k] / 60)
+  let aRepartir = 60 - retenuesMin - ORDRE_CAUSES.reduce((a, k) => a + manquantesMin[k], 0)
+  const parReste = ORDRE_CAUSES
+    .filter((k) => manquantesS[k] % 60 > 0)
+    .sort((a, b) => (manquantesS[b] % 60) - (manquantesS[a] % 60)) // tri stable : l'ordre fixe départage
+  for (const k of parReste) {
+    if (aRepartir <= 0) break
+    manquantesMin[k]++
+    aRepartir--
+  }
+  return { retenuesMin, manquantesMin }
 }
 
 /** Pas d'échantillonnage d'un fichier (minutes) : médiane des écarts positifs de t. */
@@ -385,28 +421,38 @@ export function couvertureFenetre(
 
   const compte = [0, 0, 0, 0, 0]
   for (let s = 0; s < 3600; s++) compte[secondes[s]]++
-  const min = (n: number) => Math.round((n / 60) * 10) / 10
-  return {
-    retenuesMin: min(compte[RETENUE]),
-    manquantesMin: {
-      exclusionMeteo: min(compte[EXCL_METEO]),
-      exclusionManuelle: min(compte[EXCL_MANUELLE]),
-      horsInclusion: min(compte[HORS_INCLUSION]),
-      absenceDonnees: min(compte[ABSENCE]),
-    },
+  const manquantesS: Record<CauseManque, number> = {
+    exclusionMeteo: compte[EXCL_METEO],
+    exclusionManuelle: compte[EXCL_MANUELLE],
+    horsInclusion: compte[HORS_INCLUSION],
+    absenceDonnees: compte[ABSENCE],
   }
+  return {
+    ...minutesEntieres(compte[RETENUE], manquantesS),
+    secondes: { retenues: compte[RETENUE], manquantes: manquantesS },
+  }
+}
+
+/**
+ * Causes des minutes manquantes, dans l'ordre fixe : « 20 min exclusion
+ * manuelle, 5 min absence de données ». Une cause de quelques secondes arrondie
+ * à 0 min s'écrit « < 1 min » : jamais tue. Vide si la fenêtre est complète.
+ */
+export function libelleCauses(c: CouvertureFenetre): string {
+  return ORDRE_CAUSES
+    .filter((k) => c.manquantesMin[k] > 0 || c.secondes.manquantes[k] > 0)
+    .map((k) => `${c.manquantesMin[k] > 0 ? c.manquantesMin[k] : '< 1'} min ${LIBELLE_CAUSE[k]}`)
+    .join(', ')
 }
 
 /** « 35/60 min — 20 min exclusion manuelle, 5 min absence de données » */
 export function libelleCouverture(c: CouvertureFenetre): string {
-  const detail = (Object.keys(LIBELLE_CAUSE) as CauseManque[])
-    .filter((k) => c.manquantesMin[k] > 0)
-    .map((k) => `${c.manquantesMin[k]} min ${LIBELLE_CAUSE[k]}`)
-  return `${c.retenuesMin}/60 min` + (detail.length ? ` — ${detail.join(', ')}` : '')
+  const detail = libelleCauses(c)
+  return `${c.retenuesMin}/60 min` + (detail ? ` — ${detail}` : '')
 }
 
-/** Vrai si la fenêtre n'est pas entièrement couverte par des données retenues. */
-export const fenetreIncomplete = (c: CouvertureFenetre) => c.retenuesMin < 60
+/** Vrai si la fenêtre n'est pas entièrement couverte (à la seconde près) par des données retenues. */
+export const fenetreIncomplete = (c: CouvertureFenetre) => c.secondes.retenues < 3600
 
 /**
  * Bloc « couverture » de la section Conformité du rapport : une ligne par

@@ -49,6 +49,7 @@ import {
   type Period,
   type PointResult,
   libelleCouverture,
+  libelleCauses,
   fenetreIncomplete,
 } from '../utils/conformiteFenetre'
 
@@ -554,14 +555,22 @@ export default function Conformite2026({
                         <td className="px-3 py-2 text-gray-200 font-medium">
                           {r.point}
                           {/* Couverture RÉELLE de la fenêtre (minutes retenues / 60) :
-                              glyphe + texte, jamais la couleur seule. */}
+                              glyphe + texte, jamais la couleur seule. Fenêtre
+                              incomplète : les causes sont ÉCRITES, sans survol —
+                              au clavier et au tactile aussi. Orange Okabe-Ito
+                              (« à signaler »). */}
                           <span
-                            className={`ml-2 text-[10px] ${fenetreIncomplete(r.couverture) ? 'text-amber-300' : 'text-gray-600'}`}
+                            className={`ml-2 text-[10px] ${fenetreIncomplete(r.couverture) ? 'text-[#E69F00]' : 'text-gray-600'}`}
                             title={`${libelleCouverture(r.couverture)} · ${r.count} échantillon(s)`}
                           >
                             {fenetreIncomplete(r.couverture) ? '⚠ ' : ''}
                             {r.couverture.retenuesMin}/60 min
                           </span>
+                          {fenetreIncomplete(r.couverture) && (
+                            <span className="block text-[10px] font-normal text-[#E69F00]">
+                              manque : {libelleCauses(r.couverture)}
+                            </span>
+                          )}
                         </td>
                         <td className="px-3 py-2 text-right tabular-nums text-gray-200">
                           {fmt(r.ba)}
@@ -669,7 +678,7 @@ export default function Conformite2026({
                           {fmt(r.lar)}
                           {r.lar !== null && fenetreIncomplete(r.couverture) && (
                             <span
-                              className="block text-[10px] font-normal text-amber-300"
+                              className="block text-[10px] font-normal text-[#E69F00]"
                               title={`Calculé sur ${libelleCouverture(r.couverture)} — pas un niveau horaire complet ; validité à juger (§3.7.1).`}
                             >
                               ⚠ sur {r.couverture.retenuesMin} min

@@ -7,6 +7,8 @@ import {
   couvertureFenetre,
   pasFichierMin,
   libelleCouverture,
+  libelleCauses,
+  minutesEntieres,
   fenetreIncomplete,
   hhmmToMinutes,
   blocCouvertureRapport,
@@ -18,12 +20,21 @@ import { filterDataByPeriods } from './acoustics'
 /**
  * Couverture réelle de la fenêtre LAr,1h. Valeurs ATTENDUES établies à la main
  * depuis la définition de chaque cas (conformiteFenetre.fixtures.ts), pas
- * relevées sur le code.
+ * relevées sur le code. Minutes entières ; les secondes exactes sont dérivées
+ * (tous les cas du golden tombent sur des minutes pleines).
  */
-const c = (retenues: number, m: Partial<CouvertureFenetre['manquantesMin']> = {}): CouvertureFenetre => ({
-  retenuesMin: retenues,
-  manquantesMin: { exclusionMeteo: 0, exclusionManuelle: 0, horsInclusion: 0, absenceDonnees: 0, ...m },
-})
+type Minutes = Pick<CouvertureFenetre, 'retenuesMin' | 'manquantesMin'>
+const c = (retenues: number, m: Partial<CouvertureFenetre['manquantesMin']> = {}): CouvertureFenetre => {
+  const manquantesMin = { exclusionMeteo: 0, exclusionManuelle: 0, horsInclusion: 0, absenceDonnees: 0, ...m }
+  const manquantes = Object.fromEntries(Object.entries(manquantesMin).map(([k, v]) => [k, v * 60])) as CouvertureFenetre['manquantesMin']
+  return { retenuesMin: retenues, manquantesMin, secondes: { retenues: retenues * 60, manquantes } }
+}
+/** Couverture à la seconde : minutes dérivées par minutesEntieres. */
+const cs = (retenuesS: number, m: Partial<CouvertureFenetre['manquantesMin']> = {}): CouvertureFenetre => {
+  const manquantes = { exclusionMeteo: 0, exclusionManuelle: 0, horsInclusion: 0, absenceDonnees: 0, ...m }
+  return { ...minutesEntieres(retenuesS, manquantes), secondes: { retenues: retenuesS, manquantes } }
+}
+const minutes = (x: CouvertureFenetre): Minutes => ({ retenuesMin: x.retenuesMin, manquantesMin: x.manquantesMin })
 
 const ATTENDU: Record<string, CouvertureFenetre[]> = {
   complet: [c(60)],
@@ -66,7 +77,9 @@ describe('couverture de la fenêtre — minutes retenues sur 60 et causes', () =
       expect(res.map((r) => r.couverture)).toEqual(ATTENDU[cas.id])
       for (const r of res) {
         const somme = r.couverture.retenuesMin + Object.values(r.couverture.manquantesMin).reduce((a, b) => a + b, 0)
-        expect(somme).toBeCloseTo(60, 6)
+        expect(somme).toBe(60)
+        const sommeS = r.couverture.secondes.retenues + Object.values(r.couverture.secondes.manquantes).reduce((a, b) => a + b, 0)
+        expect(sommeS).toBe(3600)
       }
     })
   }
@@ -92,8 +105,8 @@ describe('cohérence avec filterDataByPeriods (mêmes règles que le calcul de B
         const avec = couvertureFenetre(e.files, e.pointMap, e.selectedDate, pt, e.periods, e.categories, debut)
         const deja = couvertureFenetre(filtres, e.pointMap, e.selectedDate, pt, [], [], debut)
         // Le filtrage peut changer le pas médian d'un fichier amputé : on compare
-        // à la seconde près par minute retenue.
-        expect(Math.abs(avec.retenuesMin - deja.retenuesMin)).toBeLessThanOrEqual(0.1)
+        // les secondes retenues, à 6 s près.
+        expect(Math.abs(avec.secondes.retenues - deja.secondes.retenues)).toBeLessThanOrEqual(6)
       }
     })
   }
@@ -110,6 +123,49 @@ describe('pas d’échantillonnage et libellé', () => {
     expect(libelleCouverture(c(60))).toBe('60/60 min')
     expect(libelleCouverture(c(35, { exclusionManuelle: 5, exclusionMeteo: 5, horsInclusion: 15 })))
       .toBe('35/60 min — 5 min exclusion météo, 5 min exclusion manuelle, 15 min hors période d’inclusion')
+    expect(libelleCauses(c(60))).toBe('')
+  })
+})
+
+describe('minutes entières (le dixième promettait une précision que le pas ne donne pas)', () => {
+  it('une seule seconde manquante : jamais « 60/60 », la fenêtre reste incomplète', () => {
+    const x = cs(3599, { absenceDonnees: 1 })
+    expect(minutes(x)).toEqual(minutes(c(59, { absenceDonnees: 1 })))
+    expect(fenetreIncomplete(x)).toBe(true)
+    expect(libelleCouverture(x)).toBe('59/60 min — 1 min absence de données')
+  })
+
+  it('retenues arrondies à l’inférieur, reste au plus fort reste : 34 min 50 s + 25 min 10 s', () => {
+    expect(minutes(cs(34 * 60 + 50, { exclusionManuelle: 25 * 60 + 10 }))).toEqual(minutes(c(34, { exclusionManuelle: 26 })))
+  })
+
+  it('plus fort reste entre causes, pas l’ordre fixe : 9 min 20 s météo, 10 min 40 s manuelle', () => {
+    expect(minutes(cs(40 * 60, { exclusionMeteo: 9 * 60 + 20, exclusionManuelle: 10 * 60 + 40 })))
+      .toEqual(minutes(c(40, { exclusionMeteo: 9, exclusionManuelle: 11 })))
+  })
+
+  it('égalité de restes : l’ordre fixe des causes départage', () => {
+    // 59 min 20 s retenues, 20 s météo, 20 s manuelle : 1 min à attribuer, à la météo (1re).
+    expect(minutes(cs(59 * 60 + 20, { exclusionMeteo: 20, exclusionManuelle: 20 })))
+      .toEqual(minutes(c(59, { exclusionMeteo: 1 })))
+  })
+
+  it('une cause arrondie à 0 min n’est jamais tue : « < 1 min »', () => {
+    const x = cs(59 * 60 + 20, { exclusionMeteo: 20, exclusionManuelle: 20 })
+    expect(libelleCouverture(x)).toBe('59/60 min — 1 min exclusion météo, < 1 min exclusion manuelle')
+  })
+
+  it('somme toujours égale à 60, retenues jamais surestimées (balayage déterministe)', () => {
+    let graine = 12345
+    const alea = () => ((graine = (graine * 1103515245 + 12345) % 2 ** 31) / 2 ** 31)
+    for (let i = 0; i < 2000; i++) {
+      const coupes = [alea(), alea(), alea(), alea()].map((u) => Math.floor(u * 3601)).sort((a, b) => a - b)
+      const [a, b, d, e] = coupes
+      const m = { exclusionMeteo: b - a, exclusionManuelle: d - b, horsInclusion: e - d, absenceDonnees: 3600 - e + a }
+      const r = minutesEntieres(3600 - (m.exclusionMeteo + m.exclusionManuelle + m.horsInclusion + m.absenceDonnees), m)
+      expect(r.retenuesMin + Object.values(r.manquantesMin).reduce((s, v) => s + v, 0)).toBe(60)
+      expect(r.retenuesMin * 60).toBeLessThanOrEqual(3600 - (b - a) - (d - b) - (e - d) - (3600 - e + a))
+    }
   })
 })
 
@@ -134,8 +190,11 @@ describe('rapport et affichage', () => {
     const html = renderToStaticMarkup(createElement(Conformite2026, {
       files: e.files, pointMap: e.pointMap, selectedDate: e.selectedDate, periods: e.periods, categories: e.categories,
     }))
-    // Texte visible : glyphe ⚠ puis « 35/60 min » (React peut intercaler des marqueurs <!-- -->).
-    expect(html).toMatch(/text-amber-300"[^>]*>⚠ (<!-- -->)?35(<!-- -->)?\/60 min/)
-    expect(html).toContain('35/60 min — 5 min exclusion météo, 5 min exclusion manuelle, 15 min hors période d’inclusion')
+    // Texte visible : glyphe ⚠ puis « 35/60 min », orange Okabe-Ito (React peut intercaler des marqueurs <!-- -->).
+    expect(html).toMatch(/text-\[#E69F00\]"[^>]*>⚠ (<!-- -->)?35(<!-- -->)?\/60 min/)
+    expect(html).not.toContain('amber-300')
+    // Causes ÉCRITES dans le contenu, hors de tout attribut title : lisibles sans survol.
+    const sansTitres = html.replace(/ title="[^"]*"/g, '')
+    expect(sansTitres).toMatch(/manque : (<!-- -->)?5 min exclusion météo, 5 min exclusion manuelle, 15 min hors période d’inclusion/)
   })
 })

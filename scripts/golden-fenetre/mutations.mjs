@@ -50,7 +50,11 @@ const MUTATIONS = [
   ['C3 priorité des statuts ignorée', 'if (statut > secondes[s])', 'if (true)'],
   ['C4 borne de période fermée', 'ts >= p.startMs && ts < p.endMs', 'ts >= p.startMs && ts <= p.endMs'],
   ['C5 hors inclusion compté retenu', 'statut = HORS_INCLUSION', 'statut = RETENUE'],
-  ['C6 séparateur du libellé', "` — ${detail.join(', ')}`", "` - ${detail.join(', ')}`"],
+  ['C6 séparateur du libellé', "` — ${detail}`", "` - ${detail}`"],
+  ['C7 retenues au plus proche', 'const retenuesMin = Math.floor(retenuesS / 60)', 'const retenuesMin = Math.round(retenuesS / 60)'],
+  ['C8 plus fort reste ignoré', '.sort((a, b) => (manquantesS[b] % 60) - (manquantesS[a] % 60))', '.sort(() => 0)'],
+  ['C9 cause de < 1 min tue', 'c.manquantesMin[k] > 0 || c.secondes.manquantes[k] > 0', 'c.manquantesMin[k] > 0'],
+  ['C10 reste non réparti', 'manquantesMin[k]++', 'manquantesMin[k] += 0'],
 ]
 
 const EXCLUS = new Set(['node_modules', '.git', '.local-data', 'dist'])

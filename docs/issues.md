@@ -855,3 +855,38 @@ maximale d'une chaîne V8, SheetJS ne peut pas la lire (Node comme navigateur).
 Le parsing de `821SE 40489-250703000.xlsx` par le parseur de l'app en Node a
 dépassé 4 h 45 sans aboutir. Branche non fusionnée `backup/feat/parse-streaming`
 à examiner.
+
+---
+
+## #20 — Axe multi-jours indexé par POSITION dans la liste des dates, pas par écart de calendrier
+
+**Statut** : ouvert, non corrigé — indépendant de #19 (le code touché est
+cependant réécrit par le lot « courbe / spectrogramme » de #19).
+**Sévérité** : moyenne — les données glissent par rapport aux bandes de
+périodes et de météo.
+
+### Constat
+
+En mode multi-jours, chaque date est décalée de `indexOf(date) × 1440` min,
+c'est-à-dire son RANG dans la liste des dates chargées, pas le nombre de jours
+de calendrier depuis la première :
+- `src/App.tsx:2881-2884` (`audioCoverage`, `dayIndexOf = availableDates.indexOf(d)`) ;
+- `src/components/TimeSeriesChart.tsx:584-588` (décalage des séries) ;
+- mêmes décalages relevés dans `Spectrogram.tsx` (~701-703, 892, 921-923),
+  `InstantSpectrum.tsx` (~243-245), `EventsPanel.tsx` (~211),
+  `useAudioSync.ts` (~63) — références issues de l'inventaire de #19, à revérifier
+  à la correction.
+
+Les bandes de périodes et de météo, elles, sont placées en millisecondes
+RÉELLES depuis l'ancre de l'axe (`chartAnchorMs + tMin`, TimeSeriesChart ~940-983).
+
+Avec des dates non consécutives (ex. 1er et 5 mars), le 5 mars est dessiné à
++1440 min (rang 1) alors que ses périodes et sa météo sont placées à +5760 min :
+les deux glissent de 3 jours l'un par rapport à l'autre. Audio et événements
+du 5 mars suivent le décalage par rang.
+
+### Piste
+
+Décalage = écart de calendrier (`(minuit(date) − minuit(ancre)) / 86 400 000`
+jours), cohérent avec les millisecondes réelles des périodes — en tenant compte
+des jours de 23 h / 25 h (heure d'été).

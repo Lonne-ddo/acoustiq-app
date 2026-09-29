@@ -777,3 +777,63 @@ correspond à « Modèle / Model », « N° de série / Serial Number », etc., 
 deux langues, et prendre la valeur de la même ligne. Clé introuvable ⇒ champ
 vide et signalé, jamais le libellé d'une autre ligne. Golden des métadonnées sur
 les fichiers réels avant correction.
+
+---
+
+## #19 — Relevés de plus de 24 h empilés sur une seule journée : `t` replié à minuit par le parseur
+
+**Statut** : ouvert, non corrigé — **priorité critique**, à trancher AVANT le
+lot 1 de #14.
+**Sévérité** : critique — intégrité des données. Toutes les grandeurs d'un
+relevé 821SE de plus de 24 h mélangent les jours : Ba, Bp, LAr,1h et verdict de
+la Conformité, Ljour/Lsoir/Lnuit, percentiles, courbe.
+
+### Constat
+
+`src/modules/formatDetectors.ts:115-118` : `serialDaysToMin` ne garde que la
+FRACTION du jour (`((days % 1) + 1) % 1 × 1440`) ; chaque échantillon reçoit
+`t = serialDaysToMin(days)` (`:606`) et le fichier ne porte qu'UNE date, celle
+du premier jour (`:706-709`). Aucun découpage par jour ensuite : les fonctions
+« multi-jours » de l'app supposent un fichier par jour (cas des exports 831C).
+Le chemin CSV 821SE produit le même résultat.
+
+### Preuve sur fichiers réels (`.local-data/`, 2026-09-28)
+
+`821SE_40489-250703000-111342_Histoire_du_temps.csv`, parsé par l'app
+(`parseCsv`) : 107 202 échantillons, date unique `2025-07-03`, `t` de 673,7 à
+**1020,4 min**, avec un saut de **−86 399 s** à l'échantillon 45 977
+(23:59:59 → 00:00:00). Le même relevé lu sans repli (feuille « Histoire du
+temps » du xlsx, lecture indépendante) va de 673,7 à **2460,4 min** (30 h,
+3 → 4 juillet).
+
+Conséquence mesurée : la fenêtre d'évaluation [12:00, 13:00[ du CSV contient
+**7202 échantillons pour une heure** — 12 h du 3 juillet et 12 h du 4 juillet
+confondues dans un seul Ba. Les heures 11 h–17 h du 4 juillet sont superposées
+à celles du 3.
+
+Autres fichiers de plus de 24 h dans `.local-data/` : `821SE 40488-250703000`
+(30 h), `821SE 40488-250919000` (72 h, 3 jours sur un).
+
+### Liens
+
+- #14 : un fichier replié « se recouvre lui-même » ; avec la règle du lot 1
+  (refus des recouvrements divergents), chaque relevé 821SE de plus de 24 h
+  serait refusé — ou pire, masquerait le vrai défaut. À corriger avant.
+- #15 : même famille (temps modulo 1440). Le golden `minuit` de la Conformité
+  suppose des `t` NON repliés (0 → 26 h), ce que les parseurs ne produisent pas.
+
+### Piste
+
+Temps absolu à l'échantillon (jour inclus), puis soit `t` non replié relatif à
+minuit du premier jour, soit découpage en un `MeasurementFile` par date civile.
+Choix d'architecture à trancher. Golden des parseurs (égalité stricte) à
+compléter d'un fichier de plus de 24 h AVANT correction.
+
+### Constat voisin (même relevé)
+
+La feuille de 1 s de `821SE 40488-250919000` fait **1,08 Go de XML
+décompressé** (493 Mo pour les fichiers de juillet) : au-delà de la longueur
+maximale d'une chaîne V8, SheetJS ne peut pas la lire (Node comme navigateur).
+Le parsing de `821SE 40489-250703000.xlsx` par le parseur de l'app en Node a
+dépassé 4 h 45 sans aboutir. Branche non fusionnée `backup/feat/parse-streaming`
+à examiner.

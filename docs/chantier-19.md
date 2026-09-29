@@ -34,18 +34,40 @@ exclusions existantes détectées et signalées au chargement, jamais corrigées
 silence ; lots mergés séparément ; #15 fermée par ce chantier, vérifiée
 explicitement (lot 19.2).
 
-### Point ouvert — la période « soir » (à trancher avant le lot 19.3)
+### La période « soir » — un héritage, pas un cadre réglementaire (à traiter au lot 19.3)
 
-Le code porte aujourd'hui trois périodes : `REG_PERIODS` (`src/utils/acoustics.ts:321-325`)
-= jour 7–19, **soir 19–22**, nuit 22–7, commenté comme « MELCCFP 2026 = Note
-98-01 » et « source unique ». A2 fixe la nuit à 19 h – 7 h : le soir disparaît-il
-(Ljour / Lnuit seulement), ou reste-t-il une sous-période informative incluse
-dans la nuit ? Les textes embarqués (`src/modules/regulation*.ts`) ne contiennent
-pas la définition des périodes : la décision ne peut pas être vérifiée depuis le
-dépôt. Consommateurs de `soir` : `IndicesPanel.tsx` (38-45, 172, 189, 556),
-`regPeriod.ts` / `indicesWindow.ts` (mode `soir`), module Météo
-(`MeteoInspector.tsx:54` via `regPeriodOfHour`, `SourceTable.tsx:34-46, 168`),
-instantané persisté `IndicesSnapshot` (`ljour` / `lsoir` / `lnuit`, export JSON).
+Rappel (2026-09-29) : le cadre 2026 ne connaît que jour (7 h – 19 h) et nuit
+(19 h – 7 h) ; il n'y a pas de période « soir » au §2.2. Les PDF embarqués
+(`public/reglementation/`, scans sans couche texte, lus page par page) le
+confirment : lignes directrices 2026 §2.2 et Tableau 1, note 98-01 partie 1 —
+jour 7 h – 19 h, nuit 19 h – 7 h, aucun soir.
+
+Origine dans AcoustiQ (auteur du dépôt, sans source citée) :
+- `7621d83` (2026-04-08, « refonte UX ») : première apparition,
+  `lsoir: laeqOnPeriod(data, 19, 22)` et une aide qui attribue à tort
+  « Soir 19h–22h, Nuit 22h–07h » aux lignes directrices 2026 ;
+- `057fa15` (2026-06-18) : affirme des bornes « 07-19 / 19-22 / 22-07 communes
+  Note 98-01 (EQ-09) et MELCCFP 2026 », sans citation. « EQ-09 » renvoie à un
+  formulaire interne absent du dépôt (`find . -path ./node_modules -prune -o
+  -iname "*EQ-09*" -print` → vide) : source invérifiable ;
+- `8180768` (2026-07-20) : crée `REG_PERIODS` et propage le soir au module
+  Météo, par COHÉRENCE INTERNE (« AcoustiQ calcule déjà Ljour/Lsoir/Lnuit »),
+  pas par un texte. Le même commit laisse volontairement
+  `Conformite2026.periodOf` binaire (seule partie conforme aujourd'hui).
+
+Statut : héritage à documenter comme tel au lot 19.3. Commentaires et libellés
+qui l'attribuent à tort au cadre : `acoustics.ts:311, 341-342`,
+`IndicesPanel.tsx:55-60, 826`, `recevabilite.ts:12, 59, 179`, `CLAUDE.md`.
+Consommateurs : `REG_PERIODS` / `regPeriodOfHour` (`acoustics.ts:321-337`),
+`regPeriod.ts`, `indicesWindow.ts` (mode `soir`), `IndicesPanel.tsx` (38-48,
+163-192, 556 — les boutons de période recalculent aussi Kt et les correctifs
+98-01 —, 826-850, export Excel 291-292 et 332-348), Météo (`recevabilite.ts`
+176-185, 464, 490-534 ; `SourceTable.tsx` 34-48, 96, 168 ;
+`MeteoInspector.tsx` 22, 54 — étiquettes seulement), module Carrière (bornes
+éditables, défaut 19-22). **Non persisté** : `IndicesSnapshot`
+(`types/index.ts:288-295`) ne porte que laeq/l10/l50/l90/lafmax/lafmin ; le
+soir ne sort de l'app que par l'export Excel d'`IndicesPanel`. (Corrige une
+affirmation antérieure de ce document.)
 
 ## Principe d'ordonnancement
 
@@ -71,6 +93,51 @@ contrôle par mutation, merge, suppression de la branche partout.
 | 19.4 | Événements, annotations, émergences, audio, `sessionDetection` | — |
 | 19.5 | Courbe, spectrogramme, spectre instantané, carte, `availableDates`, dates du rapport | **#20** |
 | 19.6 | Bascule du parseur (`serialDaysToMin`, date data-first), migration Dataverse SCHEMA 4 (dépliage), JSON 1.4, signalements (exclusions existantes, Lnuit), golden 19.0 mis à jour cas par cas | **#19** |
+
+## Lot 19.1 — `src/utils/tempsMesure.ts` (2026-09-29)
+
+Module pur, **sans consommateur** : aucun comportement de l'app ne change. Les
+lots 19.2 à 19.5 y basculent le code qui recalcule « minuit + t × 60 000 » à
+la main (`dpTimestampMs`, `exclusionMeteo.ts:191-198`, `conformiteFenetre.ts:410`,
+`App.tsx:1570`, `TimeSeriesChart.tsx:978, 2607`, `InstantSpectrum.tsx:195`,
+`Spectrogram.tsx:917`).
+
+| Fonction | Rôle |
+|---|---|
+| `instantMs(date, t)` | instant absolu en heure murale (A1) ; NaN si illisible |
+| `statutMural` / `heureAmbigue` | `normal` / `ambigu` (heure répétée) / `inexistant` (heure sautée) ; `null` si illisible |
+| `dateEtMinute` | date civile + minute du jour, calendrier pur |
+| `decalageJours` / `tDansRepere` | alignement de deux repères par la date (jamais par rang) |
+| `fenetreAbsolue` / `dansFenetre` | fenêtre [début, fin[, fin ≤ début ⇒ lendemain |
+| `datesCouvertes` | dates touchées + t illisibles COMPTÉS |
+| `cleSeconde` | clé entière à la seconde, murale, indépendante du fuseau |
+
+- **Identique au bit près** à `dpTimestampMs` sur chaque échantillon des cinq
+  relevés de juillet du golden 19.0 (t replié ET déplié, gigue comprise).
+- **Différent, comme attendu (A1)** : passage à l'heure d'été, −1 h exactement
+  dès 03:00 le 8 mars 2026 ; retour à l'heure normale, +1 h exactement dès 02:00
+  le 2 nov. 2025. `instantMs` = `new Date(a, m, j, 0, 0, 0, ms)` vérifié minute
+  par minute (et toutes les 37 s) sur 4 jours autour de chaque changement.
+- **Heure répétée** (décision A du 2026-09-29) : les 60 minutes 01:xx du relevé
+  du 2 nov. 2025 donnent 120 échantillons `heureAmbigue` et 60 `cleSeconde`
+  partagées chacune par deux mesures DISTINCTES. Fait de donnée légitime :
+  signalé, jamais fusionné, jamais refusé en silence. #14 doit en tenir compte
+  (une clé partagée dans l'heure ambiguë n'est ni un doublon ni un recouvrement).
+  `instantMs` y rend la première occurrence (comme `new Date`), ce qui confond
+  les deux passages : un consommateur qui a besoin de l'ordre doit s'appuyer sur
+  l'ordre du fichier et sur `heureAmbigue`, pas sur l'instant seul.
+- **Gigue du flottant** : le statut est tranché à la SECONDE de l'horodatage.
+  Sur `t` brut, 02:00 lu « 01:59:59,9999998 » tombait dans l'heure répétée et
+  était placé une heure trop tôt ; 01:00 lu « 00:59:59,9999998 » n'était pas vu
+  ambigu (118 au lieu de 120). Test dédié.
+- **Fuseau des tests figé** : `process.env.TZ = 'America/Toronto'` dans
+  `vitest.config.ts` (décision B du 2026-09-29).
+- **Mutation** (`node scripts/temps-mesure/mutations.mjs`) : 13/13 tuées
+  (repli modulo 1440 de l'instant et de la date, correction d'heure d'été
+  retirée, 2e occurrence de l'heure répétée, décalage d'après dans l'heure
+  sautée, statut sur `t` brut, ambigu non signalé, décalage de jours en heure
+  locale, fenêtre fermée à droite, début = fin vide, dates impossibles
+  acceptées, t illisibles non comptés, clé tronquée).
 
 ## Revue des cinq tests qui verrouillent le repli
 

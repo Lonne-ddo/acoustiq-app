@@ -890,3 +890,70 @@ du 5 mars suivent le décalage par rang.
 Décalage = écart de calendrier (`(minuit(date) − minuit(ancre)) / 86 400 000`
 jours), cohérent avec les millisecondes réelles des périodes — en tenant compte
 des jours de 23 h / 25 h (heure d'été).
+
+---
+
+## #21 — Les verdicts dépendent du fuseau du poste : périodes persistées en epoch ms, relues contre un minuit LOCAL
+
+**Statut** : ouvert, non corrigé — constaté au lot 19.1 de #19 (lecture
+statique, 2026-09-29). À décider : chantier à part, AVANT #14.
+**Sévérité** : haute — deux postes dont le fuseau diffère obtiennent des Ba,
+LAr,1h, verdicts et indices différents sur le MÊME projet, sans aucun
+signalement.
+
+### Constat
+
+- Une `Period` (exclusion, inclusion, référence, exclusion météo validée) est
+  stockée en epoch ms bruts, sans fuseau (`src/types/index.ts:162-169`), créée
+  comme « minuit LOCAL + heure saisie » (`PeriodsPanel.tsx:124-128` via
+  `dateToMsAtMidnight`, `periodEdit.ts:94-98` ; `TimeSeriesChart.tsx:2607, 2721`).
+- Elle est persistée telle quelle : export JSON (`projectManager.ts:99`), blob
+  Dataverse (`projectManager.ts:211`), projets récents (`:242`). Aucun fuseau
+  n'est enregistré avec le projet.
+- Elle est relue contre le minuit LOCAL du poste qui ouvre le projet :
+  `filterDataByPeriods` (`src/utils/acoustics.ts:278-282`,
+  `ts = dpTimestampMs(isoDate, 0) + t × 60 000`, `new Date(a, m, j)` en
+  `:213-222`).
+- `filterDataByPeriods` alimente la Conformité (`conformiteFenetre.ts:129` →
+  Ba, LAr,1h, verdict ; couverture `:404-412`), `IndicesPanel` (Ljour/Lnuit,
+  Kt, correctifs 98-01, indices, Leq24h), le rapport (`reportIndices.ts:51`),
+  l'instantané (`projectManager.ts:41`), `selectionMeasure.ts:44`.
+- Météo : heures figées en chaînes murales Toronto (`meteoSources.ts:271, 295-313,
+  349`), relues dans le fuseau du POSTE par `parseHourTimestamp`
+  (`recevabilite.ts:187-205`).
+
+Les calculs qui n'utilisent que `t` (`leqOnRegPeriod`, `regPeriod`,
+`indicesWindow`, `periodOf` de la Conformité, `corr9801`) ne dépendent pas du
+fuseau ; ils dépendent en revanche des périodes filtrées en amont.
+
+### Scénario
+
+Exclusion 14:00 – 15:00 tracée le 7 juillet 2026 à Montréal (UTC−4) :
+`startMs = 18:00Z`. Projet rouvert sur un poste en UTC+2 : minuit local du
+7 = 6 juillet 22:00Z, l'exclusion porte sur les échantillons de 20:00 – 21:00
+muraux. Le bruit de 14 h est réintégré dans le Ba de la fenêtre 14 h, la
+fenêtre 20 h perd des données ; le verdict peut basculer. Le panneau, la courbe
+et le rapport affichent tous « 20:00 → 21:00 », de façon cohérente : rien ne
+signale le glissement. Les exclusions météo sont en plus RE-suggérées à 14 h
+(`exclusionMeteo.ts:82`, clé `:101` différente) : deux exclusions coexistent.
+
+Cas réalistes : collègue d'une autre province (Atlantique, Manitoba, C.-B.),
+portable en déplacement, poste VDI réglé en UTC (4 à 5 h d'écart), poste dont
+l'heure d'été est désactivée (1 h d'écart, l'été seulement). Les tests ne
+voient rien : le fuseau y est figé (`vitest.config.ts`).
+
+### Lien avec #19
+
+`src/utils/tempsMesure.ts` (lot 19.1) corrige l'écart minutes écoulées /
+heure murale le jour du changement d'heure (A1), mais reste ancré sur le fuseau
+du moteur JS : il ne corrige PAS cette issue. La correction de #21 changera sa
+signature (fuseau du projet en paramètre) ; les lots 19.2 à 19.6 bâtissent sur
+ce module.
+
+### Piste (à instruire)
+
+Fuseau du PROJET enregistré avec le projet (America/Toronto par défaut), toutes
+les conversions murales ↔ absolues faites dans ce fuseau (`Intl`), jamais dans
+celui du poste ; ou périodes persistées en heure MURALE (date + heure), comme
+les mesures. Migration des périodes existantes : elles ont été créées dans un
+fuseau inconnu — signalement au chargement, jamais de correction silencieuse.

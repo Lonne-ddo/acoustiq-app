@@ -627,6 +627,43 @@ Le pas n'est stocké nulle part (`MeasurementFile`, `DataPoint` :
 Pondérer chaque échantillon par sa durée (pas déduit ou conservé), et
 dédoublonner les recouvrements avant la moyenne — à valider par un golden.
 
+### Décision (2026-09-28)
+
+- Pondération par la DURÉE de chaque échantillon, une seule fonction pure,
+  utilisée partout (même biais dans `leqOnRegPeriod`, `leqByClockHour`,
+  `computeCorr9801Point`, le Kt des Indices, les K de la Conformité, les
+  percentiles L10/L50/L90, et l'affichage).
+- Recouvrement de deux fichiers au même point : **refus explicite** du calcul
+  quand les sources DIVERGENT (niveau qu'aucun instrument n'a mesuré : exclu ;
+  priorité d'un fichier : aucune base pour la fixer). Doublon STRICT (mêmes
+  valeurs, reconnu par la valeur, pas par le nom — le même relevé en xlsx et en
+  CSV) : dédoublonné sans refus, et signalé.
+- Refus TRACÉ comme la couverture : port explicite, cause nommée, zone de
+  recouvrement, écart en dB. Jamais silencieux.
+- Trois lots, chacun mergé avant le suivant, golden AVANT et contrôle par
+  mutation sur chacun : (1) Conformité, (2) Indices et 98-01, (3) affichage.
+
+Références à jour depuis l'extraction : Ba en `src/utils/conformiteFenetre.ts:184`,
+concaténation en `:129`.
+
+### Décisions complémentaires (2026-09-28, après mesure sur `.local-data/`)
+
+- **D1** — #19 (relevés > 24 h repliés) est corrigé AVANT le lot 1 : corriger
+  le poids des échantillons avant l'ensemble des échantillons qui entrent dans
+  la fenêtre reviendrait à affiner une moyenne calculée sur le mauvais ensemble.
+- **D2** — Doublon strict = même ENSEMBLE d'instants (identique, sinon c'est un
+  recouvrement) ET valeurs égales à la résolution la plus grossière des deux
+  (écart ≤ ½ résolution, résolution déduite des données). La résolution la plus
+  FINE est conservée. Motif : le même relevé exporté en CSV (0,1 dB) et en xlsx
+  (0,01 dB) n'a que 10 % de valeurs strictement égales (107 203 instants,
+  écart max 0,05 dB) — c'est un seul instrument, pas deux qui divergent.
+  Test obligatoire : instants différents ⇒ recouvrement, jamais doublon.
+- **D3** — Clé temporelle entière à la seconde dans le lot 1 : la gigue du
+  flottant (échantillon de 14:00:00 à t = 13:59:59,999997) fait entrer un
+  échantillon de l'heure suivante (3601 pour 1 h, +0,015 dB observé sur le
+  831C) et empêche l'appariement des doublons. Impact borné, documenté dans le
+  golden.
+
 ---
 
 ## #15 — Fenêtre d'évaluation à cheval sur minuit : le modulo 1440 confond deux matins
@@ -638,7 +675,7 @@ conformité.
 
 ### Constat
 
-`src/components/Conformite2026.tsx:241` : `const m = ((d.t % 1440) + 1440) % 1440`,
+`src/components/Conformite2026.tsx:241` (depuis l'extraction : `src/utils/conformiteFenetre.ts:153`, et même convention dans `couvertureFenetre`, `:370-371`) : `const m = ((d.t % 1440) + 1440) % 1440`,
 puis `m >= evalStart || m < me` quand la fenêtre dépasse minuit. Sur tout
 fichier de plus de 24 h, le matin du jour de la date sélectionnée et le matin
 du lendemain ont le même `m` : une fenêtre 23:30–00:30 prend les minutes
@@ -648,3 +685,208 @@ du lendemain ont le même `m` : une fenêtre 23:30–00:30 prend les minutes
 
 Évaluer la fenêtre en temps absolu (epoch ms, comme les périodes) plutôt
 qu'en minutes modulo 1440.
+
+---
+
+## #16 — `laeqOverRange` moyenne tous les points ensemble : volontaire ou non ?
+
+**Statut** : ouvert, À CONFIRMER — aucun correctif avant décision.
+**Sévérité** : à qualifier (affichage de comparaison, pas de verdict).
+
+### Constat
+
+`src/components/TimeSeriesChart.tsx:686-697` : `laeqOverRange(tA, tB)` parcourt
+`filesByPoint.values()` — les fichiers de TOUS les points visibles de la date
+principale — et fait un seul `laeqAvg` de tous leurs échantillons. Utilisé par
+la sélection de plage ON/OFF sur la courbe (`:1243`, `compPhase` pickON /
+pickOFF) : le LAeq d'une plage est donc un mélange des points, pondéré par
+leur nombre d'échantillons (même biais que #14).
+
+Le commentaire (`:686` « tous points visibles ») décrit le comportement mais
+ne dit pas s'il est voulu. À confirmer, pas à supposer : un LAeq « multi-points »
+n'a pas de sens réglementaire ; si la comparaison ON/OFF doit se faire par
+point, c'est un défaut.
+
+---
+
+## #17 — Détection d'émergences sur fichiers concaténés : sources entrelacées
+
+**Statut** : ouvert, non corrigé — rattaché à la famille #14 (lot 3).
+**Sévérité** : moyenne — événements détectés manqués ou fragmentés.
+
+### Constat
+
+`src/App.tsx:3096` concatène les fichiers d'un même point et d'une même date
+(`fs.flatMap((f) => f.data)`) avant `detectEmergenceEvents`. L'ORDRE n'est pas
+le problème : la fonction trie par `t` (`src/utils/acoustics.ts:111-113`).
+
+Le problème est ce que le tri produit quand deux fichiers se RECOUVRENT ou ont
+des pas différents :
+- les échantillons des deux sources sont ENTRELACÉS ; la détection des runs
+  (`acoustics.ts:~140`) exige des indices contigus au-dessus du seuil — une
+  émergence vue par une source, intercalée avec des échantillons sous le seuil
+  de l'autre, est coupée en morceaux ou rejetée par `minDurationSec` ;
+- la baseline glissante (`:119-134`) moyenne par NOMBRE d'échantillons : le
+  fichier au pas fin domine, les secondes recouvertes comptent deux fois.
+
+### Piste
+
+Même primitive que #14 (pondération par la durée, doublon strict dédoublonné,
+sources divergentes refusées et tracées) avant la détection.
+
+---
+
+## #18 — Métadonnées d'instrument lues par position de cellule : `serial = "Modèle"`
+
+**Statut** : ouvert, non corrigé.
+**Sévérité** : moyenne — le numéro de série n'est pas qu'affiché : il pilote le
+dédoublonnage à l'import, les suggestions de regroupement par point et
+l'association des fichiers audio.
+
+### Constat
+
+`src/modules/formatDetectors.ts:192` (`readMeta`) lit le modèle et le numéro de
+série par POSITION fixe dans la feuille Summary/Sommaire : `model = cell(1, 1)`,
+`serial = cell(2, 1)`. Même motif que l'ancien défaut Kt : alignement par
+position au lieu d'alignement par clé (le libellé de la ligne).
+
+Relevé sur les fichiers réels de `.local-data/` (parseur de l'app, 2026-09-28) :
+
+| Fichier | `model` lu | `serial` lu |
+|---|---|---|
+| 821SE xlsx (6 fichiers, 40488 et 40489) | `Sonomètre` (valeur par défaut) | `Modèle` — le LIBELLÉ d'en-tête |
+| 831C `…LD0.xlsx` | `26070700.LD0.s` | nom du fichier `….ldbin` |
+| 821SE CSV | `Sonomètre` | vide |
+
+Les deux sonomètres 40488 et 40489 reçoivent donc le MÊME numéro de série.
+
+### Conséquences (usages de `serial` / `model`)
+
+- **Dédoublonnage à l'import** (`src/App.tsx:2942-2955`) : clé
+  `serial|date|startTime|stopTime`. Deux 821SE DIFFÉRENTS démarrés et arrêtés
+  à la même minute le même jour : le second est rejeté comme « Fichier déjà
+  importé » (toast d'information) — perte de données.
+- **Suggestion de regroupement** (`src/App.tsx:2984-3004`) : fichiers groupés
+  par `serial` ⇒ des fichiers de deux instruments peuvent être proposés comme
+  un seul point (bannière non bloquante). Ce qui fabriquerait exactement le
+  recouvrement divergent de #14. À l'inverse, les fichiers d'un même 831C
+  (série = nom de fichier, différent à chaque fois) ne sont jamais regroupés.
+- **Audio** (`src/App.tsx:2663-2667`, `:2746-2748`) : point auto-assigné si le
+  nom du fichier audio contient le numéro de série ; avec `Modèle` ou un nom
+  `.ldbin`, aucune correspondance : l'association automatique échoue en
+  silence (le fichier audio reste sans point).
+- **Affichage** : infobulle de la carte fichier (`src/App.tsx:406`,
+  « Modèle … · Série … »). Persisté dans le projet
+  (`src/modules/projectManager.ts:80-81`, `:189-190`).
+
+### Au rapport
+
+**Non** : `src/components/ReportGenerator.tsx` ne lit ni `serial` ni `model`
+(`grep -n "serial\|model" src/components/ReportGenerator.tsx` : aucun résultat).
+La méthodologie du rapport (`:174-180`) cite des « sonomètres intégrateurs de
+classe 1 » en texte fixe, sans modèle ni série. L'export Excel non plus
+(`grep -rn "serial\|\.model" src/utils src/modules` hors parseurs : aucun
+usage d'export).
+
+### Piste
+
+Lire les métadonnées PAR CLÉ : chercher la ligne dont le libellé (col. 0)
+correspond à « Modèle / Model », « N° de série / Serial Number », etc., dans les
+deux langues, et prendre la valeur de la même ligne. Clé introuvable ⇒ champ
+vide et signalé, jamais le libellé d'une autre ligne. Golden des métadonnées sur
+les fichiers réels avant correction.
+
+---
+
+## #19 — Relevés de plus de 24 h empilés sur une seule journée : `t` replié à minuit par le parseur
+
+**Statut** : ouvert, non corrigé — **priorité critique**, à trancher AVANT le
+lot 1 de #14.
+**Sévérité** : critique — intégrité des données. Toutes les grandeurs d'un
+relevé 821SE de plus de 24 h mélangent les jours : Ba, Bp, LAr,1h et verdict de
+la Conformité, Ljour/Lsoir/Lnuit, percentiles, courbe.
+
+### Constat
+
+`src/modules/formatDetectors.ts:115-118` : `serialDaysToMin` ne garde que la
+FRACTION du jour (`((days % 1) + 1) % 1 × 1440`) ; chaque échantillon reçoit
+`t = serialDaysToMin(days)` (`:606`) et le fichier ne porte qu'UNE date, celle
+du premier jour (`:706-709`). Aucun découpage par jour ensuite : les fonctions
+« multi-jours » de l'app supposent un fichier par jour (cas des exports 831C).
+Le chemin CSV 821SE produit le même résultat.
+
+### Preuve sur fichiers réels (`.local-data/`, 2026-09-28)
+
+`821SE_40489-250703000-111342_Histoire_du_temps.csv`, parsé par l'app
+(`parseCsv`) : 107 202 échantillons, date unique `2025-07-03`, `t` de 673,7 à
+**1020,4 min**, avec un saut de **−86 399 s** à l'échantillon 45 977
+(23:59:59 → 00:00:00). Le même relevé lu sans repli (feuille « Histoire du
+temps » du xlsx, lecture indépendante) va de 673,7 à **2460,4 min** (30 h,
+3 → 4 juillet).
+
+Conséquence mesurée : la fenêtre d'évaluation [12:00, 13:00[ du CSV contient
+**7202 échantillons pour une heure** — 12 h du 3 juillet et 12 h du 4 juillet
+confondues dans un seul Ba. Les heures 11 h–17 h du 4 juillet sont superposées
+à celles du 3.
+
+Autres fichiers de plus de 24 h dans `.local-data/` : `821SE 40488-250703000`
+(30 h), `821SE 40488-250919000` (72 h, 3 jours sur un).
+
+### Liens
+
+- #14 : un fichier replié « se recouvre lui-même » ; avec la règle du lot 1
+  (refus des recouvrements divergents), chaque relevé 821SE de plus de 24 h
+  serait refusé — ou pire, masquerait le vrai défaut. À corriger avant.
+- #15 : même famille (temps modulo 1440). Le golden `minuit` de la Conformité
+  suppose des `t` NON repliés (0 → 26 h), ce que les parseurs ne produisent pas.
+
+### Piste
+
+Temps absolu à l'échantillon (jour inclus), puis soit `t` non replié relatif à
+minuit du premier jour, soit découpage en un `MeasurementFile` par date civile.
+Choix d'architecture à trancher. Golden des parseurs (égalité stricte) à
+compléter d'un fichier de plus de 24 h AVANT correction.
+
+### Constat voisin (même relevé)
+
+La feuille de 1 s de `821SE 40488-250919000` fait **1,08 Go de XML
+décompressé** (493 Mo pour les fichiers de juillet) : au-delà de la longueur
+maximale d'une chaîne V8, SheetJS ne peut pas la lire (Node comme navigateur).
+Le parsing de `821SE 40489-250703000.xlsx` par le parseur de l'app en Node a
+dépassé 4 h 45 sans aboutir. Branche non fusionnée `backup/feat/parse-streaming`
+à examiner.
+
+---
+
+## #20 — Axe multi-jours indexé par POSITION dans la liste des dates, pas par écart de calendrier
+
+**Statut** : ouvert, non corrigé — indépendant de #19 (le code touché est
+cependant réécrit par le lot « courbe / spectrogramme » de #19).
+**Sévérité** : moyenne — les données glissent par rapport aux bandes de
+périodes et de météo.
+
+### Constat
+
+En mode multi-jours, chaque date est décalée de `indexOf(date) × 1440` min,
+c'est-à-dire son RANG dans la liste des dates chargées, pas le nombre de jours
+de calendrier depuis la première :
+- `src/App.tsx:2881-2884` (`audioCoverage`, `dayIndexOf = availableDates.indexOf(d)`) ;
+- `src/components/TimeSeriesChart.tsx:584-588` (décalage des séries) ;
+- mêmes décalages relevés dans `Spectrogram.tsx` (~701-703, 892, 921-923),
+  `InstantSpectrum.tsx` (~243-245), `EventsPanel.tsx` (~211),
+  `useAudioSync.ts` (~63) — références issues de l'inventaire de #19, à revérifier
+  à la correction.
+
+Les bandes de périodes et de météo, elles, sont placées en millisecondes
+RÉELLES depuis l'ancre de l'axe (`chartAnchorMs + tMin`, TimeSeriesChart ~940-983).
+
+Avec des dates non consécutives (ex. 1er et 5 mars), le 5 mars est dessiné à
++1440 min (rang 1) alors que ses périodes et sa météo sont placées à +5760 min :
+les deux glissent de 3 jours l'un par rapport à l'autre. Audio et événements
+du 5 mars suivent le décalage par rang.
+
+### Piste
+
+Décalage = écart de calendrier (`(minuit(date) − minuit(ancre)) / 86 400 000`
+jours), cohérent avec les millisecondes réelles des périodes — en tenant compte
+des jours de 23 h / 25 h (heure d'été).

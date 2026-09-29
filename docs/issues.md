@@ -646,6 +646,24 @@ dédoublonner les recouvrements avant la moyenne — à valider par un golden.
 Références à jour depuis l'extraction : Ba en `src/utils/conformiteFenetre.ts:184`,
 concaténation en `:129`.
 
+### Décisions complémentaires (2026-09-28, après mesure sur `.local-data/`)
+
+- **D1** — #19 (relevés > 24 h repliés) est corrigé AVANT le lot 1 : corriger
+  le poids des échantillons avant l'ensemble des échantillons qui entrent dans
+  la fenêtre reviendrait à affiner une moyenne calculée sur le mauvais ensemble.
+- **D2** — Doublon strict = même ENSEMBLE d'instants (identique, sinon c'est un
+  recouvrement) ET valeurs égales à la résolution la plus grossière des deux
+  (écart ≤ ½ résolution, résolution déduite des données). La résolution la plus
+  FINE est conservée. Motif : le même relevé exporté en CSV (0,1 dB) et en xlsx
+  (0,01 dB) n'a que 10 % de valeurs strictement égales (107 203 instants,
+  écart max 0,05 dB) — c'est un seul instrument, pas deux qui divergent.
+  Test obligatoire : instants différents ⇒ recouvrement, jamais doublon.
+- **D3** — Clé temporelle entière à la seconde dans le lot 1 : la gigue du
+  flottant (échantillon de 14:00:00 à t = 13:59:59,999997) fait entrer un
+  échantillon de l'heure suivante (3601 pour 1 h, +0,015 dB observé sur le
+  831C) et empêche l'appariement des doublons. Impact borné, documenté dans le
+  golden.
+
 ---
 
 ## #15 — Fenêtre d'évaluation à cheval sur minuit : le modulo 1440 confond deux matins

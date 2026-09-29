@@ -1,0 +1,163 @@
+{
+  "provenance": "Figé le 2026-09-28 sur main@10671c5, AVANT la correction de #19 : sortie des parseurs de l'app (parseCsv / parseWorkbook) sur les cas de parseurs24h.fixtures.ts, t REPLIÉ à minuit. Empreinte = SHA-256 de la sérialisation canonique du MeasurementFile sans id. NE PAS régénérer en bloc : toute évolution se fait cas par cas avec justification (scripts/golden-parseurs-24h/README.md).",
+  "cas": {
+    "csv-date-heure-31h": {
+      "sha256": "fd3bbbe83f1b5707a99de4bb1a818923548fd937dec4dbe9212c5e2a3811c3f9",
+      "resume": {
+        "date": "2025-07-03",
+        "n": 1859,
+        "tPremier": 1081.0000000032596,
+        "tDernier": 59.00000000372529,
+        "tMin": 0,
+        "tMax": 1438.9999999967404,
+        "sauts": [
+          {
+            "i": 359,
+            "de": 1438.9999999967404,
+            "a": 0
+          },
+          {
+            "i": 1799,
+            "de": 1438.9999999967404,
+            "a": 0
+          }
+        ],
+        "instantsRepetes": 419
+      }
+    },
+    "xlsx-date-heure-31h": {
+      "sha256": "7a9136d84a665146a2369878fbe5d7b97293d9273620fe7e397a8e62c0fd9fcd",
+      "resume": {
+        "date": "2025-07-03",
+        "n": 1859,
+        "tPremier": 1081.0000000032596,
+        "tDernier": 59.00000000372529,
+        "tMin": 0,
+        "tMax": 1438.9999999967404,
+        "sauts": [
+          {
+            "i": 359,
+            "de": 1438.9999999967404,
+            "a": 0
+          },
+          {
+            "i": 1799,
+            "de": 1438.9999999967404,
+            "a": 0
+          }
+        ],
+        "instantsRepetes": 419
+      }
+    },
+    "xlsx-g4-fr-31h": {
+      "sha256": "478116856e78bd964865343ed8b2bcfc6c8714b19b61e22ecc9dd4cfb05e0b5d",
+      "resume": {
+        "date": "2025-07-03",
+        "n": 1859,
+        "tPremier": 1081.0000000032596,
+        "tDernier": 59.00000000372529,
+        "tMin": 0,
+        "tMax": 1438.9999999967404,
+        "sauts": [
+          {
+            "i": 359,
+            "de": 1438.9999999967404,
+            "a": 0
+          },
+          {
+            "i": 1799,
+            "de": 1438.9999999967404,
+            "a": 0
+          }
+        ],
+        "instantsRepetes": 419
+      }
+    },
+    "xlsx-g4-en-31h": {
+      "sha256": "1adb8a600d86c8c045ffb642c887c982af70ed64614563eadc5613f6725b3547",
+      "resume": {
+        "date": "2025-07-03",
+        "n": 1860,
+        "tPremier": 1080,
+        "tDernier": 59.00000000372529,
+        "tMin": 0,
+        "tMax": 1438.9999999967404,
+        "sauts": [
+          {
+            "i": 360,
+            "de": 1438.9999999967404,
+            "a": 0
+          },
+          {
+            "i": 1800,
+            "de": 1438.9999999967404,
+            "a": 0
+          }
+        ],
+        "instantsRepetes": 420
+      }
+    },
+    "xlsx-g4-en-sommaire-veille": {
+      "sha256": "2765fdde079e4e76feb7046da653d63d52c886daf3a5ea31ae21542ff650e26b",
+      "resume": {
+        "date": "2025-07-02",
+        "n": 1770,
+        "tPremier": 29.99999999301508,
+        "tDernier": 358.99999999674037,
+        "tMin": 0,
+        "tMax": 1438.9999999967404,
+        "sauts": [
+          {
+            "i": 1410,
+            "de": 1438.9999999967404,
+            "a": 0
+          }
+        ],
+        "instantsRepetes": 330
+      }
+    },
+    "csv-heure-ete": {
+      "sha256": "7a959f4a7d6831d3bdb70c59f566908eb65fae6062c9add716fc9dc095bc1b20",
+      "resume": {
+        "date": "2026-03-07",
+        "n": 419,
+        "tPremier": 1320.9999999997672,
+        "tDernier": 358.99999999674037,
+        "tMin": 0,
+        "tMax": 1438.9999999967404,
+        "sauts": [
+          {
+            "i": 119,
+            "de": 1438.9999999967404,
+            "a": 0
+          }
+        ],
+        "instantsRepetes": 0
+      }
+    },
+    "csv-heure-normale": {
+      "sha256": "6d2b5f912443845317e6d91dcd5559e4537ee717b642ee90721055f63893ddf5",
+      "resume": {
+        "date": "2025-11-01",
+        "n": 419,
+        "tPremier": 1320.9999999997672,
+        "tDernier": 239.0000000037253,
+        "tMin": 0,
+        "tMax": 1438.9999999967404,
+        "sauts": [
+          {
+            "i": 119,
+            "de": 1438.9999999967404,
+            "a": 0
+          },
+          {
+            "i": 239,
+            "de": 119.00000000023283,
+            "a": 59.99999999650754
+          }
+        ],
+        "instantsRepetes": 60
+      }
+    }
+  }
+}

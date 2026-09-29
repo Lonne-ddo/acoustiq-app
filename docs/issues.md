@@ -715,3 +715,65 @@ des pas différents :
 
 Même primitive que #14 (pondération par la durée, doublon strict dédoublonné,
 sources divergentes refusées et tracées) avant la détection.
+
+---
+
+## #18 — Métadonnées d'instrument lues par position de cellule : `serial = "Modèle"`
+
+**Statut** : ouvert, non corrigé.
+**Sévérité** : moyenne — le numéro de série n'est pas qu'affiché : il pilote le
+dédoublonnage à l'import, les suggestions de regroupement par point et
+l'association des fichiers audio.
+
+### Constat
+
+`src/modules/formatDetectors.ts:192` (`readMeta`) lit le modèle et le numéro de
+série par POSITION fixe dans la feuille Summary/Sommaire : `model = cell(1, 1)`,
+`serial = cell(2, 1)`. Même motif que l'ancien défaut Kt : alignement par
+position au lieu d'alignement par clé (le libellé de la ligne).
+
+Relevé sur les fichiers réels de `.local-data/` (parseur de l'app, 2026-09-28) :
+
+| Fichier | `model` lu | `serial` lu |
+|---|---|---|
+| 821SE xlsx (6 fichiers, 40488 et 40489) | `Sonomètre` (valeur par défaut) | `Modèle` — le LIBELLÉ d'en-tête |
+| 831C `…LD0.xlsx` | `26070700.LD0.s` | nom du fichier `….ldbin` |
+| 821SE CSV | `Sonomètre` | vide |
+
+Les deux sonomètres 40488 et 40489 reçoivent donc le MÊME numéro de série.
+
+### Conséquences (usages de `serial` / `model`)
+
+- **Dédoublonnage à l'import** (`src/App.tsx:2942-2955`) : clé
+  `serial|date|startTime|stopTime`. Deux 821SE DIFFÉRENTS démarrés et arrêtés
+  à la même minute le même jour : le second est rejeté comme « Fichier déjà
+  importé » (toast d'information) — perte de données.
+- **Suggestion de regroupement** (`src/App.tsx:2984-3004`) : fichiers groupés
+  par `serial` ⇒ des fichiers de deux instruments peuvent être proposés comme
+  un seul point (bannière non bloquante). Ce qui fabriquerait exactement le
+  recouvrement divergent de #14. À l'inverse, les fichiers d'un même 831C
+  (série = nom de fichier, différent à chaque fois) ne sont jamais regroupés.
+- **Audio** (`src/App.tsx:2663-2667`, `:2746-2748`) : point auto-assigné si le
+  nom du fichier audio contient le numéro de série ; avec `Modèle` ou un nom
+  `.ldbin`, aucune correspondance : l'association automatique échoue en
+  silence (le fichier audio reste sans point).
+- **Affichage** : infobulle de la carte fichier (`src/App.tsx:406`,
+  « Modèle … · Série … »). Persisté dans le projet
+  (`src/modules/projectManager.ts:80-81`, `:189-190`).
+
+### Au rapport
+
+**Non** : `src/components/ReportGenerator.tsx` ne lit ni `serial` ni `model`
+(`grep -n "serial\|model" src/components/ReportGenerator.tsx` : aucun résultat).
+La méthodologie du rapport (`:174-180`) cite des « sonomètres intégrateurs de
+classe 1 » en texte fixe, sans modèle ni série. L'export Excel non plus
+(`grep -rn "serial\|\.model" src/utils src/modules` hors parseurs : aucun
+usage d'export).
+
+### Piste
+
+Lire les métadonnées PAR CLÉ : chercher la ligne dont le libellé (col. 0)
+correspond à « Modèle / Model », « N° de série / Serial Number », etc., dans les
+deux langues, et prendre la valeur de la même ligne. Clé introuvable ⇒ champ
+vide et signalé, jamais le libellé d'une autre ligne. Golden des métadonnées sur
+les fichiers réels avant correction.
